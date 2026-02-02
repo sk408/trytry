@@ -7,32 +7,38 @@ set -e
 echo "=== NBA Betting Analytics - Termux Setup ==="
 
 # Update package list
-echo "[1/5] Updating package list..."
+echo "[1/6] Updating package list..."
 pkg update -y
 
 # Install Python and required system packages
-echo "[2/5] Installing Python and build tools..."
+echo "[2/6] Installing Python and build tools..."
 pkg install -y python git libxml2 libxslt
+
+# Install pre-built scientific packages from Termux repo (MUCH faster than pip compile)
+echo "[3/6] Installing pre-built scientific packages..."
+pkg install -y python-numpy python-pandas matplotlib
 
 # Navigate to project directory (script location)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
-echo "[3/5] Project directory: $PROJECT_DIR"
+echo "[4/6] Project directory: $PROJECT_DIR"
 
-# Create virtual environment if it doesn't exist
+# Create virtual environment with system site-packages access
 if [ ! -d ".venv" ]; then
-    echo "[4/5] Creating virtual environment..."
-    python -m venv .venv
+    echo "[5/6] Creating virtual environment (with system packages)..."
+    python -m venv --system-site-packages .venv
 else
-    echo "[4/5] Virtual environment already exists"
+    echo "[5/6] Virtual environment already exists"
 fi
 
-# Activate venv and install dependencies
-echo "[5/5] Installing Python dependencies..."
+# Activate venv and install remaining dependencies
+echo "[6/6] Installing remaining Python dependencies..."
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
+
+# Install only the packages not provided by Termux system packages
+pip install fastapi uvicorn jinja2 python-multipart nba_api requests beautifulsoup4
 
 echo ""
 echo "=== Setup complete! ==="

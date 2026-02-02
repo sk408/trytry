@@ -15,12 +15,14 @@ This project now runs as a lightweight FastAPI web app so it can be used on Andr
 
 ```bash
 # Clone the repo
-git clone https://github.com/youruser/trytry.git
+git clone https://github.com/sk408/trytry.git
 cd trytry
 
 # Run the setup script (installs Python, creates venv, installs deps)
 bash scripts/termux_setup.sh
 ```
+
+The setup script uses Termux's pre-built packages for numpy, pandas, and matplotlib (via `pkg install`), which is **much faster** than compiling from source with pip. Setup typically takes 2-5 minutes instead of 30-45 minutes.
 
 ### Quick Setup (Manual)
 
