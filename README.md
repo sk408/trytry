@@ -22,7 +22,7 @@ cd trytry
 bash scripts/termux_setup.sh
 ```
 
-The setup script uses Termux's pre-built packages for numpy, pandas, and matplotlib (via `pkg install`), which is **much faster** than compiling from source with pip. Setup typically takes 2-5 minutes instead of 30-45 minutes.
+The setup script adds the Termux User Repository (tur-repo) and installs pre-built numpy, pandas, and matplotlib packages. No compilation needed - setup takes just 2-5 minutes.
 
 ### Quick Setup (Manual)
 
