@@ -22,7 +22,7 @@ from src.data.sync_service import (
 )
 from src.database import migrations
 from src.database.db import DB_PATH, get_conn
-from src.ui.players_view import _get_position_display, _load_injured_with_stats, _load_players_df
+from src.web.player_utils import get_position_display, load_injured_with_stats, load_players_df
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -137,12 +137,12 @@ async def live(request: Request) -> HTMLResponse:
 
 @app.get("/players", response_class=HTMLResponse)
 async def players(request: Request) -> HTMLResponse:
-    df_all = await asyncio.to_thread(_load_players_df)
-    df_inj = await asyncio.to_thread(_load_injured_with_stats)
+    df_all = await asyncio.to_thread(load_players_df)
+    df_inj = await asyncio.to_thread(load_injured_with_stats)
     all_players = _df_to_records(df_all)
     injured = _df_to_records(df_inj)
     for row in injured:
-        row["position"] = _get_position_display(str(row.get("position") or ""))
+        row["position"] = get_position_display(str(row.get("position") or ""))
     return templates.TemplateResponse(
         "players.html",
         {
