@@ -42,7 +42,8 @@ source .venv/bin/activate
 pip install --upgrade pip
 
 # Install lightweight packages (no compilation needed)
-pip install fastapi uvicorn jinja2 python-multipart nba_api requests beautifulsoup4
+# Note: Using FastAPI <0.100 with Pydantic v1 (pure Python, no Rust needed)
+pip install "fastapi==0.99.1" uvicorn jinja2 python-multipart "pydantic>=1.10,<2.0" nba_api requests beautifulsoup4
 
 echo ""
 echo "=== Setup complete! ==="
