@@ -277,6 +277,8 @@ async def players(request: Request) -> HTMLResponse:
 
 @app.get("/schedule", response_class=HTMLResponse)
 async def schedule(request: Request) -> HTMLResponse:
+    from datetime import date as date_type
+    
     lookup = _team_lookup()
     # Reverse lookup: abbr -> team_id
     abbr_to_id = {abbr: tid for tid, abbr in lookup.items()}
@@ -285,12 +287,21 @@ async def schedule(request: Request) -> HTMLResponse:
     except Exception as exc:
         return templates.TemplateResponse(
             "schedule.html",
-            {"request": request, "rows": [], "error": str(exc)},
+            {"request": request, "rows": [], "error": str(exc), "season": ""},
         )
     if df.empty:
         rows: List[dict] = []
     else:
         df = df.copy()
+        
+        # Filter to today and future games only
+        today = date_type.today()
+        df["game_date"] = pd.to_datetime(df["game_date"]).dt.date
+        df = df[df["game_date"] >= today]
+        
+        # Sort by date ascending (today first)
+        df = df.sort_values("game_date")
+        
         df["team"] = df["team_id"].map(lookup)
         df["opponent"] = df["opponent_abbr"]
         df["opponent_id"] = df["opponent_abbr"].map(abbr_to_id)
