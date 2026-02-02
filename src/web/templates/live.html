@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Live Games & Recommendations</h2>
+  <p>Refreshes every visit by syncing live scores.</p>
+  {% if error %}
+    <p class="error">Error: {{ error }}</p>
+  {% endif %}
+  {% if recs %}
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Home</th>
+        <th>Away</th>
+        <th>Score</th>
+        <th>Period</th>
+        <th>Clock</th>
+        <th>Proj Spread (home)</th>
+        <th>Proj Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rec in recs %}
+      <tr>
+        <td>{{ rec.status }}</td>
+        <td>{{ rec.home_team }}</td>
+        <td>{{ rec.away_team }}</td>
+        <td>{{ rec.home_score }} - {{ rec.away_score }}</td>
+        <td>{{ rec.period }}</td>
+        <td>{{ rec.clock }}</td>
+        <td>{{ "%.1f"|format(rec.projected_spread) }}</td>
+        <td>{{ "%.1f"|format(rec.projected_total) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No live games available.</p>
+  {% endif %}
+</section>
+{% endblock %}

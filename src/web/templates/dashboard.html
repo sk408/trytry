@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Dashboard</h2>
+  <p class="status">Status: {{ status }}</p>
+  <div class="actions">
+    <form method="post" action="/dashboard/sync">
+      <button type="submit">Sync Data (teams/players/logs)</button>
+    </form>
+    <form method="post" action="/dashboard/injuries">
+      <button type="submit">Sync Current Injuries</button>
+    </form>
+    <form method="post" action="/dashboard/injury-history">
+      <button type="submit">Build Injury History</button>
+    </form>
+  </div>
+  {% if logs %}
+  <div class="log">
+    {% for line in logs %}
+      <div>{{ line }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

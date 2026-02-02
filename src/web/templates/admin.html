@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Admin</h2>
+  <p>Reset the SQLite database (re-initialize tables).</p>
+  <form method="post" action="/admin/reset">
+    <button type="submit">Delete DB &amp; Re-Init</button>
+  </form>
+  {% if status %}<p class="status">{{ status }}</p>{% endif %}
+</section>
+{% endblock %}

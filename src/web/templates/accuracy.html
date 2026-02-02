@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Backtest Accuracy</h2>
+  <form method="get" action="/accuracy" class="form-row">
+    <label>Home team
+      <select name="home_team_id">
+        <option value="">Any</option>
+        {% for t in teams %}
+          <option value="{{ t.id }}" {% if home_team_id == t.id %}selected{% endif %}>{{ t.abbr }} - {{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Away team
+      <select name="away_team_id">
+        <option value="">Any</option>
+        {% for t in teams %}
+          <option value="{{ t.id }}" {% if away_team_id == t.id %}selected{% endif %}>{{ t.abbr }} - {{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Injury adjustments
+      <select name="use_injuries">
+        <option value="true" {% if use_injuries %}selected{% endif %}>On</option>
+        <option value="false" {% if not use_injuries %}selected{% endif %}>Off</option>
+      </select>
+    </label>
+    <button type="submit">Run Backtest</button>
+  </form>
+  {% if progress %}
+    <div class="log">
+      {% for line in progress %}
+        <div>{{ line }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  {% if results and results.total_games > 0 %}
+    <div class="grid two">
+      <div>
+        <h3>Overall</h3>
+        <p><strong>Games analyzed:</strong> {{ results.total_games }}</p>
+        <p><strong>Winner correct %:</strong> {{ "%.1f"|format(results.overall_spread_accuracy) }}%</p>
+        <p><strong>Total within 10 %:</strong> {{ "%.1f"|format(results.overall_total_accuracy) }}%</p>
+      </div>
+      <div>
+        <h3>Team accuracy (top 10)</h3>
+        <table>
+          <thead><tr><th>Team</th><th>Games</th><th>Winner %</th><th>Total %</th></tr></thead>
+          <tbody>
+            {% for team in results.team_accuracy.values()|list|sort(attribute='games_analyzed', reverse=True)[:10] %}
+              <tr>
+                <td>{{ team.team_abbr }}</td>
+                <td>{{ team.games_analyzed }}</td>
+                <td>{{ "%.1f"|format(team.spread_accuracy) }}%</td>
+                <td>{{ "%.1f"|format(team.total_accuracy) }}%</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <h3>Recent Predictions (up to 20)</h3>
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Home</th><th>Away</th><th>Pred Spread</th><th>Pred Total</th><th>Actual Spread</th><th>Actual Total</th></tr>
+      </thead>
+      <tbody>
+        {% for p in results.predictions[:20] %}
+          <tr>
+            <td>{{ p.game_date }}</td>
+            <td>{{ p.home_abbr }}</td>
+            <td>{{ p.away_abbr }}</td>
+            <td>{{ "%.1f"|format(p.predicted_spread) }}</td>
+            <td>{{ "%.1f"|format(p.predicted_total) }}</td>
+            <td>{{ "%.1f"|format(p.actual_spread) }}</td>
+            <td>{{ "%.1f"|format(p.actual_total) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No results yet. Run a backtest.</p>
+  {% endif %}
+</section>
+{% endblock %}

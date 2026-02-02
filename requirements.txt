@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+jinja2==3.1.4
+python-multipart==0.0.9
+pandas==3.0.0
+numpy==2.4.2
+nba_api==1.11.3
+requests==2.32.5
+beautifulsoup4==4.14.3
+matplotlib==3.10.8

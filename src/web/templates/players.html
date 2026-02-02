@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Players</h2>
+  <p>Injured players: <strong>{{ injured_count }}</strong></p>
+  <div class="grid two">
+    <div>
+      <h3>All Players</h3>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Pos</th><th>Team</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+        {% for p in players %}
+          <tr class="{{ 'injured' if p.is_injured else '' }}">
+            <td>{{ p.name }}</td>
+            <td>{{ p.position }}</td>
+            <td>{{ p.team }}</td>
+            <td>{{ 'INJURED' if p.is_injured else 'Active' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3>Injured Players (by impact)</h3>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Pos</th><th>Team</th><th>PPG</th><th>MPG</th><th>Injury</th></tr>
+        </thead>
+        <tbody>
+        {% for p in injured %}
+          <tr>
+            <td>{{ p.name }}</td>
+            <td>{{ p.position }}</td>
+            <td>{{ p.team }}</td>
+            <td>{{ "%.1f"|format(p.ppg) }}</td>
+            <td>{{ "%.1f"|format(p.mpg) }}</td>
+            <td>{{ p.injury_note or 'Unknown' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
