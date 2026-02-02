@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import queue
+import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import AsyncGenerator, List, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -118,6 +120,71 @@ async def dashboard_injuries(request: Request) -> HTMLResponse:
 async def dashboard_injury_history(request: Request) -> HTMLResponse:
     status, logs = await asyncio.to_thread(_run_with_progress, sync_injury_history, progress_label="Injury history")
     return await dashboard(request, status=status, logs=logs)
+
+
+# --- Server-Sent Events (SSE) for real-time progress ---
+
+async def _stream_sync(sync_func, label: str) -> AsyncGenerator[str, None]:
+    """Run a sync function and stream progress via SSE."""
+    msg_queue: queue.Queue[str | None] = queue.Queue()
+
+    def progress_cb(msg: str) -> None:
+        msg_queue.put(msg)
+
+    def run_sync() -> None:
+        try:
+            try:
+                sync_func(progress_cb=progress_cb)
+            except TypeError:
+                sync_func()
+            msg_queue.put(f"[DONE] {label} complete")
+        except Exception as exc:
+            msg_queue.put(f"[ERROR] {label} failed: {exc}")
+        finally:
+            msg_queue.put(None)  # Signal end
+
+    thread = threading.Thread(target=run_sync, daemon=True)
+    thread.start()
+
+    while True:
+        try:
+            msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+            if msg is None:
+                break
+            yield f"data: {msg}\n\n"
+        except Exception:
+            if not thread.is_alive():
+                break
+
+
+@app.get("/api/sync/data")
+async def stream_sync_data() -> StreamingResponse:
+    """Stream data sync progress via SSE."""
+    return StreamingResponse(
+        _stream_sync(full_sync, "Data sync"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/sync/injuries")
+async def stream_sync_injuries() -> StreamingResponse:
+    """Stream injury sync progress via SSE."""
+    return StreamingResponse(
+        _stream_sync(sync_injuries, "Injury sync"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/sync/injury-history")
+async def stream_sync_injury_history() -> StreamingResponse:
+    """Stream injury history build progress via SSE."""
+    return StreamingResponse(
+        _stream_sync(sync_injury_history, "Injury history"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/live", response_class=HTMLResponse)

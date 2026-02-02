@@ -1,11 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Admin</h2>
-  <p>Reset the SQLite database (re-initialize tables).</p>
-  <form method="post" action="/admin/reset">
-    <button type="submit">Delete DB &amp; Re-Init</button>
+<h1 class="page-title">Admin</h1>
+
+<div class="card">
+  <h2>Database</h2>
+  <p class="text-muted">Reset the SQLite database and re-initialize all tables. This will delete all synced data.</p>
+  
+  {% if status %}
+  <div class="status {% if 'success' in status.lower() or 'reset' in status.lower() %}success{% else %}error{% endif %}">
+    {{ status }}
+  </div>
+  {% endif %}
+  
+  <form method="post" action="/admin/reset" class="mt-4">
+    <button type="submit" class="danger">Reset Database</button>
   </form>
-  {% if status %}<p class="status">{{ status }}</p>{% endif %}
-</section>
+</div>
 {% endblock %}

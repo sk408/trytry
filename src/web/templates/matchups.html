@@ -1,61 +1,82 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Matchups</h2>
-  <form method="get" action="/matchups" class="form-row">
-    <label>Home team
-      <select name="home_team_id">
-        {% for t in teams %}
-          <option value="{{ t.id }}" {% if home_team_id == t.id %}selected{% endif %}>{{ t.abbr }} - {{ t.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Away team
-      <select name="away_team_id">
-        {% for t in teams %}
-          <option value="{{ t.id }}" {% if away_team_id == t.id %}selected{% endif %}>{{ t.abbr }} - {{ t.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <button type="submit">Analyze Matchup</button>
+<h1 class="page-title">Matchups</h1>
+
+<div class="card">
+  <h2>Analyze Matchup</h2>
+  <form method="get" action="/matchups">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="home">Home Team</label>
+        <select name="home_team_id" id="home">
+          {% for t in teams %}
+          <option value="{{ t.id }}" {% if home_team_id == t.id %}selected{% endif %}>
+            {{ t.abbr }} - {{ t.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="away">Away Team</label>
+        <select name="away_team_id" id="away">
+          {% for t in teams %}
+          <option value="{{ t.id }}" {% if away_team_id == t.id %}selected{% endif %}>
+            {{ t.abbr }} - {{ t.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit">Analyze</button>
   </form>
 
   {% if prediction %}
-    <div class="grid two">
-      <div>
-        <h3>Projection</h3>
-        <p><strong>Spread (home):</strong> {{ "%.1f"|format(prediction.predicted_spread) }}</p>
-        <p><strong>Total:</strong> {{ "%.1f"|format(prediction.predicted_total) }}</p>
-      </div>
-      <div>
-        <h3>Context</h3>
-        <p>Uses current roster (non-injured players) and recent stats.</p>
-      </div>
+  <div class="stats-grid mt-4">
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(prediction.predicted_spread) }}</div>
+      <div class="stat-label">Spread (Home)</div>
     </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
+      <div class="stat-label">Total</div>
+    </div>
+  </div>
+  <p class="text-muted text-center">Based on current rosters and recent stats</p>
   {% elif error %}
-    <p class="error">{{ error }}</p>
-  {% else %}
-    <p>Select teams to generate a projection.</p>
+  <div class="error-box mt-4">{{ error }}</div>
   {% endif %}
-</section>
+</div>
 
-<section class="card">
-  <h3>Upcoming Games (first 100)</h3>
+<div class="card">
+  <h2>Upcoming Games</h2>
   {% if games %}
+  <div class="scroll-x">
     <table>
-      <thead><tr><th>Date</th><th>Home</th><th>Away</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Away</th>
+          <th></th>
+          <th>Home</th>
+        </tr>
+      </thead>
       <tbody>
-        {% for g in games %}
-          <tr>
-            <td>{{ g.game_date }}</td>
-            <td>{{ g.home_abbr }}</td>
-            <td>{{ g.away_abbr }}</td>
-          </tr>
+        {% for g in games[:50] %}
+        <tr>
+          <td>{{ g.game_date }}</td>
+          <td>{{ g.away_abbr }}</td>
+          <td class="text-muted">@</td>
+          <td>{{ g.home_abbr }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
+  </div>
   {% else %}
-    <p>No games available. Run schedule sync.</p>
+  <div class="empty-state">
+    <p>No upcoming games</p>
+    <p class="text-muted">Run sync from Dashboard</p>
+  </div>
   {% endif %}
-</section>
+</div>
 {% endblock %}

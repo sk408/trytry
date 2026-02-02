@@ -2,14 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{ title if title else "NBA Betting Analytics" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1e293b" />
+  <title>{{ title if title else "NBA Analytics" }}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">NBA Betting Analytics</div>
-    <nav>
+    <div class="topbar-inner">
+      <div class="brand">NBA Analytics</div>
+      <button class="menu-toggle" onclick="toggleMenu()" aria-label="Menu">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+    <nav id="nav">
       <a href="/dashboard">Dashboard</a>
       <a href="/live">Live</a>
       <a href="/players">Players</a>
@@ -22,5 +30,16 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    function toggleMenu() {
+      document.getElementById('nav').classList.toggle('open');
+    }
+    // Close menu when clicking a link
+    document.querySelectorAll('nav a').forEach(link => {
+      link.addEventListener('click', () => {
+        document.getElementById('nav').classList.remove('open');
+      });
+    });
+  </script>
 </body>
 </html>

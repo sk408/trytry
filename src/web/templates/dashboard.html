@@ -1,25 +1,68 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Dashboard</h2>
-  <p class="status">Status: {{ status }}</p>
+<h1 class="page-title">Dashboard</h1>
+
+<div class="card">
+  <div class="status" id="status">{{ status }}</div>
+  
   <div class="actions">
-    <form method="post" action="/dashboard/sync">
-      <button type="submit">Sync Data (teams/players/logs)</button>
-    </form>
-    <form method="post" action="/dashboard/injuries">
-      <button type="submit">Sync Current Injuries</button>
-    </form>
-    <form method="post" action="/dashboard/injury-history">
-      <button type="submit">Build Injury History</button>
-    </form>
+    <button type="button" onclick="runSync('/api/sync/data', 'Syncing data...')" id="btn-sync">
+      Sync Data
+    </button>
+    <button type="button" onclick="runSync('/api/sync/injuries', 'Syncing injuries...')" id="btn-injuries">
+      Sync Injuries
+    </button>
+    <button type="button" onclick="runSync('/api/sync/injury-history', 'Building history...')" id="btn-history">
+      Build Injury History
+    </button>
   </div>
-  {% if logs %}
-  <div class="log">
-    {% for line in logs %}
-      <div>{{ line }}</div>
-    {% endfor %}
+  
+  <div class="log" id="log-container">
+    {% if logs %}
+      {% for line in logs %}
+        <div>{{ line }}</div>
+      {% endfor %}
+    {% endif %}
   </div>
-  {% endif %}
-</section>
+</div>
+
+<script>
+function runSync(endpoint, startMsg) {
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log-container');
+  const buttons = document.querySelectorAll('.actions button');
+  
+  buttons.forEach(btn => btn.disabled = true);
+  logEl.innerHTML = '';
+  logEl.style.display = 'block';
+  statusEl.textContent = startMsg;
+  statusEl.className = 'status';
+  
+  const eventSource = new EventSource(endpoint);
+  
+  eventSource.onmessage = function(event) {
+    const msg = event.data;
+    const line = document.createElement('div');
+    line.textContent = msg;
+    
+    if (msg.startsWith('[DONE]')) {
+      line.className = 'text-success';
+      statusEl.textContent = msg.replace('[DONE] ', '');
+      statusEl.className = 'status success';
+    } else if (msg.startsWith('[ERROR]')) {
+      line.className = 'text-danger';
+      statusEl.textContent = msg.replace('[ERROR] ', '');
+      statusEl.className = 'status error';
+    }
+    
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  
+  eventSource.onerror = function() {
+    eventSource.close();
+    buttons.forEach(btn => btn.disabled = false);
+  };
+}
+</script>
 {% endblock %}

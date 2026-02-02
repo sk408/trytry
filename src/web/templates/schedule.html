@@ -1,26 +1,42 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Schedule (next 14 days)</h2>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  {% if rows %}
-  <table>
-    <thead>
-      <tr><th>Date</th><th>Team</th><th>Opponent</th><th>Home?</th></tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.game_date }}</td>
-        <td>{{ r.team }}</td>
-        <td>{{ r.opponent }}</td>
-        <td>{{ 'Yes' if r.is_home else 'No' }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-    <p>No schedule rows available. Run sync first.</p>
+<h1 class="page-title">Schedule</h1>
+
+<div class="card">
+  <h2>Next 14 Days</h2>
+  
+  {% if error %}
+  <div class="error-box">{{ error }}</div>
   {% endif %}
-</section>
+  
+  {% if rows %}
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Team</th>
+          <th></th>
+          <th>Opponent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.game_date }}</td>
+          <td>{{ r.team }}</td>
+          <td class="text-muted">{{ 'vs' if r.is_home else '@' }}</td>
+          <td>{{ r.opponent }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No schedule data</p>
+    <p class="text-muted">Run sync from Dashboard first</p>
+  </div>
+  {% endif %}
+</div>
 {% endblock %}
