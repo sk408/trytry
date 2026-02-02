@@ -4,135 +4,133 @@
 
 <div class="card">
   <h2>Backtest Settings</h2>
-  <form method="get" action="/accuracy">
-    <div class="form-group">
-      <label for="home">Home Team (optional)</label>
-      <select name="home_team_id" id="home">
-        <option value="">Any</option>
-        {% for t in teams %}
-        <option value="{{ t.id }}" {% if home_team_id == t.id %}selected{% endif %}>
-          {{ t.abbr }} - {{ t.name }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label for="away">Away Team (optional)</label>
-      <select name="away_team_id" id="away">
-        <option value="">Any</option>
-        {% for t in teams %}
-        <option value="{{ t.id }}" {% if away_team_id == t.id %}selected{% endif %}>
-          {{ t.abbr }} - {{ t.name }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label for="injuries">Injury Adjustments</label>
-      <select name="use_injuries" id="injuries">
-        <option value="true" {% if use_injuries %}selected{% endif %}>On</option>
-        <option value="false" {% if not use_injuries %}selected{% endif %}>Off</option>
-      </select>
-    </div>
-    
-    <button type="submit">Run Backtest</button>
-  </form>
-</div>
-
-{% if progress %}
-<div class="card">
-  <h2>Progress</h2>
-  <div class="log">
-    {% for line in progress %}
-    <div>{{ line }}</div>
-    {% endfor %}
+  <div class="form-group">
+    <label for="home">Home Team (optional)</label>
+    <select id="home">
+      <option value="">Any</option>
+      {% for t in teams %}
+      <option value="{{ t.id }}">{{ t.abbr }} - {{ t.name }}</option>
+      {% endfor %}
+    </select>
   </div>
-</div>
-{% endif %}
-
-{% if error %}
-<div class="error-box">{{ error }}</div>
-{% endif %}
-
-{% if results and results.total_games > 0 %}
-<div class="card">
-  <h2>Results</h2>
   
+  <div class="form-group">
+    <label for="away">Away Team (optional)</label>
+    <select id="away">
+      <option value="">Any</option>
+      {% for t in teams %}
+      <option value="{{ t.id }}">{{ t.abbr }} - {{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  
+  <div class="form-group">
+    <label for="injuries">Injury Adjustments</label>
+    <select id="injuries">
+      <option value="true">On</option>
+      <option value="false">Off</option>
+    </select>
+  </div>
+  
+  <button type="button" id="btn-run" onclick="runBacktest()">Run Backtest</button>
+</div>
+
+<div class="card" id="progress-card" style="display: none;">
+  <h2>Progress</h2>
+  <div class="log" id="log-container"></div>
+</div>
+
+<div class="card" id="results-card" style="display: none;">
+  <h2>Results</h2>
   <div class="stats-grid">
     <div class="stat-item">
-      <div class="stat-value">{{ results.total_games }}</div>
+      <div class="stat-value" id="stat-games">-</div>
       <div class="stat-label">Games</div>
     </div>
     <div class="stat-item">
-      <div class="stat-value">{{ "%.0f"|format(results.overall_spread_accuracy) }}%</div>
-      <div class="stat-label">Winner</div>
+      <div class="stat-value" id="stat-spread">-</div>
+      <div class="stat-label">Winner %</div>
     </div>
     <div class="stat-item">
-      <div class="stat-value">{{ "%.0f"|format(results.overall_total_accuracy) }}%</div>
+      <div class="stat-value" id="stat-total">-</div>
       <div class="stat-label">Total ±10</div>
     </div>
   </div>
 </div>
 
 <div class="card">
-  <h2>By Team (Top 10)</h2>
-  <div class="scroll-x">
-    <table>
-      <thead>
-        <tr>
-          <th>Team</th>
-          <th>Games</th>
-          <th>Winner %</th>
-          <th>Total %</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for team in results.team_accuracy.values()|list|sort(attribute='games_analyzed', reverse=True)[:10] %}
-        <tr>
-          <td>{{ team.team_abbr }}</td>
-          <td>{{ team.games_analyzed }}</td>
-          <td>{{ "%.0f"|format(team.spread_accuracy) }}%</td>
-          <td>{{ "%.0f"|format(team.total_accuracy) }}%</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Recent Predictions</h2>
-  <div class="scroll-x">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Game</th>
-          <th>Pred</th>
-          <th>Actual</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in results.predictions[:20] %}
-        <tr>
-          <td>{{ p.game_date }}</td>
-          <td>{{ p.away_abbr }}@{{ p.home_abbr }}</td>
-          <td>{{ "%.0f"|format(p.predicted_spread) }} / {{ "%.0f"|format(p.predicted_total) }}</td>
-          <td>{{ "%.0f"|format(p.actual_spread) }} / {{ "%.0f"|format(p.actual_total) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% elif not error and not progress %}
-<div class="card">
-  <div class="empty-state">
+  <div class="empty-state" id="empty-state">
     <p>No results yet</p>
     <p class="text-muted">Run a backtest to see accuracy metrics</p>
   </div>
 </div>
-{% endif %}
+
+<script>
+function runBacktest() {
+  const homeId = document.getElementById('home').value;
+  const awayId = document.getElementById('away').value;
+  const useInjuries = document.getElementById('injuries').value;
+  const btn = document.getElementById('btn-run');
+  const logEl = document.getElementById('log-container');
+  const progressCard = document.getElementById('progress-card');
+  const resultsCard = document.getElementById('results-card');
+  const emptyState = document.getElementById('empty-state');
+  
+  // Build URL with params
+  let url = '/api/backtest?';
+  if (homeId) url += 'home_team_id=' + homeId + '&';
+  if (awayId) url += 'away_team_id=' + awayId + '&';
+  url += 'use_injuries=' + useInjuries;
+  
+  // Reset UI
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  logEl.innerHTML = '';
+  progressCard.style.display = 'block';
+  resultsCard.style.display = 'none';
+  emptyState.style.display = 'none';
+  
+  const eventSource = new EventSource(url);
+  
+  eventSource.onmessage = function(event) {
+    const msg = event.data;
+    
+    // Parse result messages
+    if (msg.startsWith('[RESULT] games=')) {
+      document.getElementById('stat-games').textContent = msg.split('=')[1];
+      resultsCard.style.display = 'block';
+    } else if (msg.startsWith('[RESULT] spread_acc=')) {
+      document.getElementById('stat-spread').textContent = msg.split('=')[1] + '%';
+    } else if (msg.startsWith('[RESULT] total_acc=')) {
+      document.getElementById('stat-total').textContent = msg.split('=')[1] + '%';
+    } else if (msg.startsWith('[DONE]')) {
+      const line = document.createElement('div');
+      line.textContent = msg.replace('[DONE] ', '');
+      line.className = 'text-success';
+      logEl.appendChild(line);
+      btn.disabled = false;
+      btn.textContent = 'Run Backtest';
+    } else if (msg.startsWith('[ERROR]')) {
+      const line = document.createElement('div');
+      line.textContent = msg.replace('[ERROR] ', '');
+      line.className = 'text-danger';
+      logEl.appendChild(line);
+      btn.disabled = false;
+      btn.textContent = 'Run Backtest';
+    } else {
+      // Regular progress message
+      const line = document.createElement('div');
+      line.textContent = msg;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  };
+  
+  eventSource.onerror = function() {
+    eventSource.close();
+    btn.disabled = false;
+    btn.textContent = 'Run Backtest';
+  };
+}
+</script>
 {% endblock %}

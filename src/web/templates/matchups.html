@@ -31,17 +31,24 @@
   </form>
 
   {% if prediction %}
-  <div class="stats-grid mt-4">
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(prediction.predicted_spread) }}</div>
-      <div class="stat-label">Spread (Home)</div>
+  <div class="prediction-result mt-4">
+    <div class="prediction-matchup">
+      {% for t in teams if t.id == away_team_id %}{{ t.abbr }}{% endfor %}
+      <span class="text-muted">@</span>
+      {% for t in teams if t.id == home_team_id %}{{ t.abbr }}{% endfor %}
     </div>
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
-      <div class="stat-label">Total</div>
+    <div class="stats-grid">
+      <div class="stat-item">
+        <div class="stat-value">{{ "%.1f"|format(prediction.predicted_spread) }}</div>
+        <div class="stat-label">Spread (Home)</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
+        <div class="stat-label">Total</div>
+      </div>
     </div>
+    <p class="text-muted text-center">Based on current rosters and recent stats</p>
   </div>
-  <p class="text-muted text-center">Based on current rosters and recent stats</p>
   {% elif error %}
   <div class="error-box mt-4">{{ error }}</div>
   {% endif %}
@@ -49,28 +56,20 @@
 
 <div class="card">
   <h2>Upcoming Games</h2>
+  <p class="text-muted">Tap a game to analyze</p>
   {% if games %}
-  <div class="scroll-x">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Away</th>
-          <th></th>
-          <th>Home</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for g in games[:50] %}
-        <tr>
-          <td>{{ g.game_date }}</td>
-          <td>{{ g.away_abbr }}</td>
-          <td class="text-muted">@</td>
-          <td>{{ g.home_abbr }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="games-list">
+    {% for g in games[:50] %}
+    <a href="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}" 
+       class="game-row {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active{% endif %}">
+      <span class="game-date">{{ g.game_date }}</span>
+      <span class="game-teams">
+        <span class="away">{{ g.away_abbr }}</span>
+        <span class="at">@</span>
+        <span class="home">{{ g.home_abbr }}</span>
+      </span>
+    </a>
+    {% endfor %}
   </div>
   {% else %}
   <div class="empty-state">

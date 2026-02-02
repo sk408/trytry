@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
+import pandas as pd
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -187,6 +188,58 @@ async def stream_sync_injury_history() -> StreamingResponse:
     )
 
 
+@app.get("/api/backtest")
+async def stream_backtest(
+    home_team_id: int | None = None,
+    away_team_id: int | None = None,
+    use_injuries: str | None = None,
+) -> StreamingResponse:
+    """Stream backtest progress via SSE."""
+    use_injuries_flag = True
+    if use_injuries is not None:
+        use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_bt() -> None:
+            try:
+                results = run_backtest(
+                    5, home_team_id, away_team_id, progress_cb, use_injuries_flag
+                )
+                # Send results summary
+                msg_queue.put(f"[RESULT] games={results.total_games}")
+                msg_queue.put(f"[RESULT] spread_acc={results.overall_spread_accuracy:.1f}")
+                msg_queue.put(f"[RESULT] total_acc={results.overall_total_accuracy:.1f}")
+                msg_queue.put("[DONE] Backtest complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_bt, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/live", response_class=HTMLResponse)
 async def live(request: Request) -> HTMLResponse:
     error = None
@@ -224,6 +277,8 @@ async def players(request: Request) -> HTMLResponse:
 @app.get("/schedule", response_class=HTMLResponse)
 async def schedule(request: Request) -> HTMLResponse:
     lookup = _team_lookup()
+    # Reverse lookup: abbr -> team_id
+    abbr_to_id = {abbr: tid for tid, abbr in lookup.items()}
     try:
         df = await asyncio.to_thread(sync_schedule, include_future_days=14)
     except Exception as exc:
@@ -237,7 +292,17 @@ async def schedule(request: Request) -> HTMLResponse:
         df = df.copy()
         df["team"] = df["team_id"].map(lookup)
         df["opponent"] = df["opponent_abbr"]
-        df = df[["game_date", "team", "opponent", "is_home"]]
+        df["opponent_id"] = df["opponent_abbr"].map(abbr_to_id)
+        # Calculate home/away team IDs for links
+        df["home_team_id"] = df.apply(
+            lambda r: int(r["team_id"]) if r["is_home"] else int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else None,
+            axis=1
+        )
+        df["away_team_id"] = df.apply(
+            lambda r: int(r["opponent_id"]) if r["is_home"] and pd.notna(r["opponent_id"]) else int(r["team_id"]),
+            axis=1
+        )
+        df = df[["game_date", "team", "opponent", "is_home", "home_team_id", "away_team_id"]]
         rows = _df_to_records(df)
     return templates.TemplateResponse(
         "schedule.html",
@@ -285,6 +350,7 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
 @app.get("/accuracy", response_class=HTMLResponse)
 async def accuracy(
     request: Request,
+    run: str | None = None,
     home_team_id: int | None = None,
     away_team_id: int | None = None,
     use_injuries: str | None = None,
@@ -296,22 +362,25 @@ async def accuracy(
     if use_injuries is not None:
         use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
 
-    def _cb(msg: str) -> None:
-        progress.append(msg)
-
     results: BacktestResults | None = None
     error = None
-    try:
-        results = await asyncio.to_thread(
-            run_backtest,
-            5,
-            home_team_id,
-            away_team_id,
-            _cb,
-            use_injuries_flag,
-        )
-    except Exception as exc:  # pragma: no cover - heavy computation
-        error = str(exc)
+
+    # Only run backtest if explicitly requested via the run parameter
+    if run == "1":
+        def _cb(msg: str) -> None:
+            progress.append(msg)
+
+        try:
+            results = await asyncio.to_thread(
+                run_backtest,
+                5,
+                home_team_id,
+                away_team_id,
+                _cb,
+                use_injuries_flag,
+            )
+        except Exception as exc:  # pragma: no cover - heavy computation
+            error = str(exc)
 
     return templates.TemplateResponse(
         "accuracy.html",

@@ -394,6 +394,74 @@ select:focus, input:focus {
 .rec-badge.moderate { background: var(--warning); color: black; }
 .rec-badge.weak { background: var(--border); color: var(--text); }
 
+/* Clickable Game Rows */
+.games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.game-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.game-row:hover, .game-row:active {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: var(--accent);
+}
+
+.game-row.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+.game-date {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.game-teams {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.game-teams .at {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.game-teams .home {
+  color: var(--accent);
+}
+
+/* Prediction Result */
+.prediction-result {
+  background: var(--bg-dark);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.prediction-matchup {
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 16px;
+  color: var(--accent);
+}
+
 /* Desktop Styles */
 @media (min-width: 768px) {
   .menu-toggle {
