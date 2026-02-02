@@ -11,7 +11,8 @@
     <table>
       <thead>
         <tr>
-          <th>Player</th>
+          <th>Name</th>
+          <th>Pos</th>
           <th>Team</th>
           <th>PPG</th>
           <th>MPG</th>
@@ -21,10 +22,8 @@
       <tbody>
         {% for p in injured %}
         <tr>
-          <td>
-            <strong>{{ p.name }}</strong>
-            <span class="text-muted"> {{ p.position }}</span>
-          </td>
+          <td>{{ p.name }}</td>
+          <td>{{ p.position }}</td>
           <td>{{ p.team }}</td>
           <td>{{ "%.1f"|format(p.ppg) }}</td>
           <td>{{ "%.1f"|format(p.mpg) }}</td>

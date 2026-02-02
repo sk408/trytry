@@ -27,39 +27,200 @@
         </select>
       </div>
     </div>
-    <button type="submit">Analyze</button>
+    <button type="submit">Analyze Matchup</button>
   </form>
+</div>
 
-  {% if prediction %}
-  <div class="prediction-result mt-4">
-    <div class="prediction-matchup">
-      {% for t in teams if t.id == away_team_id %}{{ t.abbr }}{% endfor %}
-      <span class="text-muted">@</span>
-      {% for t in teams if t.id == home_team_id %}{{ t.abbr }}{% endfor %}
+{% if error %}
+<div class="error-box">{{ error }}</div>
+{% endif %}
+
+{% if prediction %}
+<!-- Prediction Summary -->
+<div class="card">
+  <h2>Prediction Summary</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ "%+.1f"|format(prediction.predicted_spread) }}</div>
+      <div class="stat-label">Spread (Home)</div>
     </div>
-    <div class="stats-grid">
-      <div class="stat-item">
-        <div class="stat-value">{{ "%.1f"|format(prediction.predicted_spread) }}</div>
-        <div class="stat-label">Spread (Home)</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
-        <div class="stat-label">Total</div>
-      </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
+      <div class="stat-label">Over/Under</div>
     </div>
-    <p class="text-muted text-center">Based on current rosters and recent stats</p>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(prediction.home_projected) }}</div>
+      <div class="stat-label">Home Projected</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(prediction.away_projected) }}</div>
+      <div class="stat-label">Away Projected</div>
+    </div>
   </div>
-  {% elif error %}
-  <div class="error-box mt-4">{{ error }}</div>
+
+  <!-- Injury Impact -->
+  {% if home_injury or away_injury %}
+  <h3>Injury Impact</h3>
+  <div class="injury-summary">
+    {% if home_injury %}
+    <div class="injury-item {{ home_injury.status }}">
+      <strong>{{ home_stats.team_abbr }}:</strong> 
+      {{ home_injury.text }}
+      {% if home_injury.lost_ppg > 0 %}(-{{ "%.1f"|format(home_injury.lost_ppg) }} PPG){% endif %}
+    </div>
+    {% endif %}
+    {% if away_injury %}
+    <div class="injury-item {{ away_injury.status }}">
+      <strong>{{ away_stats.team_abbr }}:</strong>
+      {{ away_injury.text }}
+      {% if away_injury.lost_ppg > 0 %}(-{{ "%.1f"|format(away_injury.lost_ppg) }} PPG){% endif %}
+    </div>
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 
+<!-- Historical Performance -->
+{% if backtest %}
+<div class="card">
+  <h2>Historical Performance</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ backtest.home_record.wins }}-{{ backtest.home_record.losses }}</div>
+      <div class="stat-label">{{ backtest.home_abbr }} at Home</div>
+      <div class="stat-sub">Avg {{ "%.1f"|format(backtest.home_record.avg_pts) }} pts</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ backtest.away_record.wins }}-{{ backtest.away_record.losses }}</div>
+      <div class="stat-label">{{ backtest.away_abbr }} on Road</div>
+      <div class="stat-sub">Avg {{ "%.1f"|format(backtest.away_record.avg_pts) }} pts</div>
+    </div>
+  </div>
+
+  {% if backtest.h2h_games %}
+  <h3>Head-to-Head This Season</h3>
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Score</th>
+          <th>Winner</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in backtest.h2h_games %}
+        <tr>
+          <td>{{ g.date }}</td>
+          <td>{{ g.away_score }}-{{ g.home_score }}</td>
+          <td>{{ g.winner }}</td>
+          <td>{{ g.home_score + g.away_score }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-muted">No head-to-head games this season</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Home Team Players -->
+{% if home_players %}
+<div class="card">
+  <h2>{{ home_stats.team_abbr }} Players (Home)</h2>
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Pos</th>
+          <th>PPG</th>
+          <th>RPG</th>
+          <th>APG</th>
+          <th>MPG</th>
+          <th>Home</th>
+          <th>Away</th>
+          <th>vs Opp</th>
+          <th>Proj</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in home_players %}
+        <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+          <td>{{ p.name }}</td>
+          <td>{{ p.position }}</td>
+          <td>{{ "%.1f"|format(p.ppg) }}</td>
+          <td>{{ "%.1f"|format(p.rpg) }}</td>
+          <td>{{ "%.1f"|format(p.apg) }}</td>
+          <td>{{ "%.1f"|format(p.mpg) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_home) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_away) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_vs_opp) if p.ppg_vs_opp else '--' }}</td>
+          <td>{{ "%.1f"|format(p.projected) }}</td>
+          <td>{{ 'INJ' if p.is_injured else 'OK' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Away Team Players -->
+{% if away_players %}
+<div class="card">
+  <h2>{{ away_stats.team_abbr }} Players (Away)</h2>
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Pos</th>
+          <th>PPG</th>
+          <th>RPG</th>
+          <th>APG</th>
+          <th>MPG</th>
+          <th>Home</th>
+          <th>Away</th>
+          <th>vs Opp</th>
+          <th>Proj</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in away_players %}
+        <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+          <td>{{ p.name }}</td>
+          <td>{{ p.position }}</td>
+          <td>{{ "%.1f"|format(p.ppg) }}</td>
+          <td>{{ "%.1f"|format(p.rpg) }}</td>
+          <td>{{ "%.1f"|format(p.apg) }}</td>
+          <td>{{ "%.1f"|format(p.mpg) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_home) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_away) }}</td>
+          <td>{{ "%.1f"|format(p.ppg_vs_opp) if p.ppg_vs_opp else '--' }}</td>
+          <td>{{ "%.1f"|format(p.projected) }}</td>
+          <td>{{ 'INJ' if p.is_injured else 'OK' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Upcoming Games -->
 <div class="card">
   <h2>Upcoming Games</h2>
   <p class="text-muted">Tap a game to analyze</p>
   {% if games %}
   <div class="games-list">
-    {% for g in games[:50] %}
+    {% for g in games[:100] %}
     <a href="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}" 
        class="game-row {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active{% endif %}">
       <span class="game-date">{{ g.game_date }}</span>

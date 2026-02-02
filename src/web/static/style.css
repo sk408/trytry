@@ -253,6 +253,15 @@ tr:hover {
   background: rgba(59, 130, 246, 0.1);
 }
 
+.clickable-table tbody tr {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.clickable-table tbody tr:active {
+  background: rgba(59, 130, 246, 0.2);
+}
+
 /* Scrollable table wrapper */
 .scroll-x {
   overflow-x: auto;
@@ -460,6 +469,48 @@ select:focus, input:focus {
   font-weight: 700;
   margin-bottom: 16px;
   color: var(--accent);
+}
+
+/* Injury Summary */
+.injury-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.injury-item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.injury-item.healthy {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+
+.injury-item.minor {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+
+.injury-item.moderate {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}
+
+.injury-item.critical {
+  background: rgba(239, 68, 68, 0.25);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Stat sub-text */
+.stat-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
 }
 
 /* Desktop Styles */

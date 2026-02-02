@@ -2,57 +2,50 @@
 {% block content %}
 <h1 class="page-title">Live Games</h1>
 
-{% if error %}
-<div class="error-box">{{ error }}</div>
-{% endif %}
-
-{% if recs %}
-  {% for rec in recs %}
-  <div class="card rec-card">
-    <div class="rec-header">
-      <span class="rec-teams">{{ rec.away_team }} @ {{ rec.home_team }}</span>
-      <span class="rec-badge {% if rec.status == 'Final' %}moderate{% else %}strong{% endif %}">
-        {{ rec.status }}
-      </span>
-    </div>
-    
-    <div class="stats-grid">
-      <div class="stat-item">
-        <div class="stat-value">{{ rec.away_score }}</div>
-        <div class="stat-label">{{ rec.away_team }}</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-value">{{ rec.home_score }}</div>
-        <div class="stat-label">{{ rec.home_team }}</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-value">Q{{ rec.period }}</div>
-        <div class="stat-label">Period</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-value">{{ rec.clock or '--' }}</div>
-        <div class="stat-label">Clock</div>
-      </div>
-    </div>
-    
-    <div class="stats-grid">
-      <div class="stat-item">
-        <div class="stat-value">{{ "%.1f"|format(rec.projected_spread) }}</div>
-        <div class="stat-label">Proj Spread</div>
-      </div>
-      <div class="stat-item">
-        <div class="stat-value">{{ "%.1f"|format(rec.projected_total) }}</div>
-        <div class="stat-label">Proj Total</div>
-      </div>
-    </div>
-  </div>
-  {% endfor %}
-{% else %}
 <div class="card">
+  <h2>Live Games & Recommendations</h2>
+  <p class="text-muted">Refreshes every visit by syncing live scores.</p>
+  
+  {% if error %}
+  <div class="error-box">{{ error }}</div>
+  {% endif %}
+  
+  {% if recs %}
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Home</th>
+          <th>Away</th>
+          <th>Score</th>
+          <th>Period</th>
+          <th>Clock</th>
+          <th>Proj Spread</th>
+          <th>Proj Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rec in recs %}
+        <tr>
+          <td>{{ rec.status }}</td>
+          <td>{{ rec.home_team }}</td>
+          <td>{{ rec.away_team }}</td>
+          <td>{{ rec.home_score }} - {{ rec.away_score }}</td>
+          <td>{{ rec.period }}</td>
+          <td>{{ rec.clock }}</td>
+          <td>{{ "%.1f"|format(rec.projected_spread) }}</td>
+          <td>{{ "%.1f"|format(rec.projected_total) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
   <div class="empty-state">
     <p>No live games at the moment</p>
     <p class="text-muted">Check back during game time</p>
   </div>
+  {% endif %}
 </div>
-{% endif %}
 {% endblock %}

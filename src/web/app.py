@@ -12,10 +12,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.analytics.backtester import BacktestResults, run_backtest
+from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
 from src.analytics.live_recommendations import build_live_recommendations
 from src.analytics.prediction import predict_matchup
-from src.analytics.stats_engine import get_scheduled_games
+from src.analytics.stats_engine import get_scheduled_games, get_team_matchup_stats, TeamMatchupStats
 from src.data.sync_service import (
     full_sync,
     sync_injuries,
@@ -23,6 +23,7 @@ from src.data.sync_service import (
     sync_live_scores,
     sync_schedule,
 )
+from src.data.nba_fetcher import get_current_season
 from src.database import migrations
 from src.database.db import DB_PATH, get_conn
 from src.web.player_utils import get_position_display, load_injured_with_stats, load_players_df
@@ -304,47 +305,225 @@ async def schedule(request: Request) -> HTMLResponse:
         )
         df = df[["game_date", "team", "opponent", "is_home", "home_team_id", "away_team_id"]]
         rows = _df_to_records(df)
+    season = get_current_season()
     return templates.TemplateResponse(
         "schedule.html",
-        {"request": request, "rows": rows, "error": None},
+        {"request": request, "rows": rows, "error": None, "season": season},
     )
+
+
+HOME_COURT_ADV = 3.0  # points
+
+
+def _get_matchup_backtest(home_id: int, away_id: int) -> dict:
+    """Get historical performance data for matchup analysis."""
+    try:
+        games = get_actual_game_results()
+    except Exception:
+        games = pd.DataFrame()
+
+    if games.empty:
+        return {
+            "home_abbr": "HOME", "away_abbr": "AWAY",
+            "home_record": {"wins": 0, "losses": 0, "avg_pts": 0.0},
+            "away_record": {"wins": 0, "losses": 0, "avg_pts": 0.0},
+            "h2h_games": [],
+        }
+
+    with get_conn() as conn:
+        teams_df = pd.read_sql(
+            "SELECT team_id, abbreviation FROM teams WHERE team_id IN (?, ?)",
+            conn, params=[home_id, away_id]
+        )
+    abbrs = {int(r["team_id"]): r["abbreviation"] for _, r in teams_df.iterrows()}
+    home_abbr = abbrs.get(home_id, "HOME")
+    away_abbr = abbrs.get(away_id, "AWAY")
+
+    home_home = games[games["home_team_id"] == home_id]
+    away_road = games[games["away_team_id"] == away_id]
+
+    # Home record at home
+    hw = sum(1 for _, g in home_home.iterrows() if g["home_score"] > g["away_score"])
+    hl = sum(1 for _, g in home_home.iterrows() if g["away_score"] > g["home_score"])
+    home_avg = float(home_home["home_score"].mean()) if not home_home.empty else 0.0
+
+    # Away record on road
+    aw = sum(1 for _, g in away_road.iterrows() if g["away_score"] > g["home_score"])
+    al = sum(1 for _, g in away_road.iterrows() if g["home_score"] > g["away_score"])
+    away_avg = float(away_road["away_score"].mean()) if not away_road.empty else 0.0
+
+    # Head to head games
+    h2h = []
+    for _, g in home_home.iterrows():
+        if int(g["away_team_id"]) == away_id:
+            h2h.append({
+                "date": str(g["game_date"]),
+                "home_score": int(g["home_score"]),
+                "away_score": int(g["away_score"]),
+                "winner": home_abbr if g["home_score"] > g["away_score"] else away_abbr,
+            })
+
+    return {
+        "home_abbr": home_abbr,
+        "away_abbr": away_abbr,
+        "home_record": {"wins": hw, "losses": hl, "avg_pts": home_avg},
+        "away_record": {"wins": aw, "losses": al, "avg_pts": away_avg},
+        "h2h_games": h2h,
+    }
+
+
+def _get_injury_summary(stats: TeamMatchupStats) -> dict:
+    """Get injury impact summary for a team."""
+    injured = [p for p in stats.players if p.is_injured and p.mpg > 0]
+    if not injured:
+        return {"status": "healthy", "text": "No injuries", "lost_ppg": 0}
+
+    lost_ppg = sum(p.ppg for p in injured)
+    key = [p for p in injured if p.mpg >= 25]
+    rotation = [p for p in injured if 15 <= p.mpg < 25]
+
+    if key:
+        names = ", ".join(p.name.split()[-1] for p in key[:2])
+        return {"status": "critical", "text": f"KEY OUT: {names}", "lost_ppg": lost_ppg}
+    elif rotation:
+        names = ", ".join(p.name.split()[-1] for p in rotation[:2])
+        return {"status": "moderate", "text": f"OUT: {names}", "lost_ppg": lost_ppg}
+    else:
+        return {"status": "minor", "text": f"{len(injured)} minor injuries", "lost_ppg": lost_ppg}
+
+
+def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> List[dict]:
+    """Convert player stats to template-friendly dicts."""
+    result = []
+    players = [p for p in stats.players if p.mpg > 0][:12]
+    for p in players:
+        base = p.ppg * 0.4
+        loc = (p.ppg_home if is_home else p.ppg_away) * 0.3
+        vs = (p.ppg_vs_opp if p.games_vs_opp > 0 else p.ppg) * 0.3
+        proj = base + loc + vs
+        result.append({
+            "name": p.name,
+            "position": p.position,
+            "ppg": p.ppg,
+            "rpg": p.rpg,
+            "apg": p.apg,
+            "mpg": p.mpg,
+            "ppg_home": p.ppg_home,
+            "ppg_away": p.ppg_away,
+            "ppg_vs_opp": p.ppg_vs_opp if p.games_vs_opp > 0 else None,
+            "projected": proj,
+            "is_injured": p.is_injured,
+        })
+    return result
 
 
 @app.get("/matchups", response_class=HTMLResponse)
 async def matchups(request: Request, home_team_id: int | None = None, away_team_id: int | None = None) -> HTMLResponse:
     teams = _team_list()
     games = await asyncio.to_thread(get_scheduled_games, 14)
-    selected_game = None
-    if games:
-        selected_game = games[0]
     prediction = None
+    home_stats = None
+    away_stats = None
+    backtest = None
+    home_injury = None
+    away_injury = None
+    home_players = []
+    away_players = []
     error: Optional[str] = None
 
     if home_team_id and away_team_id:
-        home_players = _team_players(home_team_id)
-        away_players = _team_players(away_team_id)
         try:
-            prediction = predict_matchup(
-                home_team_id=home_team_id,
-                away_team_id=away_team_id,
-                home_players=home_players,
-                away_players=away_players,
+            # Get comprehensive team stats
+            home_stats = await asyncio.to_thread(
+                get_team_matchup_stats, home_team_id, away_team_id, True
             )
-        except Exception as exc:  # pragma: no cover - analytics exceptions
+            away_stats = await asyncio.to_thread(
+                get_team_matchup_stats, away_team_id, home_team_id, False
+            )
+
+            if home_stats.players and away_stats.players:
+                # Calculate prediction
+                home_proj = home_stats.projected_points + HOME_COURT_ADV
+                away_proj = away_stats.projected_points
+                prediction = {
+                    "predicted_spread": home_proj - away_proj,
+                    "predicted_total": home_proj + away_proj,
+                    "home_projected": home_proj,
+                    "away_projected": away_proj,
+                }
+
+                # Get injury summaries
+                home_injury = _get_injury_summary(home_stats)
+                away_injury = _get_injury_summary(away_stats)
+
+                # Get player breakdowns
+                home_players = _players_to_dicts(home_stats, away_team_id, True)
+                away_players = _players_to_dicts(away_stats, home_team_id, False)
+
+                # Get historical backtest data
+                backtest = await asyncio.to_thread(_get_matchup_backtest, home_team_id, away_team_id)
+            else:
+                error = "No player data. Run sync first."
+        except Exception as exc:
             error = str(exc)
+
     return templates.TemplateResponse(
         "matchups.html",
         {
             "request": request,
             "teams": teams,
             "games": games,
-            "selected_game": selected_game,
             "prediction": prediction,
+            "home_stats": home_stats,
+            "away_stats": away_stats,
+            "backtest": backtest,
+            "home_injury": home_injury,
+            "away_injury": away_injury,
+            "home_players": home_players,
+            "away_players": away_players,
             "error": error,
             "home_team_id": home_team_id,
             "away_team_id": away_team_id,
         },
     )
+
+
+def _format_predictions(results: BacktestResults) -> List[dict]:
+    """Format predictions for template display."""
+    preds = []
+    for p in sorted(results.predictions, key=lambda x: str(x.game_date), reverse=True)[:50]:
+        # Format predicted/actual winner
+        pred_winner = p.home_abbr if p.predicted_winner == "HOME" else (
+            p.away_abbr if p.predicted_winner == "AWAY" else "Close"
+        )
+        actual_winner = p.home_abbr if p.actual_winner == "HOME" else (
+            p.away_abbr if p.actual_winner == "AWAY" else "Tie"
+        )
+        # Format injuries (last names only)
+        home_inj = ", ".join(n.split()[-1] for n in p.home_injuries[:2]) if p.home_injuries else ""
+        away_inj = ", ".join(n.split()[-1] for n in p.away_injuries[:2]) if p.away_injuries else ""
+        injury_text = ""
+        if home_inj:
+            injury_text = f"{p.home_abbr}: {home_inj}"
+        if away_inj:
+            injury_text += (" | " if injury_text else "") + f"{p.away_abbr}: {away_inj}"
+        
+        preds.append({
+            "game_date": str(p.game_date),
+            "matchup": f"{p.away_abbr} @ {p.home_abbr}",
+            "final_score": f"{int(p.actual_away_score)}-{int(p.actual_home_score)}",
+            "pred_winner": pred_winner,
+            "actual_winner": actual_winner,
+            "winner_correct": p.winner_correct,
+            "pred_score": f"{int(p.predicted_away_score)}-{int(p.predicted_home_score)}",
+            "score_diff": f"H:{p.home_score_error:+.0f} A:{p.away_score_error:+.0f}",
+            "pred_total": int(p.predicted_total),
+            "actual_total": int(p.actual_total),
+            "total_diff": p.total_error,
+            "injuries": injury_text or "-",
+            "has_injuries": bool(home_inj or away_inj),
+        })
+    return preds
 
 
 @app.get("/accuracy", response_class=HTMLResponse)
@@ -363,6 +542,9 @@ async def accuracy(
         use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
 
     results: BacktestResults | None = None
+    predictions: List[dict] = []
+    avg_spread_err = 0.0
+    avg_total_err = 0.0
     error = None
 
     # Only run backtest if explicitly requested via the run parameter
@@ -379,6 +561,10 @@ async def accuracy(
                 _cb,
                 use_injuries_flag,
             )
+            if results and results.predictions:
+                predictions = _format_predictions(results)
+                avg_spread_err = sum(abs(p.spread_error) for p in results.predictions) / len(results.predictions)
+                avg_total_err = sum(abs(p.total_error) for p in results.predictions) / len(results.predictions)
         except Exception as exc:  # pragma: no cover - heavy computation
             error = str(exc)
 
@@ -390,6 +576,9 @@ async def accuracy(
             "home_team_id": home_team_id,
             "away_team_id": away_team_id,
             "results": results,
+            "predictions": predictions,
+            "avg_spread_err": avg_spread_err,
+            "avg_total_err": avg_total_err,
             "progress": progress,
             "error": error,
             "use_injuries": use_injuries_flag,
