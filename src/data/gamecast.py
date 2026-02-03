@@ -1,7 +1,9 @@
-"""ESPN Gamecast integration for real-time NBA game data.
+"""ESPN Gamecast integration for real-time college basketball game data.
 
 Uses the linedrive library for WebSocket play-by-play events and ESPN's
 summary API for live odds and win probability.
+
+Supports both men's and women's college basketball.
 """
 from __future__ import annotations
 
@@ -14,9 +16,24 @@ from typing import Any, Callable, Dict, Generator, List, Optional
 
 import requests
 
-# ESPN API endpoints
-ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+# ESPN API endpoints - College Basketball
+# Default to men's college basketball; can be switched via set_league()
+_CURRENT_LEAGUE = "mens-college-basketball"
+
+def set_league(league: str) -> None:
+    """Set the current league for gamecast ('mens-college-basketball' or 'womens-college-basketball')."""
+    global _CURRENT_LEAGUE
+    _CURRENT_LEAGUE = league
+
+def _get_scoreboard_url() -> str:
+    return f"https://site.api.espn.com/apis/site/v2/sports/basketball/{_CURRENT_LEAGUE}/scoreboard"
+
+def _get_summary_url() -> str:
+    return f"https://site.api.espn.com/apis/site/v2/sports/basketball/{_CURRENT_LEAGUE}/summary"
+
+# Keep these for backward compatibility but use functions above
+ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard"
+ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/summary"
 
 
 @dataclass
@@ -108,9 +125,9 @@ class BoxScore:
 
 
 def get_live_games() -> List[GameInfo]:
-    """Fetch today's NBA games from ESPN scoreboard."""
+    """Fetch today's college basketball games from ESPN scoreboard."""
     try:
-        resp = requests.get(ESPN_SCOREBOARD_URL, timeout=10)
+        resp = requests.get(_get_scoreboard_url(), timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -159,7 +176,7 @@ def get_game_odds(game_id: str) -> Optional[GameOdds]:
     """Fetch live odds and win probability from ESPN summary API."""
     try:
         resp = requests.get(
-            ESPN_SUMMARY_URL,
+            _get_summary_url(),
             params={"event": game_id},
             timeout=10
         )
@@ -225,7 +242,7 @@ def get_game_leaders(game_id: str) -> Optional[GameLeaders]:
     """Fetch game leaders (top scorers, rebounders, assisters) from ESPN."""
     try:
         resp = requests.get(
-            ESPN_SUMMARY_URL,
+            _get_summary_url(),
             params={"event": game_id},
             timeout=10
         )
@@ -288,7 +305,7 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
     """Fetch live box score from ESPN summary API."""
     try:
         resp = requests.get(
-            ESPN_SUMMARY_URL,
+            _get_summary_url(),
             params={"event": game_id},
             timeout=10
         )
@@ -385,7 +402,7 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
     """
     try:
         resp = requests.get(
-            ESPN_SUMMARY_URL,
+            _get_summary_url(),
             params={"event": game_id},
             timeout=10
         )

@@ -1,54 +1,110 @@
+"""Sync service for college basketball data.
+
+Uses ESPN API for on-demand, day-ahead data loading.
+Only fetches data for games within the configured time window.
+"""
 from __future__ import annotations
 
 import time
-from typing import Callable, Iterable, List, Optional
+from datetime import date, timedelta
+from typing import Callable, Iterable, List, Optional, Set
 
 import pandas as pd
 
 from src.data.injury_scraper import fetch_injuries
 from src.data.live_scores import fetch_live_games
-from src.data.nba_fetcher import fetch_player_game_logs, fetch_players, fetch_schedule, fetch_teams, get_current_season
+from src.data.college_fetcher import (
+    fetch_teams,
+    fetch_players,
+    fetch_schedule,
+    fetch_scoreboard,
+    fetch_player_stats_from_game,
+    get_current_season,
+    DEFAULT_LEAGUE,
+)
 from src.database import migrations
 from src.database.db import get_conn
 from src.analytics.injury_history import build_injury_history
 
 
 def sync_reference_data(
-    progress_cb: Optional[Callable[[str], None]] = None, season: Optional[str] = None
+    progress_cb: Optional[Callable[[str], None]] = None,
+    season: Optional[str] = None,
+    league: str = DEFAULT_LEAGUE,
+    team_ids: Optional[List[int]] = None,
 ) -> pd.DataFrame:
+    """
+    Sync teams and players to DB.
+    
+    For college basketball, we use on-demand loading:
+    - If team_ids provided, only sync those teams
+    - Otherwise, sync teams from today's scheduled games
+    
+    Returns:
+        DataFrame of synced players
+    """
     season = season or get_current_season()
-    """Sync teams and players to DB, returns players_df for reuse."""
     progress = progress_cb or (lambda _msg: None)
     migrations.init_db()
     migrations.ensure_columns()
-    progress("Fetching teams...")
-    teams_df = fetch_teams()
-    progress("Fetching players...")
-    players_df = fetch_players(season=season, progress_cb=progress_cb)
+    
+    # Get team IDs from today's games if not provided
+    if team_ids is None:
+        progress("Fetching today's scheduled games...")
+        games = fetch_scoreboard(league=league)
+        team_ids = list(set(
+            [g["home_team_id"] for g in games] + [g["away_team_id"] for g in games]
+        ))
+        progress(f"Found {len(team_ids)} teams from {len(games)} games")
+    
+    if not team_ids:
+        progress("No games today - no teams to sync")
+        return pd.DataFrame(columns=["id", "full_name", "team_id", "position"])
+    
+    # Fetch teams
+    progress("Fetching team info...")
+    teams_df = fetch_teams(league=league, progress_cb=progress)
+    # Filter to only teams we need
+    teams_df = teams_df[teams_df["id"].isin(team_ids)]
+    
+    # Fetch players for these teams
+    progress(f"Fetching rosters for {len(team_ids)} teams...")
+    players_df = fetch_players(team_ids=team_ids, league=league, progress_cb=progress)
+    
+    if players_df.empty:
+        progress("No player data retrieved")
+        return pd.DataFrame(columns=["id", "full_name", "team_id", "position"])
+    
     players_df = players_df.dropna(subset=["team_id"])
     players_df["team_id"] = players_df["team_id"].astype(int)
 
     with get_conn() as conn:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
-            VALUES (?, ?, ?, ?)
-            """,
-            teams_df[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
-        )
+        # Insert/update teams
+        for _, row in teams_df.iterrows():
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
+                VALUES (?, ?, ?, ?)
+                """,
+                (int(row["id"]), row["full_name"], row["abbreviation"], row.get("conference", "")),
+            )
 
-        conn.executemany(
-            """
-            INSERT INTO players (player_id, name, team_id, position, is_injured, injury_note)
-            VALUES (?, ?, ?, ?, 0, NULL)
-            ON CONFLICT(player_id) DO UPDATE SET
-                name = excluded.name,
-                team_id = excluded.team_id,
-                position = excluded.position
-            """,
-            players_df[["id", "full_name", "team_id", "position"]].itertuples(index=False),
-        )
+        # Insert/update players
+        for _, row in players_df.iterrows():
+            conn.execute(
+                """
+                INSERT INTO players (player_id, name, team_id, position, is_injured, injury_note)
+                VALUES (?, ?, ?, ?, 0, NULL)
+                ON CONFLICT(player_id) DO UPDATE SET
+                    name = excluded.name,
+                    team_id = excluded.team_id,
+                    position = excluded.position
+                """,
+                (int(row["id"]), row["full_name"], int(row["team_id"]), row.get("position", "")),
+            )
         conn.commit()
+    
+    progress(f"Synced {len(teams_df)} teams and {len(players_df)} players")
     return players_df
 
 
@@ -57,67 +113,108 @@ def _team_abbr_lookup(conn) -> dict[str, int]:
     return {abbr: tid for abbr, tid in rows}
 
 
-def sync_player_logs(
-    player_ids: Iterable[int],
-    season: Optional[str] = None,
+def sync_player_stats_from_games(
+    game_ids: List[str],
+    league: str = DEFAULT_LEAGUE,
     progress_cb: Optional[Callable[[str], None]] = None,
-    sleep_between: float = 0.6,
-    max_retries: int = 2,
-) -> None:
-    season = season or get_current_season()
-    progress = progress_cb or (lambda _msg: None)
-    player_ids = list(player_ids)
-    total = len(player_ids)
-    with get_conn() as conn:
-        abbr_to_id = _team_abbr_lookup(conn)
-        for idx, player_id in enumerate(player_ids, start=1):
-            if idx == 1 or idx % 25 == 0 or idx == total:
-                progress(f"Syncing game logs {idx}/{total}...")
-
-            # Fetch with retries
-            logs = None
-            for attempt in range(max_retries + 1):
-                try:
-                    logs = fetch_player_game_logs(player_id, season)
-                    break
-                except Exception as exc:
-                    if attempt < max_retries:
-                        time.sleep(1.0 + attempt)  # backoff before retry
-                    else:
-                        progress(f"Player {player_id} logs failed after {max_retries+1} attempts: {exc}")
-
-            if logs is None or logs.empty:
-                time.sleep(sleep_between)
+    sleep_between: float = 0.5,
+) -> int:
+    """
+    Sync player stats by fetching box scores from completed games.
+    
+    This is the primary method for getting player stats in college basketball,
+    since ESPN doesn't have a direct player game log endpoint.
+    
+    Returns:
+        Number of player stat records added
+    """
+    progress = progress_cb or (lambda _: None)
+    total_added = 0
+    
+    for idx, game_id in enumerate(game_ids, start=1):
+        if idx % 5 == 0:
+            progress(f"Processing game {idx}/{len(game_ids)}...")
+        
+        try:
+            stats_df = fetch_player_stats_from_game(game_id, league=league)
+            if stats_df.empty:
                 continue
-
-            # Map opponent abbreviation to team_id
-            logs["opponent_team_id"] = logs["opponent_abbr"].map(abbr_to_id)
-            logs = logs.dropna(subset=["opponent_team_id"])
-            payload = [
-                (
-                    player_id,
-                    int(row.opponent_team_id),
-                    int(row.is_home),
-                    row.game_date,
-                    float(row.points),
-                    float(row.rebounds),
-                    float(row.assists),
-                    float(row.minutes),
-                )
-                for row in logs.itertuples(index=False)
-            ]
-            conn.executemany(
-                """
-                INSERT INTO player_stats
-                    (player_id, opponent_team_id, is_home, game_date, points, rebounds, assists, minutes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(player_id, opponent_team_id, game_date) DO NOTHING
-                """,
-                payload,
-            )
-            # Rate limit between successful fetches
+            
+            with get_conn() as conn:
+                for _, row in stats_df.iterrows():
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO player_stats
+                                (player_id, opponent_team_id, is_home, game_date, points, rebounds, assists, minutes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(player_id, opponent_team_id, game_date) DO NOTHING
+                            """,
+                            (
+                                int(row["player_id"]),
+                                int(row["opponent_team_id"]),
+                                int(row["is_home"]),
+                                row["game_date"],
+                                float(row["points"]),
+                                float(row["rebounds"]),
+                                float(row["assists"]),
+                                float(row["minutes"]),
+                            ),
+                        )
+                        total_added += 1
+                    except Exception as e:
+                        progress(f"Error inserting stat for player {row.get('player_id')}: {e}")
+                conn.commit()
+            
+        except Exception as e:
+            progress(f"Failed to fetch game {game_id}: {e}")
+        
+        if sleep_between > 0:
             time.sleep(sleep_between)
-        conn.commit()
+    
+    progress(f"Added {total_added} player stat records from {len(game_ids)} games")
+    return total_added
+
+
+def sync_recent_games(
+    days_back: int = 7,
+    league: str = DEFAULT_LEAGUE,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> int:
+    """
+    Sync player stats from recently completed games.
+    
+    Args:
+        days_back: Number of days to look back for completed games
+        league: League to sync
+        progress_cb: Progress callback
+    
+    Returns:
+        Number of stats added
+    """
+    progress = progress_cb or (lambda _: None)
+    
+    # Get completed games from recent days
+    game_ids = []
+    today = date.today()
+    
+    for day_offset in range(days_back):
+        target_date = today - timedelta(days=day_offset)
+        date_str = target_date.strftime("%Y%m%d")
+        
+        progress(f"Checking games from {target_date}...")
+        games = fetch_scoreboard(league=league, dates=date_str)
+        
+        # Only include completed games
+        completed = [g for g in games if g.get("status") == "post"]
+        game_ids.extend([g["game_id"] for g in completed])
+    
+    progress(f"Found {len(game_ids)} completed games to process")
+    
+    if not game_ids:
+        return 0
+    
+    return sync_player_stats_from_games(game_ids, league=league, progress_cb=progress)
 
 
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
@@ -182,33 +279,57 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
 def sync_schedule(
     season: Optional[str] = None,
     team_ids: List[int] | None = None,
-    include_future_days: int = 14,
+    include_future_days: int = 1,  # Day-ahead by default
+    league: str = DEFAULT_LEAGUE,
 ) -> pd.DataFrame:
+    """Fetch schedule for upcoming games."""
     season = season or get_current_season()
-    return fetch_schedule(season=season, team_ids=team_ids, include_future_days=include_future_days)
+    return fetch_schedule(
+        league=league,
+        team_ids=team_ids,
+        include_future_days=include_future_days,
+    )
 
 
 def full_sync(
-    active_only: bool = True, season: Optional[str] = None, progress_cb: Optional[Callable[[str], None]] = None
+    season: Optional[str] = None,
+    league: str = DEFAULT_LEAGUE,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    days_back: int = 7,
 ) -> None:
+    """
+    Full sync for college basketball.
+    
+    Day-ahead loading approach:
+    1. Get today's scheduled games
+    2. Sync teams and rosters for those games
+    3. Sync recent game stats for those teams
+    4. Sync current injuries
+    """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
-    progress("Sync: reference data (teams + rosters)")
-    players_df = sync_reference_data(progress_cb=progress_cb, season=season)
-    progress(f"Sync: game logs for {len(players_df)} players (this may take a while)...")
-    sync_player_logs(players_df["id"].tolist(), season=season, progress_cb=progress_cb)
+    
+    progress("Sync: reference data (teams + rosters from today's games)")
+    players_df = sync_reference_data(progress_cb=progress, season=season, league=league)
+    
+    if not players_df.empty:
+        progress(f"Sync: recent game stats for {len(players_df)} players...")
+        sync_recent_games(days_back=days_back, league=league, progress_cb=progress)
+    
     progress("Sync: current injuries")
     try:
         sync_injuries(progress_cb=progress)
         progress("Current injuries synced")
     except Exception as exc:
         progress(f"Current injuries sync skipped: {exc}")
+    
     progress("Building historical injury data...")
     try:
         count = sync_injury_history(progress_cb=progress)
         progress(f"Historical injury data built: {count} records")
     except Exception as exc:
         progress(f"Historical injury build skipped: {exc}")
+    
     progress("Sync complete")
 
 
@@ -221,15 +342,19 @@ def sync_injury_history(progress_cb: Optional[Callable[[str], None]] = None) -> 
     return build_injury_history(progress_cb=progress_cb)
 
 
-def sync_live_scores(game_date: str | None = None) -> None:
+def sync_live_scores(
+    game_date: str | None = None,
+    league: str = DEFAULT_LEAGUE,
+) -> None:
+    """Sync live game scores to database."""
     migrations.init_db()
-    games = fetch_live_games(game_date)
+    games = fetch_live_games(game_date, league=league)
     if not games:
         return
 
     # Ensure the referenced teams exist to avoid FK errors
     required_ids = {g["home_team_id"] for g in games} | {g["away_team_id"] for g in games}
-    _ensure_teams_exist(required_ids)
+    _ensure_teams_exist(required_ids, league=league)
 
     with get_conn() as conn:
         conn.executemany(
@@ -251,7 +376,7 @@ def sync_live_scores(game_date: str | None = None) -> None:
         conn.commit()
 
 
-def _ensure_teams_exist(team_ids: set[int]) -> None:
+def _ensure_teams_exist(team_ids: Set[int], league: str = DEFAULT_LEAGUE) -> None:
     """Insert missing teams (id + minimal fields) to satisfy FK constraints."""
     if not team_ids:
         return
@@ -261,7 +386,7 @@ def _ensure_teams_exist(team_ids: set[int]) -> None:
     if not missing:
         return
 
-    teams_df = fetch_teams()
+    teams_df = fetch_teams(league=league)
     subset = teams_df[teams_df["id"].isin(missing)]
     if subset.empty:
         return
@@ -274,3 +399,22 @@ def _ensure_teams_exist(team_ids: set[int]) -> None:
             subset[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
         )
         conn.commit()
+
+
+# Legacy function for compatibility
+def sync_player_logs(
+    player_ids: Iterable[int],
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    sleep_between: float = 0.6,
+    max_retries: int = 2,
+) -> None:
+    """
+    Legacy function - in college basketball, we sync stats from game box scores
+    rather than individual player game logs.
+    
+    This function now triggers sync_recent_games instead.
+    """
+    progress = progress_cb or (lambda _: None)
+    progress("Note: College basketball uses game box scores for stats")
+    sync_recent_games(days_back=7, progress_cb=progress)

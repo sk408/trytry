@@ -193,8 +193,9 @@ def get_team_matchup_stats(
     active = [p for p in players if not p.is_injured]
     injured = [p for p in players if p.is_injured]
     
-    # A team plays 48 min * 5 players = 240 player-minutes per game
-    TEAM_MINUTES_PER_GAME = 240.0
+    # College: A team plays 40 min * 5 players = 200 player-minutes per game
+    # (NBA was 48 min * 5 = 240)
+    TEAM_MINUTES_PER_GAME = 200.0
     
     # Calculate points-per-minute for redistribution estimation
     def get_ppm(p: PlayerStats) -> float:
@@ -247,8 +248,8 @@ def get_team_matchup_stats(
             pos_share = p.mpg / pos_active_mpg
             # Extra minutes from injured players at same position
             extra_minutes = pos_injured_minutes * pos_share
-            # Cap at ~40 total minutes
-            max_extra = max(0, 40 - p.mpg)
+            # Cap at ~38 total minutes (college games are 40 min, players rarely play full game)
+            max_extra = max(0, 38 - p.mpg)
             extra_minutes = min(extra_minutes, max_extra)
             # Points from extra minutes (with fatigue discount)
             extra_points = extra_minutes * get_ppm(p) * 0.85

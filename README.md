@@ -1,10 +1,32 @@
-# NBA Betting Analytics
+# College Basketball Analytics
+
+A betting analytics platform for NCAA college basketball (men's and women's).
 
 This project has two UIs:
 - **Desktop (PySide6)** - Full-featured desktop app for Windows/Mac/Linux
 - **Web (FastAPI)** - Lightweight mobile-friendly web app for Android via Termux
 
 Both share the same analytics, data sync, and SQLite database.
+
+## Key Differences from NBA Version
+
+| Feature | NBA | College |
+|---------|-----|---------|
+| Game length | 48 min (4 quarters) | 40 min (2 halves) |
+| Team count | 30 | ~1,100+ (all divisions) |
+| Avg scoring | ~112 PPG | ~70-75 PPG |
+| Data source | nba_api library | ESPN API + CBBpy |
+| Home court adv | ~3.0 pts | ~2.5 pts |
+
+## Data Loading Strategy
+
+Unlike the NBA version which syncs all 30 teams upfront, college basketball uses **day-ahead loading**:
+
+1. Each morning: Fetch today's scheduled games from ESPN
+2. For each game: Load team rosters and recent player stats
+3. Cache data for 24 hours
+
+This approach handles the large number of college teams efficiently.
 
 ## Desktop Version (Windows/Mac/Linux)
 
@@ -31,6 +53,9 @@ python desktop.py
 # Clone the repo
 git clone https://github.com/sk408/trytry.git
 cd trytry
+
+# Switch to college basketball branch
+git checkout college-basketball
 
 # Run the setup script (installs Python, creates venv, installs deps)
 bash scripts/termux_setup.sh
@@ -99,13 +124,13 @@ Create a home screen shortcut to start/stop the app with one tap:
 mkdir -p ~/.shortcuts
 
 # Link the service script
-ln -s "$(pwd)/scripts/termux_service.sh" ~/.shortcuts/NBA-Analytics
+ln -s "$(pwd)/scripts/termux_service.sh" ~/.shortcuts/CBB-Analytics
 
 # Optionally add stop shortcut
-ln -s "$(pwd)/scripts/termux_stop.sh" ~/.shortcuts/NBA-Stop
+ln -s "$(pwd)/scripts/termux_stop.sh" ~/.shortcuts/CBB-Stop
 ```
 
-Then add the Termux:Widget to your home screen and tap "NBA-Analytics" to start.
+Then add the Termux:Widget to your home screen and tap "CBB-Analytics" to start.
 
 ## Auto-Start on Boot (Termux:Boot)
 
@@ -116,23 +141,48 @@ Start the server automatically when your device boots:
 mkdir -p ~/.termux/boot
 
 # Link the service script
-ln -s "$(pwd)/scripts/termux_service.sh" ~/.termux/boot/nba-analytics.sh
+ln -s "$(pwd)/scripts/termux_service.sh" ~/.termux/boot/cbb-analytics.sh
 ```
 
 The server will start in the background on boot. Logs are written to `logs/server.log`.
 
 ## Features
 
-- Dashboard: trigger data sync, injury sync, and build injury history.
-- Live: fetch live scores and show betting recommendations.
-- Players: roster list plus injured-player impact table.
-- Matchups: pick teams to generate projected spread/total; view upcoming games.
-- Schedule: next 14 days of games (run sync first).
-- Accuracy: run backtests with optional injury adjustments.
-- Admin: reset the SQLite database and re-initialize schema.
+- **Dashboard**: Trigger data sync (day-ahead loading), injury sync, and build injury history
+- **Live**: Fetch live scores with halftime tracking and betting recommendations
+- **Players**: Roster list plus injured-player impact table
+- **Matchups**: Pick teams to generate projected spread/total; supports neutral site games
+- **Schedule**: Today's games and tomorrow's schedule
+- **Accuracy**: Run backtests with optional injury adjustments
+- **Admin**: Reset the SQLite database and re-initialize schema
+
+## Data Sources
+
+- **Primary**: ESPN API (free, no key required)
+  - Scoreboard, team rosters, box scores, odds
+  - Supports both men's and women's college basketball
+- **Supplementary**: CBBpy library
+  - Detailed play-by-play data
+  - Additional box score stats
+
+## Supported Leagues
+
+- Men's College Basketball (NCAA D1, D2, D3)
+- Women's College Basketball (NCAA D1, D2, D3)
+
+Toggle between leagues in the app settings.
 
 ## Notes
 
-- Database location is managed by `src/database/db.py` (defaults to `data/nba_analytics.db`).
-- Long-running sync/backtest operations run inside the API process; on Termux, keep the session open while they complete.
-- No front-end build step is required (plain HTML/Jinja + CSS).
+- Database location: `data/college_analytics.db`
+- Long-running sync/backtest operations run inside the API process; on Termux, keep the session open while they complete
+- No front-end build step is required (plain HTML/Jinja + CSS)
+- College basketball uses 20-minute halves (not 12-minute quarters)
+
+## Future: March Madness
+
+March Madness support is planned as a separate feature branch with:
+- Bracket structure (68 teams, regions, seeds)
+- Single-elimination prediction adjustments
+- Neutral site handling for tournament games
+- Upset probability metrics

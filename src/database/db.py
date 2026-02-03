@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "nba_analytics.db"
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "college_analytics.db"
 
 
 def _prepare_path() -> None:

@@ -41,7 +41,7 @@ class Dashboard(QWidget):
         button_row.addStretch()
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("NBA Betting Analytics"))
+        layout.addWidget(QLabel("College Basketball Analytics"))
         layout.addLayout(button_row)
         layout.addWidget(self.status)
         layout.addWidget(self.log)

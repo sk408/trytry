@@ -8,7 +8,9 @@ import pandas as pd
 from src.database.db import get_conn
 
 
-DEFAULT_QUARTER_WEIGHTS = [0.24, 0.26, 0.25, 0.25]  # tweakable: Q2/Q4 often higher scoring
+# College basketball uses halves, not quarters
+# First half often slightly lower scoring as teams feel each other out
+DEFAULT_HALF_WEIGHTS = [0.48, 0.52]  # H1/H2 weights
 
 
 @dataclass
@@ -25,9 +27,10 @@ class LiveRecommendation:
     projected_spread: float  # home minus away
 
 
-def _quarter_progress(clock_str: str | None) -> float:
+def _half_progress(clock_str: str | None) -> float:
     """
-    Returns fraction of current quarter completed (0-1).
+    Returns fraction of current half completed (0-1).
+    College basketball: 20 minute halves.
     Expects clock like '08:32'; treats None/'Final' as 1.0.
     """
     if not clock_str or ":" not in clock_str:
@@ -35,24 +38,30 @@ def _quarter_progress(clock_str: str | None) -> float:
     try:
         mins, secs = clock_str.split(":")
         remaining = int(mins) * 60 + int(secs)
-        total = 12 * 60
+        total = 20 * 60  # 20 minute halves in college
         return 1.0 - (remaining / total)
     except Exception:
         return 1.0
 
 
 def _elapsed_minutes(period: int, clock: str | None) -> float:
-    """Approximate total elapsed minutes in regulation (0-48)."""
+    """Approximate total elapsed minutes in regulation (0-40 for college)."""
     period = max(1, period)
-    base = (period - 1) * 12
-    prog = _quarter_progress(clock)
-    return min(base + prog * 12, 48.0)
+    # College uses halves (period 1 = 1st half, period 2 = 2nd half)
+    base = (period - 1) * 20  # 20 minutes per half
+    prog = _half_progress(clock)
+    return min(base + prog * 20, 40.0)  # 40 minute game
 
 
-def _team_points_per_minute(team_id: int, fallback_ppg: float = 112.0) -> float:
+# Keep old function name for compatibility
+_quarter_progress = _half_progress
+
+
+def _team_points_per_minute(team_id: int, fallback_ppg: float = 72.0) -> float:
     """
     Estimate scoring rate using historical player_stats.
     fallback_ppg is a league-ish average if no data.
+    College basketball averages ~70-75 PPG vs NBA's ~112.
     """
     with get_conn() as conn:
         df = pd.read_sql(
@@ -66,11 +75,11 @@ def _team_points_per_minute(team_id: int, fallback_ppg: float = 112.0) -> float:
             params=[team_id],
         )
     if df.empty:
-        return fallback_ppg / 48.0
+        return fallback_ppg / 40.0  # 40 minute college game
     points = df["points"].sum()
     minutes = df["minutes"].sum()
     if minutes <= 0:
-        return fallback_ppg / 48.0
+        return fallback_ppg / 40.0
     return (points / minutes)
 
 
@@ -82,13 +91,20 @@ def _compute_projection(
     home_rate: float,
     away_rate: float,
     home_court: float = 1.5,
+    is_neutral_site: bool = False,
 ):
+    """
+    Compute projected final score.
+    College basketball: 40 minute games.
+    """
     # Rates are points per minute
     elapsed = _elapsed_minutes(period, clock)
-    remaining = max(48.0 - elapsed, 0.0)
+    remaining = max(40.0 - elapsed, 0.0)  # 40 minute college game
     projected_home = home_score + home_rate * remaining
     projected_away = away_score + away_rate * remaining
-    projected_spread = (projected_home - projected_away) + home_court
+    # Neutral site games have no home court advantage
+    effective_home_court = 0.0 if is_neutral_site else home_court
+    projected_spread = (projected_home - projected_away) + effective_home_court
     projected_total = projected_home + projected_away
     return projected_total, projected_spread
 

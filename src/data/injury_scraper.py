@@ -5,10 +5,13 @@ from typing import List, Dict, Optional, Callable
 import requests
 from bs4 import BeautifulSoup
 
-# Multiple sources to try
-ESPN_INJURY_URL = "https://www.espn.com/nba/injuries"
-CBS_INJURY_URL = "https://www.cbssports.com/nba/injuries/"
-ROTOWIRE_INJURY_URL = "https://www.rotowire.com/basketball/injury-report.php"
+# Multiple sources to try - College Basketball
+ESPN_INJURY_URL = "https://www.espn.com/mens-college-basketball/injuries"
+CBS_INJURY_URL = "https://www.cbssports.com/college-basketball/injuries/"
+ROTOWIRE_INJURY_URL = "https://www.rotowire.com/college-basketball/injury-report.php"
+
+# Women's college basketball URLs (for reference)
+ESPN_WOMENS_INJURY_URL = "https://www.espn.com/womens-college-basketball/injuries"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

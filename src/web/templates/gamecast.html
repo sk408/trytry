@@ -19,7 +19,7 @@
       </div>
       <div class="game-status">
         {% if g.status == 'in_progress' %}
-          <span class="text-success">LIVE Q{{ g.period }} {{ g.clock }}</span>
+          <span class="text-success">LIVE H{{ g.period }} {{ g.clock }}</span>
           <span style="margin-left: 8px;">{{ g.away_score }} - {{ g.home_score }}</span>
         {% elif g.status == 'final' %}
           <span class="text-muted">FINAL</span>
@@ -50,7 +50,7 @@
     <div class="score-status">
       {% if selected_game.status == 'in_progress' %}
         <span class="live-badge">LIVE</span>
-        <span id="period">Q{{ selected_game.period }}</span>
+        <span id="period">H{{ selected_game.period }}</span>
         <span id="clock">{{ selected_game.clock }}</span>
       {% elif selected_game.status == 'final' %}
         <span class="final-badge">FINAL</span>
@@ -155,11 +155,11 @@
         </span>
       </div>
     </div>
-    <!-- Pace projection -->
+    <!-- Pace projection (college: 40 min games, 20 min halves) -->
     {% if selected_game.period > 0 %}
     <div class="pace-projection">
-      {% set minutes_played = (selected_game.period - 1) * 12 + (12 - (selected_game.clock|replace(':', '.')|float if ':' in selected_game.clock else 12)) %}
-      {% set pace_factor = 48.0 / minutes_played if minutes_played > 0 else 1 %}
+      {% set minutes_played = (selected_game.period - 1) * 20 + (20 - (selected_game.clock|replace(':', '.')|float if ':' in selected_game.clock else 20)) %}
+      {% set pace_factor = 40.0 / minutes_played if minutes_played > 0 else 1 %}
       {% set projected_final_total = actual_total * pace_factor %}
       <span class="text-muted">
         Pace: ~{{ "%.0f"|format(projected_final_total) }} total projected at current rate
@@ -242,7 +242,7 @@
       {% for play in recent_plays %}
       <div class="play-item {{ 'scoring' if play.event_type in ['made shot', 'free throw'] else '' }}">
         <div class="play-meta">
-          <span class="play-period">Q{{ play.period }}</span>
+          <span class="play-period">H{{ play.period }}</span>
           <span class="play-clock">{{ play.clock }}</span>
           {% if play.team %}
           <span class="play-team">{{ play.team }}</span>
@@ -388,7 +388,7 @@ function addPlay(play) {
   playEl.className = 'play-item new';
   playEl.innerHTML = `
     <div class="play-meta">
-      <span class="play-period">Q${play.period}</span>
+      <span class="play-period">H${play.period}</span>
       <span class="play-clock">${play.clock}</span>
       ${play.team ? `<span class="play-team">${play.team}</span>` : ''}
     </div>
@@ -410,7 +410,7 @@ function updateScore(game) {
   
   const period = document.getElementById('period');
   const clock = document.getElementById('clock');
-  if (period) period.textContent = `Q${game.period}`;
+  if (period) period.textContent = `H${game.period}`;
   if (clock) clock.textContent = game.clock;
 }
 

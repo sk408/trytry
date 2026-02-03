@@ -25,7 +25,7 @@ from src.data.sync_service import (
     sync_live_scores,
     sync_schedule,
 )
-from src.data.nba_fetcher import get_current_season
+from src.data.college_fetcher import get_current_season
 from src.data.gamecast import (
     get_live_games,
     get_game_odds,
@@ -48,7 +48,7 @@ from src.web.player_utils import get_position_display, load_injured_with_stats, 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-app = FastAPI(title="NBA Betting Analytics (Web)")
+app = FastAPI(title="College Basketball Analytics (Web)")
 app.mount(
     "/static",
     StaticFiles(directory=str(BASE_DIR / "static")),

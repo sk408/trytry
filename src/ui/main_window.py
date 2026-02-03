@@ -17,7 +17,7 @@ from src.ui.schedule_view import ScheduleView
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("NBA Betting Analytics")
+        self.setWindowTitle("College Basketball Analytics")
         self.resize(1200, 800)
 
         tabs = QTabWidget()

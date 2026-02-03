@@ -1,45 +1,113 @@
+"""Live scores fetcher for college basketball using ESPN API.
+
+Replaces nba_api.live with ESPN's scoreboard endpoint.
+"""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import List, Dict, Optional
 
+import requests
 
-def _require_live():
-    try:
-        from nba_api.live.nba.endpoints import scoreboard  # type: ignore
-    except Exception as exc:  # pragma: no cover - defensive for missing dep/network
-        raise RuntimeError(
-            "nba_api live module is required. Ensure dependencies are installed and network is available."
-        ) from exc
-    return scoreboard
+# ESPN API endpoint
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+DEFAULT_LEAGUE = "mens-college-basketball"
 
 
-def fetch_live_games(game_date: Optional[str] = None) -> List[Dict]:
+def fetch_live_games(
+    game_date: Optional[str] = None,
+    league: str = DEFAULT_LEAGUE,
+) -> List[Dict]:
     """
-    Fetch live (and recent) games. game_date format YYYY-MM-DD; defaults to today.
+    Fetch live (and recent) games. game_date format YYYYMMDD; defaults to today.
     Returns list of dicts with team ids, scores, status, period, clock.
+    
+    Args:
+        game_date: Date in YYYYMMDD format (optional)
+        league: 'mens-college-basketball' or 'womens-college-basketball'
+    
+    Returns:
+        List of game dictionaries
     """
-    scoreboard = _require_live()
-    params = {"gameDate": game_date} if game_date else {}
-    board = scoreboard.ScoreBoard(**params)
-    data = board.get_dict()
-    games = data.get("scoreboard", {}).get("games", [])
+    url = f"{ESPN_BASE}/{league}/scoreboard"
+    params = {}
+    if game_date:
+        # Convert from YYYY-MM-DD to YYYYMMDD if needed
+        params["dates"] = game_date.replace("-", "")
+    
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[live_scores] Error fetching scoreboard: {e}")
+        return []
+    
     now_iso = datetime.utcnow().isoformat()
-
     parsed: List[Dict] = []
-    for g in games:
-        parsed.append(
-            {
-                "game_id": g.get("gameId"),
-                "home_team_id": int(g["homeTeam"]["teamId"]),
-                "away_team_id": int(g["awayTeam"]["teamId"]),
-                "start_time_utc": g.get("gameTimeUTC"),
-                "status": g.get("gameStatusText"),
-                "period": g.get("period"),
-                "clock": g.get("gameClock"),
-                "home_score": int(g["homeTeam"].get("score", 0)),
-                "away_score": int(g["awayTeam"].get("score", 0)),
-                "last_updated": now_iso,
-            }
-        )
+    
+    for event in data.get("events", []):
+        competition = event.get("competitions", [{}])[0]
+        competitors = competition.get("competitors", [])
+        
+        if len(competitors) < 2:
+            continue
+        
+        home = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+        away = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+        
+        home_team = home.get("team", {})
+        away_team = away.get("team", {})
+        
+        status_obj = event.get("status", {})
+        status_type = status_obj.get("type", {})
+        
+        # Map status states
+        state = status_type.get("state", "pre")
+        status_map = {
+            "pre": "Scheduled",
+            "in": "In Progress",
+            "post": "Final",
+        }
+        status_text = status_type.get("shortDetail", status_map.get(state, state))
+        
+        parsed.append({
+            "game_id": event.get("id", ""),
+            "home_team_id": int(home_team.get("id", 0)),
+            "away_team_id": int(away_team.get("id", 0)),
+            "home_abbr": home_team.get("abbreviation", ""),
+            "away_abbr": away_team.get("abbreviation", ""),
+            "start_time_utc": event.get("date", ""),
+            "status": status_text,
+            "period": int(status_obj.get("period", 0) or 0),
+            "clock": status_obj.get("displayClock", ""),
+            "home_score": int(home.get("score", 0) or 0),
+            "away_score": int(away.get("score", 0) or 0),
+            "last_updated": now_iso,
+            "neutral_site": competition.get("neutralSite", False),
+            "venue": competition.get("venue", {}).get("fullName", ""),
+        })
+    
     return parsed
+
+
+def fetch_game_details(game_id: str, league: str = DEFAULT_LEAGUE) -> Optional[Dict]:
+    """
+    Fetch detailed information for a specific game.
+    
+    Args:
+        game_id: ESPN game ID
+        league: League identifier
+    
+    Returns:
+        Dictionary with game details including odds, box score preview
+    """
+    url = f"{ESPN_BASE}/{league}/summary"
+    
+    try:
+        resp = requests.get(url, params={"event": game_id}, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[live_scores] Error fetching game details for {game_id}: {e}")
+        return None
