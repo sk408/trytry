@@ -594,6 +594,8 @@ def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> Li
 
 @app.get("/matchups", response_class=HTMLResponse)
 async def matchups(request: Request, home_team_id: int | None = None, away_team_id: int | None = None) -> HTMLResponse:
+    from datetime import datetime, date as date_type
+    
     teams = _team_list()
     games = await asyncio.to_thread(get_scheduled_games, 14)
     prediction = None
@@ -605,8 +607,45 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
     home_players = []
     away_players = []
     error: Optional[str] = None
+    game_start_iso: Optional[str] = None  # ISO timestamp for countdown
 
     if home_team_id and away_team_id:
+        # Try to find the game time from schedule
+        try:
+            schedule_df = await asyncio.to_thread(sync_schedule, include_future_days=14)
+            if not schedule_df.empty:
+                # Find game matching these teams
+                for _, row in schedule_df.iterrows():
+                    h_id = int(row.get("home_team_id", 0))
+                    a_id = int(row.get("away_team_id", 0))
+                    if h_id == home_team_id and a_id == away_team_id:
+                        game_date = row.get("game_date")
+                        game_time = row.get("game_time", "")
+                        if game_date:
+                            # Parse date
+                            if hasattr(game_date, 'isoformat'):
+                                gd = game_date
+                            else:
+                                gd = pd.to_datetime(game_date).date()
+                            
+                            # Parse time and build ISO timestamp
+                            if game_time and game_time != "TBD":
+                                try:
+                                    # Remove timezone suffix and parse
+                                    time_clean = game_time.split()[0:2]  # "7:30 PM"
+                                    time_str = " ".join(time_clean)
+                                    dt = datetime.strptime(f"{gd} {time_str}", "%Y-%m-%d %I:%M %p")
+                                    game_start_iso = dt.isoformat()
+                                except (ValueError, IndexError):
+                                    # Just use midnight if can't parse time
+                                    game_start_iso = f"{gd}T12:00:00"
+                            else:
+                                # Default to noon if no time
+                                game_start_iso = f"{gd}T12:00:00"
+                        break
+        except Exception:
+            pass  # Don't fail if schedule lookup fails
+        
         try:
             # Get comprehensive team stats
             home_stats = await asyncio.to_thread(
@@ -659,6 +698,7 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
             "error": error,
             "home_team_id": home_team_id,
             "away_team_id": away_team_id,
+            "game_start_iso": game_start_iso,
         },
     )
 

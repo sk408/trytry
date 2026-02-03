@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Matchups</h1>
+<div class="page-header">
+  <h1 class="page-title">Matchups</h1>
+  {% if game_start_iso %}
+  <div id="countdown" class="countdown" data-start="{{ game_start_iso }}">
+    <span class="countdown-label">Starts in:</span>
+    <span class="countdown-time">--:--:--</span>
+  </div>
+  {% endif %}
+</div>
 
 <div class="card">
   <h2>Analyze Matchup</h2>
@@ -239,4 +247,48 @@
   </div>
   {% endif %}
 </div>
+
+{% if game_start_iso %}
+<script>
+(function() {
+  const countdownEl = document.getElementById('countdown');
+  if (!countdownEl) return;
+  
+  const startTime = new Date(countdownEl.dataset.start);
+  const timeEl = countdownEl.querySelector('.countdown-time');
+  const labelEl = countdownEl.querySelector('.countdown-label');
+  
+  function updateCountdown() {
+    const now = new Date();
+    const diff = startTime - now;
+    
+    if (diff <= 0) {
+      labelEl.textContent = '';
+      timeEl.textContent = 'LIVE';
+      timeEl.classList.add('live');
+      return;
+    }
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    const secs = Math.floor((diff % (1000 * 60)) / 1000);
+    
+    let timeStr = '';
+    if (days > 0) {
+      timeStr = days + 'd ' + hours + 'h ' + mins + 'm';
+    } else if (hours > 0) {
+      timeStr = hours + 'h ' + mins + 'm ' + secs + 's';
+    } else {
+      timeStr = mins + 'm ' + secs + 's';
+    }
+    
+    timeEl.textContent = timeStr;
+  }
+  
+  updateCountdown();
+  setInterval(updateCountdown, 1000);
+})();
+</script>
+{% endif %}
 {% endblock %}
