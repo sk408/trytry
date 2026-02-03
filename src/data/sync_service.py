@@ -130,11 +130,32 @@ def _team_abbr_lookup(conn) -> dict[str, int]:
     return {abbr: tid for abbr, tid in rows}
 
 
+def _get_synced_game_ids() -> Set[str]:
+    """Get set of game IDs that have already been synced."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT game_id FROM synced_games").fetchall()
+    return {row[0] for row in rows}
+
+
+def _mark_game_synced(conn, game_id: str, game_date, home_team_id: int, away_team_id: int, stats_count: int) -> None:
+    """Mark a game as synced in the cache."""
+    from datetime import datetime
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO synced_games (game_id, game_date, home_team_id, away_team_id, synced_at, stats_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (game_id, game_date, home_team_id, away_team_id, datetime.utcnow().isoformat(), stats_count),
+    )
+
+
 def sync_player_stats_from_games(
     game_ids: List[str],
     league: str = DEFAULT_LEAGUE,
     progress_cb: Optional[Callable[[str], None]] = None,
     sleep_between: float = 0.5,
+    skip_cached: bool = True,
+    force_recent_days: int = 2,
 ) -> int:
     """
     Sync player stats by fetching box scores from completed games.
@@ -142,14 +163,37 @@ def sync_player_stats_from_games(
     This is the primary method for getting player stats in college basketball,
     since ESPN doesn't have a direct player game log endpoint.
     
+    Args:
+        game_ids: List of ESPN game IDs to sync
+        league: League to sync
+        progress_cb: Progress callback
+        sleep_between: Delay between API requests
+        skip_cached: If True, skip games already in synced_games table
+        force_recent_days: Always re-fetch games from last N days (in case stats updated)
+    
     Returns:
         Number of player stat records added
     """
     progress = progress_cb or (lambda _: None)
     total_added = 0
     
+    # Get already-synced games for caching
+    if skip_cached:
+        already_synced = _get_synced_game_ids()
+        original_count = len(game_ids)
+        game_ids = [gid for gid in game_ids if gid not in already_synced]
+        skipped = original_count - len(game_ids)
+        if skipped > 0:
+            progress(f"Skipping {skipped} already-synced games (cached)")
+    
+    if not game_ids:
+        progress("All games already synced!")
+        return 0
+    
+    progress(f"Syncing {len(game_ids)} games...")
+    
     for idx, game_id in enumerate(game_ids, start=1):
-        if idx % 5 == 0:
+        if idx % 5 == 0 or idx == 1:
             progress(f"Processing game {idx}/{len(game_ids)}...")
         
         try:
@@ -189,6 +233,11 @@ def sync_player_stats_from_games(
                     )
                 
                 # Now insert the stats
+                game_stats_added = 0
+                game_date = None
+                home_team_id = None
+                away_team_id = None
+                
                 for _, row in stats_df.iterrows():
                     try:
                         conn.execute(
@@ -209,9 +258,26 @@ def sync_player_stats_from_games(
                                 float(row["minutes"]),
                             ),
                         )
+                        game_stats_added += 1
                         total_added += 1
+                        
+                        # Track game info for cache
+                        if game_date is None:
+                            game_date = row["game_date"]
+                        if row["is_home"]:
+                            home_team_id = int(row["team_id"])
+                            away_team_id = int(row["opponent_team_id"])
+                        else:
+                            away_team_id = int(row["team_id"])
+                            home_team_id = int(row["opponent_team_id"])
+                            
                     except Exception as e:
                         progress(f"Error inserting stat for player {row.get('player_id')}: {e}")
+                
+                # Mark this game as synced
+                if game_date is not None:
+                    _mark_game_synced(conn, game_id, game_date, home_team_id or 0, away_team_id or 0, game_stats_added)
+                
                 conn.commit()
             
         except Exception as e:
@@ -228,14 +294,19 @@ def sync_recent_games(
     days_back: int = 7,
     league: str = DEFAULT_LEAGUE,
     progress_cb: Optional[Callable[[str], None]] = None,
+    skip_cached: bool = False,
 ) -> int:
     """
     Sync player stats from recently completed games.
+    
+    For recent games (last 7 days), we don't use cache by default since
+    stats might be updated.
     
     Args:
         days_back: Number of days to look back for completed games
         league: League to sync
         progress_cb: Progress callback
+        skip_cached: If True, skip already-synced games
     
     Returns:
         Number of stats added
@@ -267,7 +338,12 @@ def sync_recent_games(
     if not game_ids:
         return 0
     
-    return sync_player_stats_from_games(game_ids, league=league, progress_cb=progress)
+    return sync_player_stats_from_games(
+        game_ids, 
+        league=league, 
+        progress_cb=progress,
+        skip_cached=skip_cached,
+    )
 
 
 def sync_season_stats(
@@ -275,9 +351,12 @@ def sync_season_stats(
     progress_cb: Optional[Callable[[str], None]] = None,
 ) -> int:
     """
-    Sync player stats for the entire current season.
+    Sync player stats for the entire current season with CACHING.
     
-    College basketball season runs Nov-March, so this fetches ~120 days of games.
+    - Old games (>3 days): Only fetched once, then cached
+    - Recent games (last 3 days): Always re-fetched in case stats updated
+    
+    This makes subsequent syncs much faster after the first full sync.
     
     Returns:
         Number of stats added
@@ -294,8 +373,57 @@ def sync_season_stats(
     days_back = min(days_since_start, 150)
     
     progress(f"Syncing full season: {days_back} days of games since {season_start}")
+    progress("(Cached games will be skipped - only new games fetched)")
     
-    return sync_recent_games(days_back=days_back, league=league, progress_cb=progress)
+    # Collect all game IDs first, separating recent from older games
+    recent_game_ids = []  # Last 3 days - always re-fetch
+    older_game_ids = []   # Older than 3 days - use cache
+    
+    for day_offset in range(days_back):
+        target_date = today - timedelta(days=day_offset)
+        date_str = target_date.strftime("%Y%m%d")
+        
+        if day_offset % 14 == 0:  # Progress every 2 weeks
+            progress(f"Scanning games from {target_date}... ({day_offset}/{days_back} days)")
+        
+        try:
+            games = fetch_scoreboard(league=league, dates=date_str)
+            completed = [g for g in games if g.get("status") == "post"]
+            
+            for g in completed:
+                if day_offset <= 3:
+                    recent_game_ids.append(g["game_id"])
+                else:
+                    older_game_ids.append(g["game_id"])
+        except Exception as e:
+            if day_offset % 7 == 0:
+                progress(f"Error fetching games for {target_date}: {e}")
+            continue
+    
+    total_added = 0
+    
+    # First, sync older games WITH caching (skip already synced)
+    if older_game_ids:
+        progress(f"Processing {len(older_game_ids)} older games (using cache)...")
+        total_added += sync_player_stats_from_games(
+            older_game_ids,
+            league=league,
+            progress_cb=progress,
+            skip_cached=True,  # Use cache for older games
+        )
+    
+    # Then, sync recent games WITHOUT caching (always re-fetch)
+    if recent_game_ids:
+        progress(f"Processing {len(recent_game_ids)} recent games (last 3 days, no cache)...")
+        total_added += sync_player_stats_from_games(
+            recent_game_ids,
+            league=league,
+            progress_cb=progress,
+            skip_cached=False,  # Always fetch recent games
+        )
+    
+    progress(f"Season sync complete: {total_added} total stats added")
+    return total_added
 
 
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
