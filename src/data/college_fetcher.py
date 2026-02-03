@@ -21,6 +21,30 @@ WOMENS_COLLEGE = "womens-college-basketball"
 DEFAULT_LEAGUE = MENS_COLLEGE
 
 
+def _utc_to_pacific(dt) -> str:
+    """Convert datetime to Pacific time string (PST/PDT)."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        # Fallback for Python < 3.9
+        try:
+            from pytz import timezone
+            pacific = timezone("America/Los_Angeles")
+            if dt.tzinfo is None:
+                from datetime import timezone as tz
+                dt = dt.replace(tzinfo=tz.utc)
+            return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+        except ImportError:
+            # No timezone library available, return as-is
+            return dt.strftime("%I:%M %p").lstrip("0")
+    
+    pacific = ZoneInfo("America/Los_Angeles")
+    if dt.tzinfo is None:
+        from datetime import timezone
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+
+
 def get_current_season() -> str:
     """
     Determine the current college basketball season string (e.g., '2025-26').
@@ -383,8 +407,8 @@ def fetch_schedule(
                 try:
                     from datetime import datetime
                     dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
-                    # Convert to local time display (Eastern is typical for college)
-                    game_time = dt.strftime("%I:%M %p").lstrip("0")
+                    # Convert to Pacific time (PST/PDT)
+                    game_time = _utc_to_pacific(dt)
                 except (ValueError, TypeError):
                     game_time = ""
             
