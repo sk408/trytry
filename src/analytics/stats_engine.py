@@ -322,10 +322,25 @@ def player_splits(
     if df.empty:
         return {"points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0}
 
+    # Store original df for fallback
+    original_df = df.copy()
+    
+    # Apply filters
     if opponent_team_id is not None:
-        df = df[df["opponent_team_id"] == opponent_team_id]
+        filtered = df[df["opponent_team_id"] == opponent_team_id]
+        # Only use filtered if we have data, otherwise keep original
+        if not filtered.empty:
+            df = filtered
+    
     if is_home is not None:
-        df = df[df["is_home"] == int(is_home)]
+        filtered = df[df["is_home"] == int(is_home)]
+        # Only use filtered if we have data, otherwise fall back
+        if not filtered.empty:
+            df = filtered
+        elif not original_df.empty:
+            # Fall back to recent games if no home/away split data
+            df = original_df
+    
     if recent_games:
         df = df.head(recent_games)
 

@@ -300,12 +300,28 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
 
     box = BoxScore()
     
+    # First, determine which team is home/away from the header
+    header = data.get("header", {})
+    comp = header.get("competitions", [{}])[0]
+    home_team_abbr = None
+    away_team_abbr = None
+    for c in comp.get("competitors", []):
+        team = c.get("team", {})
+        abbr = team.get("abbreviation", "")
+        if c.get("homeAway") == "home":
+            home_team_abbr = abbr
+        else:
+            away_team_abbr = abbr
+    
     boxscore_data = data.get("boxscore", {})
     players_data = boxscore_data.get("players", [])
     
     for team_data in players_data:
         team_info = team_data.get("team", {})
-        home_away = team_info.get("homeAway", "")
+        team_abbr = team_info.get("abbreviation", "")
+        
+        # Determine home/away by matching abbreviation
+        is_home = (team_abbr == home_team_abbr)
         
         stats_list = team_data.get("statistics", [])
         if not stats_list:
@@ -347,7 +363,7 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
             if i < len(totals):
                 totals_dict[label.lower()] = totals[i]
         
-        if home_away == "home":
+        if is_home:
             box.home_players = players
             box.home_totals = totals_dict
         else:
