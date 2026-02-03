@@ -39,6 +39,7 @@ class PlayerStats:
     # Shot attempts per game (for volume analysis)
     fg3_rate: float = 0.0  # 3PA / FGA (how often they shoot 3s)
     ft_rate: float = 0.0   # FTA / FGA (how often they get to the line)
+    fta_pg: float = 0.0    # free throw attempts per game
     # Ratios
     ast_to_ratio: float = 0.0  # assist-to-turnover ratio
     # Impact
@@ -146,6 +147,9 @@ def get_player_comprehensive_stats(
     fg3_rate = (total_fg3_attempted / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
     ft_rate = (total_ft_attempted / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
     
+    # Free throw attempts per game (for injury impact calculation)
+    fta_pg = total_ft_attempted / games_played if games_played > 0 else 0.0
+    
     # Assist-to-turnover ratio
     total_assists = df["assists"].sum()
     total_turnovers = df["turnovers"].sum() if "turnovers" in df.columns else 0
@@ -181,7 +185,7 @@ def get_player_comprehensive_stats(
         spg=spg, bpg=bpg, tpg=tpg,
         fg_pct=fg_pct, fg3_pct=fg3_pct, ft_pct=ft_pct,
         ts_pct=ts_pct, efg_pct=efg_pct,
-        fg3_rate=fg3_rate, ft_rate=ft_rate,
+        fg3_rate=fg3_rate, ft_rate=ft_rate, fta_pg=fta_pg,
         ast_to_ratio=ast_to_ratio,
         plus_minus_avg=plus_minus_avg,
     )
@@ -285,6 +289,62 @@ def get_team_matchup_stats(
     
     # High-scoring injured players (15+ PPG) create usage boost for remaining scorers
     high_scorer_injured_ppg = sum(p.ppg for p in injured if p.ppg >= 15)
+    
+    # ============ FT EFFICIENCY LOSS CALCULATION ============
+    # When a high-FT% shooter is injured, their replacement may be worse at FTs
+    # This matters especially in late-game foul situations
+    ft_efficiency_penalty = 0.0
+    
+    for inj_player in injured:
+        # Only consider players with meaningful FT volume (2+ FTA/game)
+        if inj_player.fta_pg < 2.0 or inj_player.ft_pct <= 0:
+            continue
+        
+        pos_group = _get_position_group(inj_player.position)
+        
+        # Find the likely replacement at the same position
+        # Sort active players at this position by minutes (most likely to absorb minutes)
+        position_replacements = sorted(
+            [p for p in active if _get_position_group(p.position) == pos_group],
+            key=lambda p: p.mpg,
+            reverse=True
+        )
+        
+        if not position_replacements:
+            # No same-position replacement, look at adjacent positions
+            adjacent = {"G": ["F"], "F": ["G", "C"], "C": ["F"]}
+            for adj_pos in adjacent.get(pos_group, []):
+                adj_players = [p for p in active if _get_position_group(p.position) == adj_pos]
+                if adj_players:
+                    position_replacements = sorted(adj_players, key=lambda p: p.mpg, reverse=True)
+                    break
+        
+        if position_replacements:
+            # Use top 1-2 replacements weighted by their likely minute share
+            replacement_ft_pct = 0.0
+            weight_sum = 0.0
+            
+            for i, repl in enumerate(position_replacements[:2]):
+                # First replacement gets more weight
+                weight = 1.0 if i == 0 else 0.5
+                if repl.ft_pct > 0:
+                    replacement_ft_pct += repl.ft_pct * weight
+                    weight_sum += weight
+            
+            if weight_sum > 0:
+                replacement_ft_pct /= weight_sum
+            else:
+                # Fallback to league average FT% (~78%)
+                replacement_ft_pct = 78.0
+            
+            # Calculate the FT% differential
+            ft_pct_diff = inj_player.ft_pct - replacement_ft_pct
+            
+            # If injured player was better at FTs, we lose expected points
+            # Loss = FTA_per_game * (FT%_injured - FT%_replacement) / 100
+            if ft_pct_diff > 0:
+                expected_ft_loss = inj_player.fta_pg * (ft_pct_diff / 100.0)
+                ft_efficiency_penalty += expected_ft_loss
     
     # Group active players by position
     active_by_pos: Dict[str, List[PlayerStats]] = {"G": [], "F": [], "C": []}
@@ -393,6 +453,12 @@ def get_team_matchup_stats(
         total_spg *= scale_factor
         total_bpg *= scale_factor
         total_tpg *= scale_factor
+    
+    # Apply FT efficiency penalty from injuries
+    # This accounts for losing good FT shooters and replacing with worse ones
+    if ft_efficiency_penalty > 0:
+        projected -= ft_efficiency_penalty
+        total_ppg -= ft_efficiency_penalty
     
     # Calculate team-level efficiency metrics (weighted by minutes)
     team_ts_pct = (weighted_ts_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
