@@ -325,26 +325,44 @@ def fetch_schedule(
                     game_time = ""
                     if game_time_str:
                         try:
-                            from datetime import datetime
+                            from datetime import datetime, timedelta, timezone as tz
                             if "T" in game_time_str:
                                 # Parse as Eastern time and convert to Pacific
                                 dt_str = game_time_str.replace("Z", "")
                                 dt = datetime.fromisoformat(dt_str)
-                                # Mark as Eastern time, then convert to Pacific
+                                
+                                # Try zoneinfo first
                                 try:
                                     from zoneinfo import ZoneInfo
                                     eastern = ZoneInfo("America/New_York")
                                     pacific = ZoneInfo("America/Los_Angeles")
-                                except ImportError:
-                                    from pytz import timezone
-                                    eastern = timezone("America/New_York")
-                                    pacific = timezone("America/Los_Angeles")
-                                dt_eastern = dt.replace(tzinfo=eastern)
-                                dt_pacific = dt_eastern.astimezone(pacific)
-                                game_time = dt_pacific.strftime("%I:%M %p %Z").lstrip("0")
+                                    dt_eastern = dt.replace(tzinfo=eastern)
+                                    dt_pacific = dt_eastern.astimezone(pacific)
+                                    game_time = dt_pacific.strftime("%I:%M %p %Z").lstrip("0")
+                                except (ImportError, KeyError):
+                                    # Try pytz as fallback
+                                    try:
+                                        from pytz import timezone
+                                        eastern = timezone("America/New_York")
+                                        pacific = timezone("America/Los_Angeles")
+                                        dt_eastern = eastern.localize(dt)
+                                        dt_pacific = dt_eastern.astimezone(pacific)
+                                        game_time = dt_pacific.strftime("%I:%M %p %Z").lstrip("0")
+                                    except ImportError:
+                                        # Manual fallback: Eastern is UTC-5 (EST) or UTC-4 (EDT)
+                                        # Pacific is UTC-8 (PST) or UTC-7 (PDT)
+                                        # Difference is always 3 hours
+                                        month = dt.month
+                                        if 3 <= month <= 11:
+                                            tz_name = "PDT"
+                                        else:
+                                            tz_name = "PST"
+                                        # Eastern to Pacific = subtract 3 hours
+                                        dt_pacific = dt - timedelta(hours=3)
+                                        game_time = dt_pacific.strftime(f"%I:%M %p {tz_name}").lstrip("0")
                             else:
                                 game_time = game_time_str
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, Exception):
                             game_time = ""
                     
                     # Get team names
