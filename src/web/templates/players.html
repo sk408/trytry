@@ -3,6 +3,72 @@
 <h1 class="page-title">Players</h1>
 
 <div class="card">
+  <h2>Add Manual Injury</h2>
+  <p class="text-muted">Add injuries not yet reported by official sources.</p>
+  
+  <form action="/players/injury/add" method="post" class="injury-form">
+    <div class="form-row">
+      <input type="text" name="player" placeholder="Player Name" required>
+      <input type="text" name="team" placeholder="Team Name" required>
+    </div>
+    <div class="form-row">
+      <input type="text" name="position" placeholder="Position (G/F/C)">
+      <select name="status">
+        <option value="Out">Out</option>
+        <option value="Doubtful">Doubtful</option>
+        <option value="Questionable">Questionable</option>
+        <option value="Probable">Probable</option>
+        <option value="Day-to-Day">Day-to-Day</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <input type="text" name="injury" placeholder="Injury (e.g., Ankle, Knee)" style="flex: 2;">
+      <button type="submit" class="btn btn-primary">Add Injury</button>
+    </div>
+  </form>
+</div>
+
+{% if manual_injuries %}
+<div class="card">
+  <h2>Manual Injuries</h2>
+  <p class="text-muted">{{ manual_injuries|length }} manually added</p>
+  
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Team</th>
+          <th>Pos</th>
+          <th>Status</th>
+          <th>Injury</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inj in manual_injuries %}
+        <tr>
+          <td>{{ inj.player }}</td>
+          <td>{{ inj.team }}</td>
+          <td>{{ inj.position or '-' }}</td>
+          <td class="text-danger">{{ inj.status }}</td>
+          <td>{{ inj.injury or '-' }}</td>
+          <td>
+            <form action="/players/injury/remove" method="post" style="display: inline;">
+              <input type="hidden" name="player" value="{{ inj.player }}">
+              <input type="hidden" name="team" value="{{ inj.team }}">
+              <button type="submit" class="btn btn-small btn-danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
   <h2>Injured Players</h2>
   <div class="status">{{ injured_count }} injured</div>
   

@@ -226,3 +226,156 @@ def fetch_injuries(
     
     log("All injury sources failed - injuries not updated")
     return []
+
+
+# ============================================================================
+# Manual Injury Management
+# ============================================================================
+
+import json
+import os
+from pathlib import Path
+
+# Store manual injuries in a JSON file in the data directory
+def _get_manual_injuries_path() -> Path:
+    """Get path to manual injuries JSON file."""
+    # Look for data directory relative to this file
+    src_dir = Path(__file__).parent.parent.parent
+    data_dir = src_dir / "data"
+    data_dir.mkdir(exist_ok=True)
+    return data_dir / "manual_injuries.json"
+
+
+def load_manual_injuries() -> List[Dict[str, str]]:
+    """Load manually added injuries from JSON file."""
+    path = _get_manual_injuries_path()
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+            return data.get("injuries", [])
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def save_manual_injury(
+    player: str,
+    team: str,
+    status: str = "Out",
+    injury: str = "",
+    position: str = "",
+) -> bool:
+    """
+    Add a manual injury entry.
+    
+    Args:
+        player: Player name
+        team: Team name
+        status: Injury status (Out, Doubtful, Questionable, Probable)
+        injury: Injury description
+        position: Player position
+    
+    Returns:
+        True if saved successfully
+    """
+    path = _get_manual_injuries_path()
+    
+    # Load existing
+    injuries = load_manual_injuries()
+    
+    # Check if player already exists, update if so
+    updated = False
+    for inj in injuries:
+        if inj.get("player", "").lower() == player.lower() and \
+           inj.get("team", "").lower() == team.lower():
+            inj["status"] = status
+            inj["injury"] = injury
+            inj["position"] = position
+            inj["manual"] = True
+            updated = True
+            break
+    
+    if not updated:
+        injuries.append({
+            "player": player,
+            "team": team,
+            "status": status,
+            "injury": injury,
+            "position": position,
+            "update": "Manual entry",
+            "manual": True,
+        })
+    
+    try:
+        with open(path, "w") as f:
+            json.dump({"injuries": injuries}, f, indent=2)
+        return True
+    except IOError:
+        return False
+
+
+def remove_manual_injury(player: str, team: str) -> bool:
+    """
+    Remove a manual injury entry.
+    
+    Args:
+        player: Player name
+        team: Team name
+    
+    Returns:
+        True if removed successfully
+    """
+    path = _get_manual_injuries_path()
+    injuries = load_manual_injuries()
+    
+    original_len = len(injuries)
+    injuries = [
+        inj for inj in injuries
+        if not (inj.get("player", "").lower() == player.lower() and 
+                inj.get("team", "").lower() == team.lower())
+    ]
+    
+    if len(injuries) == original_len:
+        return False  # Not found
+    
+    try:
+        with open(path, "w") as f:
+            json.dump({"injuries": injuries}, f, indent=2)
+        return True
+    except IOError:
+        return False
+
+
+def get_all_injuries(
+    timeout: int = 15,
+    progress_cb: Optional[Callable[[str], None]] = None
+) -> List[Dict[str, str]]:
+    """
+    Get all injuries: scraped + manual entries.
+    Manual entries take precedence for same player/team.
+    """
+    log = progress_cb or (lambda _: None)
+    
+    # Get scraped injuries
+    scraped = fetch_injuries(timeout=timeout, progress_cb=log)
+    
+    # Get manual injuries
+    manual = load_manual_injuries()
+    
+    if manual:
+        log(f"Adding {len(manual)} manual injury entries")
+    
+    # Combine: manual takes precedence
+    manual_keys = {
+        (inj.get("player", "").lower(), inj.get("team", "").lower())
+        for inj in manual
+    }
+    
+    # Filter out scraped entries that have manual overrides
+    filtered_scraped = [
+        inj for inj in scraped
+        if (inj.get("player", "").lower(), inj.get("team", "").lower()) not in manual_keys
+    ]
+    
+    return manual + filtered_scraped

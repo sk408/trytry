@@ -302,6 +302,33 @@ select:focus, input:focus {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-bottom: 12px;
+}
+
+@media (min-width: 480px) {
+  .form-row {
+    flex-direction: row;
+  }
+  .form-row > * {
+    flex: 1;
+  }
+}
+
+.injury-form {
+  max-width: 600px;
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+
+.btn-danger {
+  background: var(--danger);
+}
+
+.btn-danger:hover {
+  background: #dc2626;
 }
 
 .checkbox-group {

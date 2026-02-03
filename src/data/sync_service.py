@@ -6,7 +6,7 @@ from typing import Callable, Iterable, List, Optional, Set
 
 import pandas as pd
 
-from src.data.injury_scraper import fetch_injuries
+from src.data.injury_scraper import get_all_injuries
 from src.data.live_scores import fetch_live_games
 from src.data.nba_fetcher import fetch_player_game_logs, fetch_players, fetch_schedule, fetch_teams, get_current_season
 from src.database import migrations
@@ -247,8 +247,8 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
     """
     progress = progress_cb or (lambda _: None)
     
-    # Fetch from multiple sources
-    data = fetch_injuries(progress_cb=progress)
+    # Fetch from multiple sources + manual entries
+    data = get_all_injuries(progress_cb=progress)
     if not data:
         progress("No injury data retrieved")
         return 0

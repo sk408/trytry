@@ -9,26 +9,42 @@ import pandas as pd
 
 def _utc_to_pacific(dt) -> str:
     """Convert datetime to Pacific time string (PST/PDT)."""
+    from datetime import timezone as tz, timedelta
+    
+    # Ensure dt has timezone
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz.utc)
+    
+    # Try zoneinfo first (Python 3.9+)
     try:
         from zoneinfo import ZoneInfo
-    except ImportError:
-        # Fallback for Python < 3.9
-        try:
-            from pytz import timezone
-            pacific = timezone("America/Los_Angeles")
-            if dt.tzinfo is None:
-                from datetime import timezone as tz
-                dt = dt.replace(tzinfo=tz.utc)
-            return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
-        except ImportError:
-            # No timezone library available, return as-is
-            return dt.strftime("%I:%M %p").lstrip("0")
+        pacific = ZoneInfo("America/Los_Angeles")
+        return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+    except (ImportError, KeyError):
+        pass  # zoneinfo not available or tzdata not installed
     
-    pacific = ZoneInfo("America/Los_Angeles")
-    if dt.tzinfo is None:
-        from datetime import timezone
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+    # Try pytz as fallback
+    try:
+        from pytz import timezone
+        pacific = timezone("America/Los_Angeles")
+        return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+    except ImportError:
+        pass  # pytz not installed
+    
+    # Manual fallback: PST is UTC-8, PDT is UTC-7
+    # Use simple heuristic: PDT from March to November
+    utc_dt = dt.astimezone(tz.utc)
+    month = utc_dt.month
+    if 3 <= month <= 11:
+        # Approximate PDT (not exact DST boundaries but close enough)
+        offset = timedelta(hours=-7)
+        tz_name = "PDT"
+    else:
+        offset = timedelta(hours=-8)
+        tz_name = "PST"
+    
+    pacific_dt = utc_dt + offset
+    return pacific_dt.strftime(f"%I:%M %p {tz_name}").lstrip("0")
 
 
 def get_current_season() -> str:

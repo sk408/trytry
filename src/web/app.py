@@ -280,6 +280,11 @@ async def players(request: Request) -> HTMLResponse:
     injured = _df_to_records(df_inj)
     for row in injured:
         row["position"] = get_position_display(str(row.get("position") or ""))
+    
+    # Load manual injuries
+    from src.data.injury_scraper import load_manual_injuries
+    manual_injuries = load_manual_injuries()
+    
     return templates.TemplateResponse(
         "players.html",
         {
@@ -287,8 +292,53 @@ async def players(request: Request) -> HTMLResponse:
             "players": all_players,
             "injured": injured,
             "injured_count": len(injured),
+            "manual_injuries": manual_injuries,
         },
     )
+
+
+@app.post("/players/injury/add", response_class=HTMLResponse)
+async def add_manual_injury(
+    request: Request,
+    player: str = Form(...),
+    team: str = Form(...),
+    status: str = Form("Out"),
+    injury: str = Form(""),
+    position: str = Form(""),
+) -> HTMLResponse:
+    """Add a manual injury entry."""
+    from src.data.injury_scraper import save_manual_injury
+    
+    success = save_manual_injury(
+        player=player.strip(),
+        team=team.strip(),
+        status=status,
+        injury=injury.strip(),
+        position=position.strip(),
+    )
+    
+    if success:
+        # Trigger injury sync to update database
+        await asyncio.to_thread(sync_injuries)
+    
+    return RedirectResponse(url="/players", status_code=303)
+
+
+@app.post("/players/injury/remove", response_class=HTMLResponse)
+async def remove_manual_injury_endpoint(
+    request: Request,
+    player: str = Form(...),
+    team: str = Form(...),
+) -> HTMLResponse:
+    """Remove a manual injury entry."""
+    from src.data.injury_scraper import remove_manual_injury
+    
+    remove_manual_injury(player=player.strip(), team=team.strip())
+    
+    # Trigger injury sync to update database
+    await asyncio.to_thread(sync_injuries)
+    
+    return RedirectResponse(url="/players", status_code=303)
 
 
 @app.get("/schedule", response_class=HTMLResponse)
