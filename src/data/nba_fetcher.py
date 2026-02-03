@@ -7,6 +7,30 @@ from typing import Callable, Optional, List
 import pandas as pd
 
 
+def _utc_to_pacific(dt) -> str:
+    """Convert datetime to Pacific time string (PST/PDT)."""
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        # Fallback for Python < 3.9
+        try:
+            from pytz import timezone
+            pacific = timezone("America/Los_Angeles")
+            if dt.tzinfo is None:
+                from datetime import timezone as tz
+                dt = dt.replace(tzinfo=tz.utc)
+            return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+        except ImportError:
+            # No timezone library available, return as-is
+            return dt.strftime("%I:%M %p").lstrip("0")
+    
+    pacific = ZoneInfo("America/Los_Angeles")
+    if dt.tzinfo is None:
+        from datetime import timezone
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(pacific).strftime("%I:%M %p %Z").lstrip("0")
+
+
 def get_current_season() -> str:
     """
     Determine the current NBA season string (e.g., '2025-26').
@@ -280,16 +304,28 @@ def fetch_schedule(
                 away_id = tricode_to_id.get(away_tricode)
 
                 if home_id and away_id:
-                    # Get game time
-                    game_time_str = g.get("gameTimeEst", "") or g.get("gameDateTimeEst", "")
+                    # Get game time - NBA CDN uses Eastern time ("Est" suffix)
+                    game_time_str = g.get("gameDateTimeEst", "") or g.get("gameTimeEst", "")
                     game_time = ""
                     if game_time_str:
                         try:
-                            # Time is usually in format "7:30 pm ET" or embedded in datetime
+                            from datetime import datetime
                             if "T" in game_time_str:
-                                from datetime import datetime
-                                dt = datetime.fromisoformat(game_time_str.replace("Z", "+00:00"))
-                                game_time = dt.strftime("%I:%M %p").lstrip("0")
+                                # Parse as Eastern time and convert to Pacific
+                                dt_str = game_time_str.replace("Z", "")
+                                dt = datetime.fromisoformat(dt_str)
+                                # Mark as Eastern time, then convert to Pacific
+                                try:
+                                    from zoneinfo import ZoneInfo
+                                    eastern = ZoneInfo("America/New_York")
+                                    pacific = ZoneInfo("America/Los_Angeles")
+                                except ImportError:
+                                    from pytz import timezone
+                                    eastern = timezone("America/New_York")
+                                    pacific = timezone("America/Los_Angeles")
+                                dt_eastern = dt.replace(tzinfo=eastern)
+                                dt_pacific = dt_eastern.astimezone(pacific)
+                                game_time = dt_pacific.strftime("%I:%M %p %Z").lstrip("0")
                             else:
                                 game_time = game_time_str
                         except (ValueError, TypeError):
