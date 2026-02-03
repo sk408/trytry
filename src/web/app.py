@@ -354,6 +354,59 @@ async def remove_manual_injury_endpoint(
     return RedirectResponse(url="/players", status_code=303)
 
 
+def _sync_teams_from_schedule(df: pd.DataFrame) -> None:
+    """Update team names in database from schedule data."""
+    if df.empty:
+        return
+    
+    with get_conn() as conn:
+        for _, r in df.iterrows():
+            home_id = r.get("home_team_id")
+            away_id = r.get("away_team_id")
+            home_name = r.get("home_name") or ""
+            away_name = r.get("away_name") or ""
+            home_abbr = r.get("home_abbr") or ""
+            away_abbr = r.get("away_abbr") or ""
+            
+            # Update home team if we have real name (not placeholder)
+            if home_id and home_name and not home_name.startswith("Team "):
+                conn.execute(
+                    """
+                    INSERT INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, '')
+                    ON CONFLICT(team_id) DO UPDATE SET
+                        name = excluded.name,
+                        abbreviation = CASE 
+                            WHEN teams.abbreviation LIKE 'T%' AND length(teams.abbreviation) > 4 
+                            THEN excluded.abbreviation 
+                            ELSE teams.abbreviation 
+                        END
+                    WHERE teams.name LIKE 'Team %' OR teams.name = ''
+                    """,
+                    (int(home_id), home_name, home_abbr or f"T{home_id}"),
+                )
+            
+            # Update away team if we have real name
+            if away_id and away_name and not away_name.startswith("Team "):
+                conn.execute(
+                    """
+                    INSERT INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, '')
+                    ON CONFLICT(team_id) DO UPDATE SET
+                        name = excluded.name,
+                        abbreviation = CASE 
+                            WHEN teams.abbreviation LIKE 'T%' AND length(teams.abbreviation) > 4 
+                            THEN excluded.abbreviation 
+                            ELSE teams.abbreviation 
+                        END
+                    WHERE teams.name LIKE 'Team %' OR teams.name = ''
+                    """,
+                    (int(away_id), away_name, away_abbr or f"T{away_id}"),
+                )
+        
+        conn.commit()
+
+
 @app.get("/schedule", response_class=HTMLResponse)
 async def schedule(request: Request) -> HTMLResponse:
     from datetime import date as date_type
@@ -369,6 +422,9 @@ async def schedule(request: Request) -> HTMLResponse:
         rows: List[dict] = []
     else:
         df = df.copy()
+        
+        # Sync team names from schedule data to database
+        await asyncio.to_thread(_sync_teams_from_schedule, df)
         
         # Filter to today and future games only
         today = date_type.today()
