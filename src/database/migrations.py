@@ -29,10 +29,23 @@ CREATE TABLE IF NOT EXISTS player_stats (
     opponent_team_id INTEGER NOT NULL,
     is_home INTEGER NOT NULL,
     game_date DATE NOT NULL,
+    game_id TEXT,
+    -- Basic stats
     points REAL NOT NULL,
     rebounds REAL NOT NULL,
     assists REAL NOT NULL,
     minutes REAL NOT NULL,
+    -- Defensive stats
+    steals REAL DEFAULT 0,
+    blocks REAL DEFAULT 0,
+    turnovers REAL DEFAULT 0,
+    -- Shooting stats (made/attempted)
+    fg_made INTEGER DEFAULT 0,
+    fg_attempted INTEGER DEFAULT 0,
+    fg3_made INTEGER DEFAULT 0,
+    fg3_attempted INTEGER DEFAULT 0,
+    ft_made INTEGER DEFAULT 0,
+    ft_attempted INTEGER DEFAULT 0,
     UNIQUE(player_id, opponent_team_id, game_date),
     FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
     FOREIGN KEY (opponent_team_id) REFERENCES teams(team_id) ON DELETE CASCADE
@@ -146,7 +159,30 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         cur = conn.execute(f"PRAGMA table_info({table});")
         return any(row[1] == column for row in cur.fetchall())
 
+    # Player columns
     if not has_column("players", "is_injured"):
         conn.execute("ALTER TABLE players ADD COLUMN is_injured INTEGER NOT NULL DEFAULT 0;")
     if not has_column("players", "injury_note"):
         conn.execute("ALTER TABLE players ADD COLUMN injury_note TEXT;")
+    
+    # Player stats columns (extended stats)
+    if not has_column("player_stats", "game_id"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN game_id TEXT;")
+    if not has_column("player_stats", "steals"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN steals REAL DEFAULT 0;")
+    if not has_column("player_stats", "blocks"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN blocks REAL DEFAULT 0;")
+    if not has_column("player_stats", "turnovers"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN turnovers REAL DEFAULT 0;")
+    if not has_column("player_stats", "fg_made"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN fg_made INTEGER DEFAULT 0;")
+    if not has_column("player_stats", "fg_attempted"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN fg_attempted INTEGER DEFAULT 0;")
+    if not has_column("player_stats", "fg3_made"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN fg3_made INTEGER DEFAULT 0;")
+    if not has_column("player_stats", "fg3_attempted"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN fg3_attempted INTEGER DEFAULT 0;")
+    if not has_column("player_stats", "ft_made"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN ft_made INTEGER DEFAULT 0;")
+    if not has_column("player_stats", "ft_attempted"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN ft_attempted INTEGER DEFAULT 0;")

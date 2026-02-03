@@ -43,15 +43,39 @@ class PlayerStat:
     opponent_team_id: int
     is_home: bool
     game_date: date
+    # Basic stats
     points: float
     rebounds: float
     assists: float
     minutes: float
-    # Additional stats for college
+    # Defensive stats
     steals: float = 0.0
     blocks: float = 0.0
     turnovers: float = 0.0
+    # Shooting stats
+    fg_made: int = 0
+    fg_attempted: int = 0
+    fg3_made: int = 0
+    fg3_attempted: int = 0
+    ft_made: int = 0
+    ft_attempted: int = 0
+    # Metadata
     game_id: Optional[str] = None
+    
+    @property
+    def fg_pct(self) -> float:
+        """Field goal percentage."""
+        return (self.fg_made / self.fg_attempted * 100) if self.fg_attempted > 0 else 0.0
+    
+    @property
+    def fg3_pct(self) -> float:
+        """Three-point percentage."""
+        return (self.fg3_made / self.fg3_attempted * 100) if self.fg3_attempted > 0 else 0.0
+    
+    @property
+    def ft_pct(self) -> float:
+        """Free throw percentage."""
+        return (self.ft_made / self.ft_attempted * 100) if self.ft_attempted > 0 else 0.0
 
 
 @dataclass

@@ -240,22 +240,56 @@ def sync_player_stats_from_games(
                 
                 for _, row in stats_df.iterrows():
                     try:
+                        # Parse shooting stats (format: "5-10" -> made=5, attempted=10)
+                        def parse_shooting(val):
+                            if not val or val == "0-0":
+                                return 0, 0
+                            try:
+                                parts = str(val).split("-")
+                                return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+                            except (ValueError, IndexError):
+                                return 0, 0
+                        
+                        fg_made, fg_attempted = parse_shooting(row.get("fg", "0-0"))
+                        fg3_made, fg3_attempted = parse_shooting(row.get("fg3", "0-0"))
+                        ft_made, ft_attempted = parse_shooting(row.get("ft", "0-0"))
+                        
                         conn.execute(
                             """
                             INSERT INTO player_stats
-                                (player_id, opponent_team_id, is_home, game_date, points, rebounds, assists, minutes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(player_id, opponent_team_id, game_date) DO NOTHING
+                                (player_id, opponent_team_id, is_home, game_date, game_id,
+                                 points, rebounds, assists, minutes,
+                                 steals, blocks, turnovers,
+                                 fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(player_id, opponent_team_id, game_date) DO UPDATE SET
+                                game_id = excluded.game_id,
+                                steals = excluded.steals,
+                                blocks = excluded.blocks,
+                                turnovers = excluded.turnovers,
+                                fg_made = excluded.fg_made,
+                                fg_attempted = excluded.fg_attempted,
+                                fg3_made = excluded.fg3_made,
+                                fg3_attempted = excluded.fg3_attempted,
+                                ft_made = excluded.ft_made,
+                                ft_attempted = excluded.ft_attempted
                             """,
                             (
                                 int(row["player_id"]),
                                 int(row["opponent_team_id"]),
                                 int(row["is_home"]),
                                 row["game_date"],
+                                row.get("game_id", game_id),
                                 float(row["points"]),
                                 float(row["rebounds"]),
                                 float(row["assists"]),
                                 float(row["minutes"]),
+                                float(row.get("steals", 0) or 0),
+                                float(row.get("blocks", 0) or 0),
+                                float(row.get("turnovers", 0) or 0),
+                                fg_made, fg_attempted,
+                                fg3_made, fg3_attempted,
+                                ft_made, ft_attempted,
                             ),
                         )
                         game_stats_added += 1
