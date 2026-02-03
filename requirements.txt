@@ -7,4 +7,5 @@ requests==2.32.5
 beautifulsoup4==4.14.3
 linedrive
 websocket-client
+tzdata  # Timezone data for Windows
 CBBpy  # College basketball data (play-by-play, boxscores)
