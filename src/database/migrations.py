@@ -112,6 +112,17 @@ CREATE INDEX IF NOT EXISTS idx_injury_history_team_date
 
 CREATE INDEX IF NOT EXISTS idx_injury_history_player
     ON injury_history(player_id, game_date);
+
+-- Track when player logs were last synced (for caching)
+CREATE TABLE IF NOT EXISTS player_sync_cache (
+    player_id INTEGER PRIMARY KEY,
+    last_synced_at TEXT NOT NULL,
+    games_synced INTEGER DEFAULT 0,
+    latest_game_date DATE
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_sync_cache_date
+    ON player_sync_cache(last_synced_at);
 """
 
 
@@ -126,10 +137,13 @@ def clear_all(conn: sqlite3.Connection) -> None:
     """Dangerous: wipe all tables; useful for full refreshes."""
     conn.executescript(
         """
+        DELETE FROM player_sync_cache;
+        DELETE FROM injury_history;
         DELETE FROM predictions;
         DELETE FROM player_stats;
         DELETE FROM players;
         DELETE FROM teams;
+        DELETE FROM live_games;
         """
     )
     conn.commit()

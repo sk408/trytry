@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Callable, Iterable, List, Optional
+from datetime import date, datetime, timedelta
+from typing import Callable, Iterable, List, Optional, Set
 
 import pandas as pd
 
@@ -11,6 +12,43 @@ from src.data.nba_fetcher import fetch_player_game_logs, fetch_players, fetch_sc
 from src.database import migrations
 from src.database.db import get_conn
 from src.analytics.injury_history import build_injury_history
+
+
+# ============ CACHING HELPERS ============
+
+def _get_cached_players(conn, max_age_hours: int = 24) -> Set[int]:
+    """Get player IDs that were synced within the last max_age_hours."""
+    cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+    rows = conn.execute(
+        "SELECT player_id FROM player_sync_cache WHERE last_synced_at > ?",
+        (cutoff,)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def _get_players_with_recent_games(conn, days: int = 3) -> Set[int]:
+    """Get player IDs who have games in the last N days (need fresh data)."""
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT player_id FROM player_stats 
+        WHERE game_date >= ?
+        """,
+        (cutoff,)
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def _update_player_cache(conn, player_id: int, games_count: int, latest_date: Optional[date]) -> None:
+    """Update the sync cache for a player."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO player_sync_cache 
+            (player_id, last_synced_at, games_synced, latest_game_date)
+        VALUES (?, ?, ?, ?)
+        """,
+        (player_id, datetime.now().isoformat(), games_count, latest_date)
+    )
 
 
 def sync_reference_data(
@@ -63,9 +101,17 @@ def sync_player_logs(
     progress_cb: Optional[Callable[[str], None]] = None,
     sleep_between: float = 0.6,
     max_retries: int = 2,
+    skip_cached: bool = True,
+    cache_max_age_hours: int = 24,
+    force_recent_days: int = 3,
 ) -> None:
     """
     Sync all player game logs with comprehensive stats.
+    
+    Caching behavior:
+    - Players synced within cache_max_age_hours are skipped (unless they have recent games)
+    - Players with games in the last force_recent_days are always re-fetched
+    - Set skip_cached=False to force full re-sync of all players
     
     Now stores extended stats: steals, blocks, turnovers, shooting stats,
     rebound breakdown, and plus/minus.
@@ -74,11 +120,33 @@ def sync_player_logs(
     progress = progress_cb or (lambda _msg: None)
     player_ids = list(player_ids)
     total = len(player_ids)
+    
     with get_conn() as conn:
         abbr_to_id = _team_abbr_lookup(conn)
+        
+        # Determine which players to skip
+        players_to_skip: Set[int] = set()
+        if skip_cached:
+            cached_players = _get_cached_players(conn, max_age_hours=cache_max_age_hours)
+            recent_game_players = _get_players_with_recent_games(conn, days=force_recent_days)
+            # Skip cached players UNLESS they have recent games
+            players_to_skip = cached_players - recent_game_players
+            
+            if players_to_skip:
+                progress(f"Skipping {len(players_to_skip)} cached players (no recent games)")
+        
+        players_synced = 0
+        players_skipped = 0
+        
         for idx, player_id in enumerate(player_ids, start=1):
-            if idx == 1 or idx % 25 == 0 or idx == total:
-                progress(f"Syncing game logs {idx}/{total}...")
+            # Skip if cached
+            if player_id in players_to_skip:
+                players_skipped += 1
+                continue
+            
+            players_synced += 1
+            if players_synced == 1 or players_synced % 25 == 0:
+                progress(f"Syncing game logs {players_synced}/{total - len(players_to_skip)}...")
 
             # Fetch with retries
             logs = None
@@ -158,9 +226,18 @@ def sync_player_logs(
                 """,
                 payload,
             )
+            
+            # Update the sync cache for this player
+            latest_game = max((row[3] for row in payload), default=None) if payload else None
+            _update_player_cache(conn, player_id, len(payload), latest_game)
+            
             # Rate limit between successful fetches
             time.sleep(sleep_between)
+        
         conn.commit()
+        
+        if skip_cached:
+            progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
 
 
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
