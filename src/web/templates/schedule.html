@@ -4,7 +4,7 @@
 
 <div class="card">
   <h2>Upcoming Games</h2>
-  <p class="text-muted">Season: {{ season }} | Today's games first | Tap to analyze</p>
+  <p class="text-muted">Season: {{ season }} | Tap game to analyze matchup</p>
   
   {% if error %}
   <div class="error-box">{{ error }}</div>
@@ -16,18 +16,18 @@
       <thead>
         <tr>
           <th>Date</th>
-          <th>Team</th>
-          <th>Opponent</th>
-          <th>Home?</th>
+          <th>Time</th>
+          <th>Matchup</th>
+          <th>Arena</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr onclick="window.location='/matchups?home_team_id={{ r.home_team_id }}&away_team_id={{ r.away_team_id }}'" style="cursor: pointer;">
           <td>{{ r.game_date }}</td>
-          <td>{{ r.team }}</td>
-          <td>{{ r.opponent }}</td>
-          <td>{{ 'Yes' if r.is_home else 'No' }}</td>
+          <td>{{ r.game_time or 'TBD' }}</td>
+          <td><strong>{{ r.away_team }}</strong> @ <strong>{{ r.home_team }}</strong></td>
+          <td class="text-muted">{{ r.venue }}</td>
         </tr>
         {% endfor %}
       </tbody>

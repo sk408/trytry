@@ -280,32 +280,89 @@ def fetch_schedule(
                 away_id = tricode_to_id.get(away_tricode)
 
                 if home_id and away_id:
+                    # Get game time
+                    game_time_str = g.get("gameTimeEst", "") or g.get("gameDateTimeEst", "")
+                    game_time = ""
+                    if game_time_str:
+                        try:
+                            # Time is usually in format "7:30 pm ET" or embedded in datetime
+                            if "T" in game_time_str:
+                                from datetime import datetime
+                                dt = datetime.fromisoformat(game_time_str.replace("Z", "+00:00"))
+                                game_time = dt.strftime("%I:%M %p").lstrip("0")
+                            else:
+                                game_time = game_time_str
+                        except (ValueError, TypeError):
+                            game_time = ""
+                    
+                    # Get team names
+                    home_name = home_team.get("teamName", "") or home_team.get("teamCity", "")
+                    away_name = away_team.get("teamName", "") or away_team.get("teamCity", "")
+                    
+                    # Single entry per game (not duplicated)
                     future_rows.append({
-                        "team_id": home_id,
+                        "game_id": g.get("gameId", ""),
                         "game_date": game_dt,
-                        "is_home": True,
-                        "opponent_abbr": away_tricode,
+                        "home_team_id": home_id,
+                        "away_team_id": away_id,
+                        "home_abbr": home_tricode,
+                        "away_abbr": away_tricode,
+                        "home_name": f"{home_team.get('teamCity', '')} {home_name}".strip() or home_tricode,
+                        "away_name": f"{away_team.get('teamCity', '')} {away_name}".strip() or away_tricode,
+                        "game_time": game_time,
+                        "arena": g.get("arenaName", ""),
                     })
-                    future_rows.append({
-                        "team_id": away_id,
-                        "game_date": game_dt,
-                        "is_home": False,
-                        "opponent_abbr": home_tricode,
-                    })
-        print(f"[Schedule] Fetched {len(future_rows)//2} future games from NBA CDN")
+        print(f"[Schedule] Fetched {len(future_rows)} future games from NBA CDN")
     except Exception as e:
         print(f"[Schedule] Failed to fetch future games from NBA CDN: {e}")
         # If schedule fetch fails, we still have played games
 
-    df_future = pd.DataFrame(future_rows, columns=["team_id", "game_date", "is_home", "opponent_abbr"])
+    # Convert future games to DataFrame
+    if future_rows:
+        df_future = pd.DataFrame(future_rows)
+    else:
+        df_future = pd.DataFrame(columns=[
+            "game_id", "game_date", "home_team_id", "away_team_id", 
+            "home_abbr", "away_abbr", "home_name", "away_name", "game_time", "arena"
+        ])
+    
+    # For played games, we need to deduplicate and convert to single-game format
+    # Group played games by unique matchup
+    if not df_played.empty:
+        # Get home team entries only (each game appears once from home perspective)
+        df_home = df_played[df_played["is_home"] == True].copy()
+        df_home["home_team_id"] = df_home["team_id"]
+        df_home["home_abbr"] = df_home["team_id"].map(teams_map)
+        df_home["away_abbr"] = df_home["opponent_abbr"]
+        df_home["away_team_id"] = df_home["opponent_abbr"].map(tricode_to_id)
+        df_home["home_name"] = df_home["home_abbr"]  # Use abbr as fallback
+        df_home["away_name"] = df_home["away_abbr"]
+        df_home["game_time"] = ""  # Not available for past games
+        df_home["arena"] = ""
+        df_home["game_id"] = ""
+        
+        df_played_clean = df_home[[
+            "game_id", "game_date", "home_team_id", "away_team_id",
+            "home_abbr", "away_abbr", "home_name", "away_name", "game_time", "arena"
+        ]].dropna(subset=["home_team_id", "away_team_id"])
+    else:
+        df_played_clean = pd.DataFrame(columns=[
+            "game_id", "game_date", "home_team_id", "away_team_id",
+            "home_abbr", "away_abbr", "home_name", "away_name", "game_time", "arena"
+        ])
 
-    # Combine
-    combined = pd.concat([df_played, df_future], ignore_index=True)
-    if team_ids:
-        combined = combined[combined["team_id"].isin(team_ids)]
+    # Combine future and played games
+    combined = pd.concat([df_future, df_played_clean], ignore_index=True)
+    
+    if team_ids and not combined.empty:
+        combined = combined[
+            (combined["home_team_id"].isin(team_ids)) | 
+            (combined["away_team_id"].isin(team_ids))
+        ]
 
-    # Drop duplicates (keep earliest entry)
-    combined = combined.drop_duplicates(subset=["team_id", "game_date", "is_home", "opponent_abbr"])
-    # Sort by date descending
-    combined.sort_values("game_date", ascending=False, inplace=True)
+    # Drop duplicates (by date + teams)
+    if not combined.empty:
+        combined = combined.drop_duplicates(subset=["game_date", "home_team_id", "away_team_id"])
+        combined = combined.sort_values("game_date", ascending=False)
+    
     return combined
