@@ -308,9 +308,6 @@ async def players(request: Request) -> HTMLResponse:
 async def schedule(request: Request) -> HTMLResponse:
     from datetime import date as date_type
     
-    lookup = _team_lookup()
-    # Reverse lookup: abbr -> team_id
-    abbr_to_id = {abbr: tid for tid, abbr in lookup.items()}
     try:
         df = await asyncio.to_thread(sync_schedule, include_future_days=14)
     except Exception as exc:
@@ -328,34 +325,29 @@ async def schedule(request: Request) -> HTMLResponse:
         df["game_date"] = pd.to_datetime(df["game_date"]).dt.date
         df = df[df["game_date"] >= today]
         
-        # Sort by date ascending (today first)
-        df = df.sort_values("game_date")
+        # Sort by date ascending (today first), then by time
+        df = df.sort_values(["game_date", "game_time"] if "game_time" in df.columns else ["game_date"])
         
-        # Map team_id to abbreviation, use opponent_abbr as fallback for unknown teams
-        df["team"] = df["team_id"].map(lookup)
-        # Fill NaN team names with a placeholder based on team_id
-        df["team"] = df.apply(
-            lambda r: r["team"] if pd.notna(r["team"]) else f"Team {r['team_id']}", 
-            axis=1
-        )
-        df["opponent"] = df["opponent_abbr"]
-        df["opponent_id"] = df["opponent_abbr"].map(abbr_to_id)
-        
-        # Calculate home/away team IDs for links, handle missing opponent_id
-        df["home_team_id"] = df.apply(
-            lambda r: int(r["team_id"]) if r["is_home"] else (int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else 0),
-            axis=1
-        )
-        df["away_team_id"] = df.apply(
-            lambda r: (int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else 0) if r["is_home"] else int(r["team_id"]),
-            axis=1
-        )
-        
-        # Filter out rows where we couldn't resolve team IDs
-        df = df[(df["home_team_id"] > 0) & (df["away_team_id"] > 0)]
-        
-        df = df[["game_date", "team", "opponent", "is_home", "home_team_id", "away_team_id"]]
-        rows = _df_to_records(df)
+        # Build display rows (one per game, showing "Away @ Home" format)
+        rows = []
+        for _, r in df.iterrows():
+            home_name = r.get("home_name") or r.get("home_abbr", "Home")
+            away_name = r.get("away_name") or r.get("away_abbr", "Away")
+            game_time = r.get("game_time", "") or ""
+            venue = r.get("venue", "") or ""
+            neutral = r.get("neutral_site", False)
+            
+            rows.append({
+                "game_date": r["game_date"],
+                "away_team": away_name,
+                "home_team": home_name,
+                "game_time": game_time,
+                "venue": venue[:30] + "..." if len(venue) > 30 else venue,
+                "neutral_site": neutral,
+                "home_team_id": int(r["home_team_id"]),
+                "away_team_id": int(r["away_team_id"]),
+            })
+    
     season = get_current_season()
     return templates.TemplateResponse(
         "schedule.html",

@@ -376,30 +376,38 @@ def fetch_schedule(
                 if g["home_team_id"] not in team_ids and g["away_team_id"] not in team_ids:
                     continue
             
-            # Add entry for home team perspective
+            # Parse start time (ISO format from ESPN: "2026-02-03T00:00Z")
+            start_time_str = g.get("start_time", "")
+            game_time = ""
+            if start_time_str:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
+                    # Convert to local time display (Eastern is typical for college)
+                    game_time = dt.strftime("%I:%M %p").lstrip("0")
+                except (ValueError, TypeError):
+                    game_time = ""
+            
+            # Add single entry per game (not duplicated for each team)
             all_games.append({
-                "team_id": g["home_team_id"],
-                "game_date": target_date,
-                "is_home": True,
-                "opponent_abbr": g["away_abbr"],
-                "opponent_team_id": g["away_team_id"],
                 "game_id": g["game_id"],
-                "status": g["status"],
-            })
-            # Add entry for away team perspective
-            all_games.append({
-                "team_id": g["away_team_id"],
                 "game_date": target_date,
-                "is_home": False,
-                "opponent_abbr": g["home_abbr"],
-                "opponent_team_id": g["home_team_id"],
-                "game_id": g["game_id"],
+                "home_team_id": g["home_team_id"],
+                "away_team_id": g["away_team_id"],
+                "home_abbr": g["home_abbr"],
+                "away_abbr": g["away_abbr"],
+                "home_name": g.get("home_team_name", g["home_abbr"]),
+                "away_name": g.get("away_team_name", g["away_abbr"]),
+                "game_time": game_time,
                 "status": g["status"],
+                "venue": g.get("venue", ""),
+                "neutral_site": g.get("neutral_site", False),
             })
     
     df = pd.DataFrame(all_games)
     if not df.empty:
-        df = df.drop_duplicates(subset=["team_id", "game_date", "opponent_team_id"])
+        # Deduplicate by game_id (each game should appear once)
+        df = df.drop_duplicates(subset=["game_id"])
         df = df.sort_values("game_date", ascending=False)
     
     return df
