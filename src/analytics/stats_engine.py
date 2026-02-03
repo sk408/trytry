@@ -14,7 +14,7 @@ class PlayerStats:
     name: str
     position: str
     is_injured: bool
-    # Season averages
+    # Season averages - basic
     ppg: float  # points per game
     rpg: float  # rebounds per game
     apg: float  # assists per game
@@ -26,6 +26,23 @@ class PlayerStats:
     # Vs opponent (if available)
     ppg_vs_opp: float
     games_vs_opp: int
+    # Defensive stats
+    spg: float = 0.0  # steals per game
+    bpg: float = 0.0  # blocks per game
+    tpg: float = 0.0  # turnovers per game
+    # Shooting efficiency
+    fg_pct: float = 0.0   # field goal %
+    fg3_pct: float = 0.0  # three-point %
+    ft_pct: float = 0.0   # free throw %
+    ts_pct: float = 0.0   # true shooting % = PTS / (2 * (FGA + 0.44 * FTA))
+    efg_pct: float = 0.0  # effective FG% = (FGM + 0.5 * FG3M) / FGA
+    # Shot attempts per game (for volume analysis)
+    fg3_rate: float = 0.0  # 3PA / FGA (how often they shoot 3s)
+    ft_rate: float = 0.0   # FTA / FGA (how often they get to the line)
+    # Ratios
+    ast_to_ratio: float = 0.0  # assist-to-turnover ratio
+    # Impact
+    plus_minus_avg: float = 0.0  # average plus/minus
 
 
 @dataclass
@@ -34,10 +51,21 @@ class TeamMatchupStats:
     team_abbr: str
     team_name: str
     players: List[PlayerStats]
+    # Basic totals
     total_ppg: float
     total_rpg: float
     total_apg: float
     projected_points: float  # weighted projection for this matchup
+    # Defensive totals
+    total_spg: float = 0.0  # team steals
+    total_bpg: float = 0.0  # team blocks
+    total_tpg: float = 0.0  # team turnovers
+    # Team shooting efficiency (weighted by attempts)
+    team_ts_pct: float = 0.0    # team true shooting %
+    team_fg3_rate: float = 0.0  # team 3PT attempt rate
+    team_ft_rate: float = 0.0   # team FT attempt rate
+    # Net ratings
+    turnover_margin: float = 0.0  # steals - turnovers (positive = good)
 
 
 def _load_player_df(player_id: int) -> pd.DataFrame:
@@ -58,7 +86,7 @@ def get_player_comprehensive_stats(
     is_injured: bool,
     opponent_team_id: Optional[int] = None,
 ) -> PlayerStats:
-    """Get comprehensive stats for a single player."""
+    """Get comprehensive stats for a single player including efficiency metrics."""
     df = _load_player_df(player_id)
     
     if df.empty:
@@ -72,27 +100,65 @@ def get_player_comprehensive_stats(
             ppg_vs_opp=0.0, games_vs_opp=0,
         )
     
-    # Season averages (handle NaN with fillna)
-    ppg = float(df["points"].mean()) if not df["points"].isna().all() else 0.0
-    rpg = float(df["rebounds"].mean()) if not df["rebounds"].isna().all() else 0.0
-    apg = float(df["assists"].mean()) if not df["assists"].isna().all() else 0.0
-    mpg = float(df["minutes"].mean()) if not df["minutes"].isna().all() else 0.0
+    import math
+    
+    def safe_mean(series, default=0.0):
+        """Safely compute mean, returning default for empty/NaN series."""
+        if series.empty or series.isna().all():
+            return default
+        val = float(series.mean())
+        return default if math.isnan(val) else val
+    
+    # Basic season averages
+    ppg = safe_mean(df["points"])
+    rpg = safe_mean(df["rebounds"])
+    apg = safe_mean(df["assists"])
+    mpg = safe_mean(df["minutes"])
     games_played = len(df)
     
-    # Handle potential NaN values
-    import math
-    if math.isnan(ppg): ppg = 0.0
-    if math.isnan(rpg): rpg = 0.0
-    if math.isnan(apg): apg = 0.0
-    if math.isnan(mpg): mpg = 0.0
+    # Defensive stats (use 0 if column missing)
+    spg = safe_mean(df["steals"]) if "steals" in df.columns else 0.0
+    bpg = safe_mean(df["blocks"]) if "blocks" in df.columns else 0.0
+    tpg = safe_mean(df["turnovers"]) if "turnovers" in df.columns else 0.0
+    
+    # Shooting stats - compute totals first for efficiency calculations
+    total_fg_made = df["fg_made"].sum() if "fg_made" in df.columns else 0
+    total_fg_attempted = df["fg_attempted"].sum() if "fg_attempted" in df.columns else 0
+    total_fg3_made = df["fg3_made"].sum() if "fg3_made" in df.columns else 0
+    total_fg3_attempted = df["fg3_attempted"].sum() if "fg3_attempted" in df.columns else 0
+    total_ft_made = df["ft_made"].sum() if "ft_made" in df.columns else 0
+    total_ft_attempted = df["ft_attempted"].sum() if "ft_attempted" in df.columns else 0
+    total_points = df["points"].sum()
+    
+    # Shooting percentages (season totals for accuracy)
+    fg_pct = (total_fg_made / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
+    fg3_pct = (total_fg3_made / total_fg3_attempted * 100) if total_fg3_attempted > 0 else 0.0
+    ft_pct = (total_ft_made / total_ft_attempted * 100) if total_ft_attempted > 0 else 0.0
+    
+    # True Shooting % = PTS / (2 * (FGA + 0.44 * FTA))
+    ts_denominator = 2 * (total_fg_attempted + 0.44 * total_ft_attempted)
+    ts_pct = (total_points / ts_denominator * 100) if ts_denominator > 0 else 0.0
+    
+    # Effective FG% = (FGM + 0.5 * FG3M) / FGA
+    efg_pct = ((total_fg_made + 0.5 * total_fg3_made) / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
+    
+    # Shot selection rates
+    fg3_rate = (total_fg3_attempted / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
+    ft_rate = (total_ft_attempted / total_fg_attempted * 100) if total_fg_attempted > 0 else 0.0
+    
+    # Assist-to-turnover ratio
+    total_assists = df["assists"].sum()
+    total_turnovers = df["turnovers"].sum() if "turnovers" in df.columns else 0
+    ast_to_ratio = (total_assists / total_turnovers) if total_turnovers > 0 else total_assists
+    
+    # Plus/minus average
+    plus_minus_avg = safe_mean(df["plus_minus"]) if "plus_minus" in df.columns else 0.0
     
     # Home/Away splits
     home_df = df[df["is_home"] == 1]
     away_df = df[df["is_home"] == 0]
-    ppg_home = float(home_df["points"].mean()) if not home_df.empty else ppg
-    ppg_away = float(away_df["points"].mean()) if not away_df.empty else ppg
-    if math.isnan(ppg_home): ppg_home = ppg
-    if math.isnan(ppg_away): ppg_away = ppg
+    ppg_home = safe_mean(home_df["points"], ppg)
+    ppg_away = safe_mean(away_df["points"], ppg)
     
     # Vs specific opponent
     ppg_vs_opp = 0.0
@@ -100,8 +166,7 @@ def get_player_comprehensive_stats(
     if opponent_team_id is not None:
         opp_df = df[df["opponent_team_id"] == opponent_team_id]
         if not opp_df.empty:
-            ppg_vs_opp = float(opp_df["points"].mean())
-            if math.isnan(ppg_vs_opp): ppg_vs_opp = ppg
+            ppg_vs_opp = safe_mean(opp_df["points"], ppg)
             games_vs_opp = len(opp_df)
     
     return PlayerStats(
@@ -112,6 +177,13 @@ def get_player_comprehensive_stats(
         ppg=ppg, rpg=rpg, apg=apg, mpg=mpg, games_played=games_played,
         ppg_home=ppg_home, ppg_away=ppg_away,
         ppg_vs_opp=ppg_vs_opp, games_vs_opp=games_vs_opp,
+        # Extended stats
+        spg=spg, bpg=bpg, tpg=tpg,
+        fg_pct=fg_pct, fg3_pct=fg3_pct, ft_pct=ft_pct,
+        ts_pct=ts_pct, efg_pct=efg_pct,
+        fg3_rate=fg3_rate, ft_rate=ft_rate,
+        ast_to_ratio=ast_to_ratio,
+        plus_minus_avg=plus_minus_avg,
     )
 
 
@@ -231,7 +303,16 @@ def get_team_matchup_stats(
     total_ppg = 0.0
     total_rpg = 0.0
     total_apg = 0.0
+    total_spg = 0.0
+    total_bpg = 0.0
+    total_tpg = 0.0
     projected = 0.0
+    
+    # For team-level efficiency, we'll weight by minutes played
+    weighted_ts_sum = 0.0
+    weighted_fg3_rate_sum = 0.0
+    weighted_ft_rate_sum = 0.0
+    total_minutes_weight = 0.0
     
     for p in active:
         pos_group = _get_position_group(p.position)
@@ -281,6 +362,16 @@ def get_team_matchup_stats(
         total_ppg += p.ppg
         total_rpg += p.rpg
         total_apg += p.apg
+        total_spg += p.spg
+        total_bpg += p.bpg
+        total_tpg += p.tpg
+        
+        # Weight efficiency metrics by minutes
+        if p.mpg > 0:
+            weighted_ts_sum += p.ts_pct * p.mpg
+            weighted_fg3_rate_sum += p.fg3_rate * p.mpg
+            weighted_ft_rate_sum += p.ft_rate * p.mpg
+            total_minutes_weight += p.mpg
         
         # For projection, weight by context
         base = p.ppg * 0.4
@@ -299,6 +390,17 @@ def get_team_matchup_stats(
         total_ppg *= scale_factor
         total_rpg *= scale_factor
         total_apg *= scale_factor
+        total_spg *= scale_factor
+        total_bpg *= scale_factor
+        total_tpg *= scale_factor
+    
+    # Calculate team-level efficiency metrics (weighted by minutes)
+    team_ts_pct = (weighted_ts_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
+    team_fg3_rate = (weighted_fg3_rate_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
+    team_ft_rate = (weighted_ft_rate_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
+    
+    # Turnover margin: positive means team creates more turnovers than commits
+    turnover_margin = total_spg - total_tpg
     
     return TeamMatchupStats(
         team_id=team_id,
@@ -309,6 +411,14 @@ def get_team_matchup_stats(
         total_rpg=total_rpg,
         total_apg=total_apg,
         projected_points=projected,
+        # Extended stats
+        total_spg=total_spg,
+        total_bpg=total_bpg,
+        total_tpg=total_tpg,
+        team_ts_pct=team_ts_pct,
+        team_fg3_rate=team_fg3_rate,
+        team_ft_rate=team_ft_rate,
+        turnover_margin=turnover_margin,
     )
 
 
@@ -318,9 +428,20 @@ def player_splits(
     is_home: Optional[bool] = None,
     recent_games: Optional[int] = 10,
 ) -> Dict[str, float]:
+    """
+    Get player stats splits with extended metrics.
+    
+    Returns comprehensive stats including shooting efficiency and defensive stats.
+    """
     df = _load_player_df(player_id)
     if df.empty:
-        return {"points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0}
+        return {
+            "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
+            "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+            "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
+            "ft_made": 0, "ft_attempted": 0,
+            "ts_pct": 0.0, "fg3_rate": 0.0,
+        }
 
     # Store original df for fallback
     original_df = df.copy()
@@ -344,11 +465,50 @@ def player_splits(
     if recent_games:
         df = df.head(recent_games)
 
+    def safe_mean(col, default=0.0):
+        if col not in df.columns or df.empty:
+            return default
+        val = df[col].mean()
+        return val if pd.notna(val) else default
+    
+    def safe_sum(col, default=0):
+        if col not in df.columns or df.empty:
+            return default
+        return int(df[col].sum())
+    
+    # Compute shooting totals for efficiency calculation
+    total_pts = safe_sum("points")
+    total_fga = safe_sum("fg_attempted")
+    total_fg3a = safe_sum("fg3_attempted")
+    total_fta = safe_sum("ft_attempted")
+    
+    # True Shooting %
+    ts_denom = 2 * (total_fga + 0.44 * total_fta)
+    ts_pct = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
+    
+    # 3PT attempt rate
+    fg3_rate = (total_fg3a / total_fga * 100) if total_fga > 0 else 0.0
+
     return {
-        "points": df["points"].mean() if not df.empty else 0.0,
-        "rebounds": df["rebounds"].mean() if not df.empty else 0.0,
-        "assists": df["assists"].mean() if not df.empty else 0.0,
-        "minutes": df["minutes"].mean() if not df.empty else 0.0,
+        # Basic stats
+        "points": safe_mean("points"),
+        "rebounds": safe_mean("rebounds"),
+        "assists": safe_mean("assists"),
+        "minutes": safe_mean("minutes"),
+        # Defensive stats
+        "steals": safe_mean("steals"),
+        "blocks": safe_mean("blocks"),
+        "turnovers": safe_mean("turnovers"),
+        # Shooting totals (for aggregate efficiency)
+        "fg_made": safe_sum("fg_made"),
+        "fg_attempted": safe_sum("fg_attempted"),
+        "fg3_made": safe_sum("fg3_made"),
+        "fg3_attempted": safe_sum("fg3_attempted"),
+        "ft_made": safe_sum("ft_made"),
+        "ft_attempted": safe_sum("ft_attempted"),
+        # Efficiency metrics
+        "ts_pct": ts_pct,
+        "fg3_rate": fg3_rate,
     }
 
 
@@ -381,7 +541,20 @@ def aggregate_projection(
     is_home: Optional[bool] = None,
     recent_games: int = 10,
 ) -> Dict[str, float]:
-    totals = {"points": 0.0, "rebounds": 0.0, "assists": 0.0}
+    """
+    Aggregate player stats for team projection with extended metrics.
+    
+    Returns:
+        Dict with team totals for all stats plus efficiency metrics.
+    """
+    totals = {
+        "points": 0.0, "rebounds": 0.0, "assists": 0.0,
+        "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+        "fg_made": 0, "fg_attempted": 0,
+        "fg3_made": 0, "fg3_attempted": 0,
+        "ft_made": 0, "ft_attempted": 0,
+    }
+    
     for pid in player_ids:
         splits = player_splits(
             pid,
@@ -389,7 +562,28 @@ def aggregate_projection(
             is_home=is_home,
             recent_games=recent_games,
         )
-        totals = {k: totals[k] + splits.get(k, 0.0) for k in totals}
+        for k in totals:
+            totals[k] = totals[k] + splits.get(k, 0.0)
+    
+    # Calculate team-level efficiency from aggregated shooting stats
+    total_fga = totals["fg_attempted"]
+    total_fg3a = totals["fg3_attempted"]
+    total_fta = totals["ft_attempted"]
+    total_pts = totals["points"]
+    
+    # True Shooting % for the team
+    ts_denom = 2 * (total_fga + 0.44 * total_fta)
+    totals["ts_pct"] = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
+    
+    # 3PT attempt rate
+    totals["fg3_rate"] = (total_fg3a / total_fga * 100) if total_fga > 0 else 0.0
+    
+    # FT attempt rate  
+    totals["ft_rate"] = (total_fta / total_fga * 100) if total_fga > 0 else 0.0
+    
+    # Turnover margin (positive = good, creates more than commits)
+    totals["turnover_margin"] = totals["steals"] - totals["turnovers"]
+    
     return totals
 
 

@@ -112,33 +112,95 @@ def _fetch_team_roster(commonteamroster, team_id: int, season: str, progress: Ca
 
 
 def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.DataFrame:
+    """
+    Fetch comprehensive player game logs with all available stats.
+    
+    Returns DataFrame with:
+    - Basic: points, rebounds, assists, minutes
+    - Defensive: steals, blocks, turnovers
+    - Shooting: fg_made/attempted, fg3_made/attempted, ft_made/attempted
+    - Rebounds: oreb, dreb
+    - Impact: plus_minus
+    """
     season = season or get_current_season()
     _, _, playergamelog, _, _, _ = _require_nba_api()
     logs = playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
+    
+    # Extract all available stats
     cols = [
+        "GAME_ID",
         "GAME_DATE",
         "MATCHUP",
         "WL",
+        # Basic stats
         "PTS",
         "REB",
         "AST",
         "MIN",
+        # Defensive stats
+        "STL",
+        "BLK",
+        "TOV",
+        # Shooting stats
+        "FGM",
+        "FGA",
+        "FG3M",
+        "FG3A",
+        "FTM",
+        "FTA",
+        # Rebound breakdown
+        "OREB",
+        "DREB",
+        # Impact
+        "PLUS_MINUS",
     ]
-    df = logs[cols].copy()
+    
+    # Only use columns that exist in the response
+    available_cols = [c for c in cols if c in logs.columns]
+    df = logs[available_cols].copy()
+    
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"]).dt.date
     df["IS_HOME"] = ~df["MATCHUP"].str.contains("@")
     df["OPP_TEAM_ABBR"] = df["MATCHUP"].str.split().str[-1]
-    return df.rename(
-        columns={
-            "PTS": "points",
-            "REB": "rebounds",
-            "AST": "assists",
-            "MIN": "minutes",
-            "GAME_DATE": "game_date",
-            "IS_HOME": "is_home",
-            "OPP_TEAM_ABBR": "opponent_abbr",
-        }
-    )
+    
+    # Rename columns to snake_case
+    rename_map = {
+        "GAME_ID": "game_id",
+        "PTS": "points",
+        "REB": "rebounds",
+        "AST": "assists",
+        "MIN": "minutes",
+        "STL": "steals",
+        "BLK": "blocks",
+        "TOV": "turnovers",
+        "FGM": "fg_made",
+        "FGA": "fg_attempted",
+        "FG3M": "fg3_made",
+        "FG3A": "fg3_attempted",
+        "FTM": "ft_made",
+        "FTA": "ft_attempted",
+        "OREB": "oreb",
+        "DREB": "dreb",
+        "PLUS_MINUS": "plus_minus",
+        "GAME_DATE": "game_date",
+        "IS_HOME": "is_home",
+        "OPP_TEAM_ABBR": "opponent_abbr",
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    
+    # Ensure all expected columns exist with defaults
+    for col, default in [
+        ("steals", 0), ("blocks", 0), ("turnovers", 0),
+        ("fg_made", 0), ("fg_attempted", 0),
+        ("fg3_made", 0), ("fg3_attempted", 0),
+        ("ft_made", 0), ("ft_attempted", 0),
+        ("oreb", 0), ("dreb", 0), ("plus_minus", 0),
+        ("game_id", ""),
+    ]:
+        if col not in df.columns:
+            df[col] = default
+    
+    return df
 
 
 def fetch_schedule(

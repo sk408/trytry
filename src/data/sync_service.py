@@ -64,6 +64,12 @@ def sync_player_logs(
     sleep_between: float = 0.6,
     max_retries: int = 2,
 ) -> None:
+    """
+    Sync all player game logs with comprehensive stats.
+    
+    Now stores extended stats: steals, blocks, turnovers, shooting stats,
+    rebound breakdown, and plus/minus.
+    """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
     player_ids = list(player_ids)
@@ -93,25 +99,62 @@ def sync_player_logs(
             # Map opponent abbreviation to team_id
             logs["opponent_team_id"] = logs["opponent_abbr"].map(abbr_to_id)
             logs = logs.dropna(subset=["opponent_team_id"])
-            payload = [
-                (
+            
+            # Build payload with all stats
+            payload = []
+            for row in logs.itertuples(index=False):
+                payload.append((
                     player_id,
                     int(row.opponent_team_id),
                     int(row.is_home),
                     row.game_date,
+                    getattr(row, 'game_id', ''),
+                    # Basic stats
                     float(row.points),
                     float(row.rebounds),
                     float(row.assists),
                     float(row.minutes),
-                )
-                for row in logs.itertuples(index=False)
-            ]
+                    # Defensive stats
+                    float(getattr(row, 'steals', 0) or 0),
+                    float(getattr(row, 'blocks', 0) or 0),
+                    float(getattr(row, 'turnovers', 0) or 0),
+                    # Shooting stats
+                    int(getattr(row, 'fg_made', 0) or 0),
+                    int(getattr(row, 'fg_attempted', 0) or 0),
+                    int(getattr(row, 'fg3_made', 0) or 0),
+                    int(getattr(row, 'fg3_attempted', 0) or 0),
+                    int(getattr(row, 'ft_made', 0) or 0),
+                    int(getattr(row, 'ft_attempted', 0) or 0),
+                    # Rebound breakdown
+                    float(getattr(row, 'oreb', 0) or 0),
+                    float(getattr(row, 'dreb', 0) or 0),
+                    # Impact
+                    float(getattr(row, 'plus_minus', 0) or 0),
+                ))
+            
             conn.executemany(
                 """
                 INSERT INTO player_stats
-                    (player_id, opponent_team_id, is_home, game_date, points, rebounds, assists, minutes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(player_id, opponent_team_id, game_date) DO NOTHING
+                    (player_id, opponent_team_id, is_home, game_date, game_id,
+                     points, rebounds, assists, minutes,
+                     steals, blocks, turnovers,
+                     fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
+                     oreb, dreb, plus_minus)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_id, opponent_team_id, game_date) DO UPDATE SET
+                    game_id = excluded.game_id,
+                    steals = excluded.steals,
+                    blocks = excluded.blocks,
+                    turnovers = excluded.turnovers,
+                    fg_made = excluded.fg_made,
+                    fg_attempted = excluded.fg_attempted,
+                    fg3_made = excluded.fg3_made,
+                    fg3_attempted = excluded.fg3_attempted,
+                    ft_made = excluded.ft_made,
+                    ft_attempted = excluded.ft_attempted,
+                    oreb = excluded.oreb,
+                    dreb = excluded.dreb,
+                    plus_minus = excluded.plus_minus
                 """,
                 payload,
             )
