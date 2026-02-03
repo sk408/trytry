@@ -534,6 +534,78 @@ def sync_schedule(
     )
 
 
+def _sync_teams_from_schedule_data(
+    schedule_df: pd.DataFrame,
+    progress_cb: Optional[Callable[[str], None]] = None
+) -> int:
+    """
+    Sync team names from schedule data to database.
+    This ensures teams from upcoming games have proper names, not placeholders.
+    
+    Returns:
+        Number of teams updated
+    """
+    progress = progress_cb or (lambda _msg: None)
+    
+    if schedule_df.empty:
+        return 0
+    
+    updated = 0
+    with get_conn() as conn:
+        for _, r in schedule_df.iterrows():
+            home_id = r.get("home_team_id")
+            away_id = r.get("away_team_id")
+            home_name = r.get("home_name") or ""
+            away_name = r.get("away_name") or ""
+            home_abbr = r.get("home_abbr") or ""
+            away_abbr = r.get("away_abbr") or ""
+            
+            # Update home team if we have real name (not placeholder)
+            if home_id and home_name and not home_name.startswith("Team "):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, '')
+                    ON CONFLICT(team_id) DO UPDATE SET
+                        name = excluded.name,
+                        abbreviation = CASE 
+                            WHEN teams.abbreviation LIKE 'T%' AND length(teams.abbreviation) > 3 
+                            THEN excluded.abbreviation 
+                            ELSE teams.abbreviation 
+                        END
+                    WHERE teams.name LIKE 'Team %' OR teams.name = ''
+                    """,
+                    (int(home_id), home_name, home_abbr or f"T{home_id}"),
+                )
+                updated += cursor.rowcount
+            
+            # Update away team if we have real name
+            if away_id and away_name and not away_name.startswith("Team "):
+                cursor = conn.execute(
+                    """
+                    INSERT INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, '')
+                    ON CONFLICT(team_id) DO UPDATE SET
+                        name = excluded.name,
+                        abbreviation = CASE 
+                            WHEN teams.abbreviation LIKE 'T%' AND length(teams.abbreviation) > 3 
+                            THEN excluded.abbreviation 
+                            ELSE teams.abbreviation 
+                        END
+                    WHERE teams.name LIKE 'Team %' OR teams.name = ''
+                    """,
+                    (int(away_id), away_name, away_abbr or f"T{away_id}"),
+                )
+                updated += cursor.rowcount
+        
+        conn.commit()
+    
+    if updated > 0:
+        progress(f"Updated {updated} team names from schedule")
+    
+    return updated
+
+
 def full_sync(
     season: Optional[str] = None,
     league: str = DEFAULT_LEAGUE,
@@ -545,8 +617,8 @@ def full_sync(
     Full sync for college basketball.
     
     Day-ahead loading approach:
-    1. Get today's scheduled games
-    2. Sync teams and rosters for those games
+    1. Get upcoming schedule (14 days) and sync team names
+    2. Sync teams and rosters for today's games
     3. Sync recent game stats (or full season if full_season=True)
     4. Sync current injuries
     
@@ -559,6 +631,15 @@ def full_sync(
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
+    
+    # First, sync team names from upcoming schedule (14 days)
+    # This ensures teams from future games have proper names
+    progress("Sync: team names from upcoming schedule (14 days)...")
+    try:
+        schedule_df = fetch_schedule(league=league, include_future_days=14)
+        _sync_teams_from_schedule_data(schedule_df, progress_cb=progress)
+    except Exception as exc:
+        progress(f"Schedule team sync skipped: {exc}")
     
     progress("Sync: reference data (teams + rosters from today's games)")
     players_df = sync_reference_data(progress_cb=progress, season=season, league=league)
