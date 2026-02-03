@@ -341,6 +341,31 @@ async def remove_manual_injury_endpoint(
     return RedirectResponse(url="/players", status_code=303)
 
 
+def _format_relative_date(game_date, today) -> str:
+    """Format date as Today, Tomorrow, or +X days."""
+    if game_date == today:
+        return "Today"
+    
+    days_diff = (game_date - today).days
+    if days_diff == 1:
+        return "Tomorrow"
+    elif days_diff > 0:
+        return f"+{days_diff} days"
+    else:
+        return str(game_date)
+
+
+def _format_time_short(time_str: str) -> str:
+    """Format time without timezone (e.g., '7:30 PM' instead of '7:30 PM PST')."""
+    if not time_str:
+        return "TBD"
+    # Remove timezone suffix (PST, PDT, EST, EDT, etc.)
+    parts = time_str.split()
+    if len(parts) >= 2 and parts[-1] in ("PST", "PDT", "EST", "EDT", "MST", "MDT", "CST", "CDT"):
+        return " ".join(parts[:-1])
+    return time_str
+
+
 @app.get("/schedule", response_class=HTMLResponse)
 async def schedule(request: Request) -> HTMLResponse:
     from datetime import date as date_type
@@ -372,12 +397,13 @@ async def schedule(request: Request) -> HTMLResponse:
             away_name = r.get("away_name") or r.get("away_abbr", "Away")
             game_time = r.get("game_time", "") or ""
             arena = r.get("arena", "") or ""
+            game_date = r["game_date"]
             
             rows.append({
-                "game_date": r["game_date"],
+                "game_date": _format_relative_date(game_date, today),
                 "away_team": away_name,
                 "home_team": home_name,
-                "game_time": game_time,
+                "game_time": _format_time_short(game_time),
                 "venue": arena[:30] + "..." if len(arena) > 30 else arena,
                 "home_team_id": int(r["home_team_id"]),
                 "away_team_id": int(r["away_team_id"]),
