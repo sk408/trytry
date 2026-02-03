@@ -31,12 +31,15 @@ from src.data.gamecast import (
     get_game_odds,
     get_box_score,
     get_play_by_play,
+    get_game_leaders,
     GamecastClient,
     GameInfo,
     GameOdds,
     BoxScore,
     PlayEvent,
+    GameLeaders,
 )
+from src.analytics.prediction import predict_matchup
 from src.database import migrations
 from src.database.db import DB_PATH, get_conn
 from src.web.player_utils import get_position_display, load_injured_with_stats, load_players_df
@@ -632,6 +635,54 @@ async def admin_reset(request: Request) -> HTMLResponse:
 
 # --- Gamecast (ESPN real-time game data) ---
 
+def _get_team_id_by_abbr(abbr: str) -> Optional[int]:
+    """Look up team ID by abbreviation."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT team_id FROM teams WHERE abbreviation = ?", (abbr,)
+        ).fetchone()
+    return int(row[0]) if row else None
+
+
+def _get_our_prediction(home_abbr: str, away_abbr: str) -> Optional[dict]:
+    """Get our model's prediction for the matchup."""
+    home_id = _get_team_id_by_abbr(home_abbr)
+    away_id = _get_team_id_by_abbr(away_abbr)
+    
+    if not home_id or not away_id:
+        return None
+    
+    try:
+        home_players = _team_players(home_id)
+        away_players = _team_players(away_id)
+        
+        if not home_players or not away_players:
+            return None
+        
+        prediction = predict_matchup(
+            home_team_id=home_id,
+            away_team_id=away_id,
+            home_players=home_players,
+            away_players=away_players,
+        )
+        
+        # Calculate predicted final scores
+        home_proj = (prediction.predicted_total + prediction.predicted_spread) / 2
+        away_proj = (prediction.predicted_total - prediction.predicted_spread) / 2
+        
+        return {
+            "home_abbr": home_abbr,
+            "away_abbr": away_abbr,
+            "predicted_spread": prediction.predicted_spread,
+            "predicted_total": prediction.predicted_total,
+            "home_projected_score": home_proj,
+            "away_projected_score": away_proj,
+        }
+    except Exception as e:
+        print(f"[gamecast] Error getting prediction: {e}")
+        return None
+
+
 @app.get("/gamecast", response_class=HTMLResponse)
 async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse:
     """Gamecast page with live play-by-play and odds."""
@@ -640,7 +691,9 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
     selected_game: GameInfo | None = None
     odds: GameOdds | None = None
     box: BoxScore | None = None
+    leaders: GameLeaders | None = None
     recent_plays: List[PlayEvent] = []
+    our_prediction: Optional[dict] = None
     
     if game_id:
         # Find the selected game
@@ -649,8 +702,15 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
         # Fetch initial data
         odds = await asyncio.to_thread(get_game_odds, game_id)
         box = await asyncio.to_thread(get_box_score, game_id)
+        leaders = await asyncio.to_thread(get_game_leaders, game_id)
         recent_plays = await asyncio.to_thread(get_play_by_play, game_id, "")
         recent_plays = recent_plays[:20]  # Last 20 plays
+        
+        # Get our model's prediction
+        if selected_game:
+            our_prediction = await asyncio.to_thread(
+                _get_our_prediction, selected_game.home_abbr, selected_game.away_abbr
+            )
     
     return templates.TemplateResponse(
         "gamecast.html",
@@ -661,7 +721,9 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
             "game_id": game_id,
             "odds": odds,
             "box": box,
+            "leaders": leaders,
             "recent_plays": recent_plays,
+            "our_prediction": our_prediction,
         },
     )
 

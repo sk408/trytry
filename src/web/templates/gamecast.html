@@ -109,6 +109,131 @@
 </div>
 {% endif %}
 
+<!-- Our Prediction vs Reality -->
+{% if our_prediction %}
+<div class="card">
+  <h2>Our Prediction</h2>
+  <div class="prediction-comparison">
+    <div class="pred-row">
+      <div class="pred-team">
+        <span class="pred-abbr">{{ our_prediction.away_abbr }}</span>
+        <span class="pred-projected">Proj: {{ "%.0f"|format(our_prediction.away_projected_score) }}</span>
+        <span class="pred-actual {% if selected_game.away_score > our_prediction.away_projected_score %}text-success{% elif selected_game.away_score < our_prediction.away_projected_score - 5 %}text-danger{% endif %}">
+          Actual: {{ selected_game.away_score }}
+        </span>
+      </div>
+      <div class="pred-vs">@</div>
+      <div class="pred-team">
+        <span class="pred-abbr">{{ our_prediction.home_abbr }}</span>
+        <span class="pred-projected">Proj: {{ "%.0f"|format(our_prediction.home_projected_score) }}</span>
+        <span class="pred-actual {% if selected_game.home_score > our_prediction.home_projected_score %}text-success{% elif selected_game.home_score < our_prediction.home_projected_score - 5 %}text-danger{% endif %}">
+          Actual: {{ selected_game.home_score }}
+        </span>
+      </div>
+    </div>
+    <div class="pred-summary">
+      <div class="pred-item">
+        <span class="pred-label">Pred Spread</span>
+        <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(our_prediction.predicted_spread) }}</span>
+      </div>
+      <div class="pred-item">
+        <span class="pred-label">Actual Spread</span>
+        {% set actual_spread = selected_game.home_score - selected_game.away_score %}
+        <span class="pred-value {% if (actual_spread > 0) == (our_prediction.predicted_spread > 0) %}text-success{% else %}text-danger{% endif %}">
+          {{ our_prediction.home_abbr }} {{ "%+d"|format(actual_spread) }}
+        </span>
+      </div>
+      <div class="pred-item">
+        <span class="pred-label">Pred Total</span>
+        <span class="pred-value">{{ "%.1f"|format(our_prediction.predicted_total) }}</span>
+      </div>
+      <div class="pred-item">
+        <span class="pred-label">Actual Total</span>
+        {% set actual_total = selected_game.home_score + selected_game.away_score %}
+        <span class="pred-value {% if actual_total > our_prediction.predicted_total %}text-success{% else %}text-warning{% endif %}">
+          {{ actual_total }}
+        </span>
+      </div>
+    </div>
+    <!-- Pace projection -->
+    {% if selected_game.period > 0 %}
+    <div class="pace-projection">
+      {% set minutes_played = (selected_game.period - 1) * 12 + (12 - (selected_game.clock|replace(':', '.')|float if ':' in selected_game.clock else 12)) %}
+      {% set pace_factor = 48.0 / minutes_played if minutes_played > 0 else 1 %}
+      {% set projected_final_total = actual_total * pace_factor %}
+      <span class="text-muted">
+        Pace: ~{{ "%.0f"|format(projected_final_total) }} total projected at current rate
+        {% if projected_final_total > our_prediction.predicted_total %}
+          (OVER likely)
+        {% else %}
+          (UNDER likely)
+        {% endif %}
+      </span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Game Leaders -->
+{% if leaders %}
+<div class="card">
+  <h2>Game Leaders</h2>
+  <div class="leaders-grid">
+    <!-- Away Team Leaders -->
+    <div class="leaders-team">
+      <h3>{{ selected_game.away_abbr }}</h3>
+      {% if leaders.away_points %}
+      <div class="leader-item">
+        <span class="leader-cat">PTS</span>
+        <span class="leader-name">{{ leaders.away_points.name }}</span>
+        <span class="leader-value">{{ leaders.away_points.value }}</span>
+      </div>
+      {% endif %}
+      {% if leaders.away_rebounds %}
+      <div class="leader-item">
+        <span class="leader-cat">REB</span>
+        <span class="leader-name">{{ leaders.away_rebounds.name }}</span>
+        <span class="leader-value">{{ leaders.away_rebounds.value }}</span>
+      </div>
+      {% endif %}
+      {% if leaders.away_assists %}
+      <div class="leader-item">
+        <span class="leader-cat">AST</span>
+        <span class="leader-name">{{ leaders.away_assists.name }}</span>
+        <span class="leader-value">{{ leaders.away_assists.value }}</span>
+      </div>
+      {% endif %}
+    </div>
+    <!-- Home Team Leaders -->
+    <div class="leaders-team">
+      <h3>{{ selected_game.home_abbr }}</h3>
+      {% if leaders.home_points %}
+      <div class="leader-item">
+        <span class="leader-cat">PTS</span>
+        <span class="leader-name">{{ leaders.home_points.name }}</span>
+        <span class="leader-value">{{ leaders.home_points.value }}</span>
+      </div>
+      {% endif %}
+      {% if leaders.home_rebounds %}
+      <div class="leader-item">
+        <span class="leader-cat">REB</span>
+        <span class="leader-name">{{ leaders.home_rebounds.name }}</span>
+        <span class="leader-value">{{ leaders.home_rebounds.value }}</span>
+      </div>
+      {% endif %}
+      {% if leaders.home_assists %}
+      <div class="leader-item">
+        <span class="leader-cat">AST</span>
+        <span class="leader-name">{{ leaders.home_assists.name }}</span>
+        <span class="leader-value">{{ leaders.home_assists.value }}</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Play-by-Play Feed -->
 <div class="card">
   <h2>Play-by-Play</h2>
@@ -546,6 +671,137 @@ window.addEventListener('beforeunload', function() {
   padding: 8px 6px;
 }
 
+/* Prediction Comparison */
+.prediction-comparison {
+  padding: 8px 0;
+}
+
+.pred-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.pred-team {
+  flex: 1;
+  text-align: center;
+}
+
+.pred-abbr {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.pred-projected {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.pred-actual {
+  display: block;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.pred-vs {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.pred-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pred-item {
+  background: var(--bg-dark);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+
+.pred-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.pred-value {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.pace-projection {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--bg-dark);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* Game Leaders */
+.leaders-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.leaders-team h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--accent);
+}
+
+.leader-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.leader-item:last-child {
+  border-bottom: none;
+}
+
+.leader-cat {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-dark);
+  padding: 2px 6px;
+  border-radius: 4px;
+  min-width: 32px;
+  text-align: center;
+}
+
+.leader-name {
+  flex: 1;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.leader-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
 /* Desktop */
 @media (min-width: 768px) {
   .odds-grid {
@@ -558,6 +814,14 @@ window.addEventListener('beforeunload', function() {
   
   .team-name {
     font-size: 0.875rem;
+  }
+  
+  .pred-summary {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .leaders-grid {
+    gap: 32px;
   }
 }
 </style>

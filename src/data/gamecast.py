@@ -80,6 +80,25 @@ class BoxScorePlayer:
 
 
 @dataclass
+class GameLeader:
+    """A game leader in a statistical category."""
+    name: str
+    value: str
+    team_abbr: str
+
+
+@dataclass
+class GameLeaders:
+    """Game leaders for both teams."""
+    home_points: Optional[GameLeader] = None
+    home_rebounds: Optional[GameLeader] = None
+    home_assists: Optional[GameLeader] = None
+    away_points: Optional[GameLeader] = None
+    away_rebounds: Optional[GameLeader] = None
+    away_assists: Optional[GameLeader] = None
+
+
+@dataclass
 class BoxScore:
     """Live box score data."""
     home_players: List[BoxScorePlayer] = field(default_factory=list)
@@ -155,51 +174,114 @@ def get_game_odds(game_id: str) -> Optional[GameOdds]:
     # Parse pickcenter (betting odds)
     pickcenter = data.get("pickcenter", [])
     if pickcenter:
-        pc = pickcenter[0]  # Usually first provider
-        details = pc.get("details", "")
+        pc = pickcenter[0]  # Usually first provider (DraftKings)
         
-        # Parse spread from details (e.g., "LAL -3.5")
-        if details:
-            parts = details.split()
-            if len(parts) >= 2:
-                try:
-                    odds.spread = float(parts[-1])
-                except ValueError:
-                    pass
-        
+        # Spread - use numeric field directly
+        odds.spread = float(pc.get("spread", 0) or 0)
         odds.over_under = float(pc.get("overUnder", 0) or 0)
-        odds.spread_odds = pc.get("spreadOdds", "")
-        odds.over_odds = pc.get("overOdds", "")
-        odds.under_odds = pc.get("underOdds", "")
         
-        # Money line
-        home_ml = pc.get("homeTeamOdds", {})
-        away_ml = pc.get("awayTeamOdds", {})
-        odds.home_ml = str(home_ml.get("moneyLine", "")) if home_ml else ""
-        odds.away_ml = str(away_ml.get("moneyLine", "")) if away_ml else ""
+        # Over/under odds
+        over_odds = pc.get("overOdds")
+        under_odds = pc.get("underOdds")
+        odds.over_odds = f"{int(over_odds):+d}" if over_odds else ""
+        odds.under_odds = f"{int(under_odds):+d}" if under_odds else ""
         
-        # ATS records
-        if home_ml:
-            ats = home_ml.get("spreadRecord", {})
+        # Money line and spread odds from team objects
+        home_team_odds = pc.get("homeTeamOdds", {})
+        away_team_odds = pc.get("awayTeamOdds", {})
+        
+        if home_team_odds:
+            ml = home_team_odds.get("moneyLine")
+            odds.home_ml = f"{int(ml):+d}" if ml else ""
+            spread_odds = home_team_odds.get("spreadOdds")
+            odds.spread_odds = f"{int(spread_odds):+d}" if spread_odds else ""
+            # ATS record
+            ats = home_team_odds.get("spreadRecord", {})
             if ats:
                 odds.home_ats_record = f"{ats.get('wins', 0)}-{ats.get('losses', 0)}"
-        if away_ml:
-            ats = away_ml.get("spreadRecord", {})
+        
+        if away_team_odds:
+            ml = away_team_odds.get("moneyLine")
+            odds.away_ml = f"{int(ml):+d}" if ml else ""
+            # ATS record
+            ats = away_team_odds.get("spreadRecord", {})
             if ats:
                 odds.away_ats_record = f"{ats.get('wins', 0)}-{ats.get('losses', 0)}"
     
-    # Parse predictor (win probability)
-    predictor = data.get("predictor", {})
-    if predictor:
-        home_proj = predictor.get("homeTeam", {})
-        away_proj = predictor.get("awayTeam", {})
-        
-        if home_proj:
-            odds.home_win_pct = float(home_proj.get("gameProjection", 0) or 0)
-        if away_proj:
-            odds.away_win_pct = float(away_proj.get("gameProjection", 0) or 0)
+    # Parse win probability from winprobability array (NOT predictor)
+    winprob = data.get("winprobability", [])
+    if winprob:
+        # Get the latest win probability (last entry in array)
+        latest = winprob[-1]
+        home_pct = float(latest.get("homeWinPercentage", 0) or 0)
+        # Convert from decimal to percentage (0.06 -> 6.0)
+        odds.home_win_pct = home_pct * 100
+        odds.away_win_pct = (1 - home_pct) * 100
     
     return odds
+
+
+def get_game_leaders(game_id: str) -> Optional[GameLeaders]:
+    """Fetch game leaders (top scorers, rebounders, assisters) from ESPN."""
+    try:
+        resp = requests.get(
+            ESPN_SUMMARY_URL,
+            params={"event": game_id},
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[gamecast] Error fetching leaders for {game_id}: {e}")
+        return None
+
+    leaders = GameLeaders()
+    leaders_data = data.get("leaders", [])
+    
+    for team_data in leaders_data:
+        team = team_data.get("team", {})
+        team_abbr = team.get("abbreviation", "")
+        
+        # Determine if home or away by checking header
+        header = data.get("header", {})
+        comp = header.get("competitions", [{}])[0]
+        is_home = False
+        for c in comp.get("competitors", []):
+            if c.get("team", {}).get("abbreviation") == team_abbr:
+                is_home = c.get("homeAway") == "home"
+                break
+        
+        # Parse each leader category
+        for cat in team_data.get("leaders", []):
+            cat_name = cat.get("name", "").lower()
+            cat_leaders = cat.get("leaders", [])
+            
+            if cat_leaders:
+                top = cat_leaders[0]
+                athlete = top.get("athlete", {})
+                leader = GameLeader(
+                    name=athlete.get("displayName", "Unknown"),
+                    value=str(top.get("displayValue", "0")),
+                    team_abbr=team_abbr,
+                )
+                
+                if cat_name == "points":
+                    if is_home:
+                        leaders.home_points = leader
+                    else:
+                        leaders.away_points = leader
+                elif cat_name == "rebounds":
+                    if is_home:
+                        leaders.home_rebounds = leader
+                    else:
+                        leaders.away_rebounds = leader
+                elif cat_name == "assists":
+                    if is_home:
+                        leaders.home_assists = leader
+                    else:
+                        leaders.away_assists = leader
+    
+    return leaders
 
 
 def get_box_score(game_id: str) -> Optional[BoxScore]:
