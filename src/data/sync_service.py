@@ -79,7 +79,7 @@ def sync_reference_data(
     players_df["team_id"] = players_df["team_id"].astype(int)
 
     with get_conn() as conn:
-        # Insert/update teams
+        # Insert/update teams first
         for _, row in teams_df.iterrows():
             conn.execute(
                 """
@@ -88,6 +88,23 @@ def sync_reference_data(
                 """,
                 (int(row["id"]), row["full_name"], row["abbreviation"], row.get("conference", "")),
             )
+        
+        # Also ensure any team referenced by players exists (in case roster has different team)
+        player_team_ids = set(players_df["team_id"].unique())
+        existing_team_ids = set(row[0] for row in conn.execute("SELECT team_id FROM teams").fetchall())
+        missing_team_ids = player_team_ids - existing_team_ids
+        
+        for tid in missing_team_ids:
+            # Insert placeholder team - will be updated later if we get full info
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO teams (team_id, name, abbreviation, conference)
+                VALUES (?, ?, ?, ?)
+                """,
+                (int(tid), f"Team {tid}", f"T{tid}", ""),
+            )
+        
+        conn.commit()  # Commit teams before inserting players
 
         # Insert/update players
         for _, row in players_df.iterrows():
@@ -141,6 +158,37 @@ def sync_player_stats_from_games(
                 continue
             
             with get_conn() as conn:
+                # First, ensure all teams from this game exist
+                team_ids_in_game = set()
+                if "team_id" in stats_df.columns:
+                    team_ids_in_game.update(stats_df["team_id"].dropna().astype(int).unique())
+                if "opponent_team_id" in stats_df.columns:
+                    team_ids_in_game.update(stats_df["opponent_team_id"].dropna().astype(int).unique())
+                
+                for tid in team_ids_in_game:
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO teams (team_id, name, abbreviation, conference)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (int(tid), f"Team {tid}", f"T{tid}", ""),
+                    )
+                
+                # Then, ensure all players exist
+                for _, row in stats_df.iterrows():
+                    player_id = int(row["player_id"])
+                    team_id = int(row["team_id"])
+                    player_name = row.get("player_name", f"Player {player_id}")
+                    
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO players (player_id, name, team_id, position, is_injured, injury_note)
+                        VALUES (?, ?, ?, ?, 0, NULL)
+                        """,
+                        (player_id, player_name, team_id, ""),
+                    )
+                
+                # Now insert the stats
                 for _, row in stats_df.iterrows():
                     try:
                         conn.execute(
@@ -386,19 +434,47 @@ def _ensure_teams_exist(team_ids: Set[int], league: str = DEFAULT_LEAGUE) -> Non
     if not missing:
         return
 
-    teams_df = fetch_teams(league=league)
-    subset = teams_df[teams_df["id"].isin(missing)]
-    if subset.empty:
-        return
-    with get_conn() as conn:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
-            VALUES (?, ?, ?, ?)
-            """,
-            subset[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
-        )
-        conn.commit()
+    # Try to fetch full team info
+    try:
+        teams_df = fetch_teams(league=league)
+        subset = teams_df[teams_df["id"].isin(missing)]
+        
+        with get_conn() as conn:
+            # Insert teams we found info for
+            if not subset.empty:
+                for _, row in subset.iterrows():
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (int(row["id"]), row["full_name"], row["abbreviation"], row.get("conference", "")),
+                    )
+            
+            # Insert placeholder for any remaining teams we couldn't find
+            still_missing = missing - set(subset["id"].astype(int)) if not subset.empty else missing
+            for tid in still_missing:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (int(tid), f"Team {tid}", f"T{tid}", ""),
+                )
+            conn.commit()
+    except Exception as e:
+        # If fetch fails, just insert placeholders
+        print(f"[sync] Warning: Could not fetch team info: {e}")
+        with get_conn() as conn:
+            for tid in missing:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO teams (team_id, name, abbreviation, conference)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (int(tid), f"Team {tid}", f"T{tid}", ""),
+                )
+            conn.commit()
 
 
 # Legacy function for compatibility
