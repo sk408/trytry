@@ -177,9 +177,22 @@ async def _stream_sync(sync_func, label: str) -> AsyncGenerator[str, None]:
 
 @app.get("/api/sync/data")
 async def stream_sync_data() -> StreamingResponse:
-    """Stream data sync progress via SSE."""
+    """Stream data sync progress via SSE (recent games only)."""
     return StreamingResponse(
         _stream_sync(full_sync, "Data sync"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/sync/season")
+async def stream_sync_season() -> StreamingResponse:
+    """Stream FULL SEASON data sync progress via SSE."""
+    def full_season_sync(progress_cb=None):
+        return full_sync(progress_cb=progress_cb, full_season=True)
+    
+    return StreamingResponse(
+        _stream_sync(full_season_sync, "Full season sync"),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -318,18 +331,29 @@ async def schedule(request: Request) -> HTMLResponse:
         # Sort by date ascending (today first)
         df = df.sort_values("game_date")
         
+        # Map team_id to abbreviation, use opponent_abbr as fallback for unknown teams
         df["team"] = df["team_id"].map(lookup)
+        # Fill NaN team names with a placeholder based on team_id
+        df["team"] = df.apply(
+            lambda r: r["team"] if pd.notna(r["team"]) else f"Team {r['team_id']}", 
+            axis=1
+        )
         df["opponent"] = df["opponent_abbr"]
         df["opponent_id"] = df["opponent_abbr"].map(abbr_to_id)
-        # Calculate home/away team IDs for links
+        
+        # Calculate home/away team IDs for links, handle missing opponent_id
         df["home_team_id"] = df.apply(
-            lambda r: int(r["team_id"]) if r["is_home"] else int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else None,
+            lambda r: int(r["team_id"]) if r["is_home"] else (int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else 0),
             axis=1
         )
         df["away_team_id"] = df.apply(
-            lambda r: int(r["opponent_id"]) if r["is_home"] and pd.notna(r["opponent_id"]) else int(r["team_id"]),
+            lambda r: (int(r["opponent_id"]) if pd.notna(r["opponent_id"]) else 0) if r["is_home"] else int(r["team_id"]),
             axis=1
         )
+        
+        # Filter out rows where we couldn't resolve team IDs
+        df = df[(df["home_team_id"] > 0) & (df["away_team_id"] > 0)]
+        
         df = df[["game_date", "team", "opponent", "is_home", "home_team_id", "away_team_id"]]
         rows = _df_to_records(df)
     season = get_current_season()
@@ -339,7 +363,7 @@ async def schedule(request: Request) -> HTMLResponse:
     )
 
 
-HOME_COURT_ADV = 3.0  # points
+HOME_COURT_ADV = 2.5  # points (college basketball)
 
 
 def _get_matchup_backtest(home_id: int, away_id: int) -> dict:

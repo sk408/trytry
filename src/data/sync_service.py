@@ -250,12 +250,17 @@ def sync_recent_games(
         target_date = today - timedelta(days=day_offset)
         date_str = target_date.strftime("%Y%m%d")
         
-        progress(f"Checking games from {target_date}...")
-        games = fetch_scoreboard(league=league, dates=date_str)
+        if day_offset % 7 == 0:  # Progress every week
+            progress(f"Checking games from {target_date}... ({day_offset}/{days_back} days)")
         
-        # Only include completed games
-        completed = [g for g in games if g.get("status") == "post"]
-        game_ids.extend([g["game_id"] for g in completed])
+        try:
+            games = fetch_scoreboard(league=league, dates=date_str)
+            # Only include completed games
+            completed = [g for g in games if g.get("status") == "post"]
+            game_ids.extend([g["game_id"] for g in completed])
+        except Exception as e:
+            progress(f"Error fetching games for {target_date}: {e}")
+            continue
     
     progress(f"Found {len(game_ids)} completed games to process")
     
@@ -263,6 +268,34 @@ def sync_recent_games(
         return 0
     
     return sync_player_stats_from_games(game_ids, league=league, progress_cb=progress)
+
+
+def sync_season_stats(
+    league: str = DEFAULT_LEAGUE,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> int:
+    """
+    Sync player stats for the entire current season.
+    
+    College basketball season runs Nov-March, so this fetches ~120 days of games.
+    
+    Returns:
+        Number of stats added
+    """
+    progress = progress_cb or (lambda _: None)
+    
+    # Calculate days since season start (November 1)
+    today = date.today()
+    year = today.year if today.month >= 11 else today.year - 1
+    season_start = date(year, 11, 1)  # Nov 1
+    days_since_start = (today - season_start).days
+    
+    # Cap at reasonable number (full season is ~150 days max)
+    days_back = min(days_since_start, 150)
+    
+    progress(f"Syncing full season: {days_back} days of games since {season_start}")
+    
+    return sync_recent_games(days_back=days_back, league=league, progress_cb=progress)
 
 
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
@@ -344,6 +377,7 @@ def full_sync(
     league: str = DEFAULT_LEAGUE,
     progress_cb: Optional[Callable[[str], None]] = None,
     days_back: int = 7,
+    full_season: bool = False,
 ) -> None:
     """
     Full sync for college basketball.
@@ -351,8 +385,15 @@ def full_sync(
     Day-ahead loading approach:
     1. Get today's scheduled games
     2. Sync teams and rosters for those games
-    3. Sync recent game stats for those teams
+    3. Sync recent game stats (or full season if full_season=True)
     4. Sync current injuries
+    
+    Args:
+        season: Season string (e.g., "2025-26")
+        league: League to sync
+        progress_cb: Progress callback
+        days_back: Days of games to fetch (ignored if full_season=True)
+        full_season: If True, fetch entire season's stats (~120 days)
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
@@ -361,8 +402,12 @@ def full_sync(
     players_df = sync_reference_data(progress_cb=progress, season=season, league=league)
     
     if not players_df.empty:
-        progress(f"Sync: recent game stats for {len(players_df)} players...")
-        sync_recent_games(days_back=days_back, league=league, progress_cb=progress)
+        if full_season:
+            progress("Sync: FULL SEASON stats (this may take a while)...")
+            sync_season_stats(league=league, progress_cb=progress)
+        else:
+            progress(f"Sync: recent game stats ({days_back} days)...")
+            sync_recent_games(days_back=days_back, league=league, progress_cb=progress)
     
     progress("Sync: current injuries")
     try:
