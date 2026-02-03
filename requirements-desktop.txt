@@ -1,0 +1,25 @@
+# Desktop version requirements (includes PySide6 GUI)
+# Install with: pip install -r requirements-desktop.txt
+
+# Core analytics
+pandas
+numpy
+matplotlib
+
+# Data fetching
+nba_api
+requests
+beautifulsoup4
+
+# Database
+# (uses sqlite3 from stdlib)
+
+# Desktop GUI
+PySide6
+
+# Web UI (optional, for running web version on desktop)
+fastapi
+uvicorn
+jinja2
+python-multipart
+pydantic>=1.10,<2.0

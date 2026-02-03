@@ -1,8 +1,22 @@
-# NBA Betting Analytics (Web)
+# NBA Betting Analytics
 
-This project now runs as a lightweight FastAPI web app so it can be used on Android via Termux. It reuses the existing analytics, data sync, and SQLite database layers; only the UI and entrypoint changed.
+This project has two UIs:
+- **Desktop (PySide6)** - Full-featured desktop app for Windows/Mac/Linux
+- **Web (FastAPI)** - Lightweight mobile-friendly web app for Android via Termux
 
-## Android/Termux Installation
+Both share the same analytics, data sync, and SQLite database.
+
+## Desktop Version (Windows/Mac/Linux)
+
+```bash
+# Install desktop dependencies
+pip install -r requirements-desktop.txt
+
+# Run desktop app
+python desktop.py
+```
+
+## Web/Mobile Version (Android via Termux)
 
 ### Prerequisites
 
