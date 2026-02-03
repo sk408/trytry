@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
@@ -24,6 +26,17 @@ from src.data.sync_service import (
     sync_schedule,
 )
 from src.data.nba_fetcher import get_current_season
+from src.data.gamecast import (
+    get_live_games,
+    get_game_odds,
+    get_box_score,
+    get_play_by_play,
+    GamecastClient,
+    GameInfo,
+    GameOdds,
+    BoxScore,
+    PlayEvent,
+)
 from src.database import migrations
 from src.database.db import DB_PATH, get_conn
 from src.web.player_utils import get_position_display, load_injured_with_stats, load_players_df
@@ -615,6 +628,222 @@ async def admin_reset(request: Request) -> HTMLResponse:
     except Exception as exc:  # pragma: no cover - defensive
         status = f"Reset failed: {exc}"
     return await admin(request, status=status)
+
+
+# --- Gamecast (ESPN real-time game data) ---
+
+@app.get("/gamecast", response_class=HTMLResponse)
+async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse:
+    """Gamecast page with live play-by-play and odds."""
+    games = await asyncio.to_thread(get_live_games)
+    
+    selected_game: GameInfo | None = None
+    odds: GameOdds | None = None
+    box: BoxScore | None = None
+    recent_plays: List[PlayEvent] = []
+    
+    if game_id:
+        # Find the selected game
+        selected_game = next((g for g in games if g.game_id == game_id), None)
+        
+        # Fetch initial data
+        odds = await asyncio.to_thread(get_game_odds, game_id)
+        box = await asyncio.to_thread(get_box_score, game_id)
+        recent_plays = await asyncio.to_thread(get_play_by_play, game_id, "")
+        recent_plays = recent_plays[:20]  # Last 20 plays
+    
+    return templates.TemplateResponse(
+        "gamecast.html",
+        {
+            "request": request,
+            "games": games,
+            "selected_game": selected_game,
+            "game_id": game_id,
+            "odds": odds,
+            "box": box,
+            "recent_plays": recent_plays,
+        },
+    )
+
+
+@app.get("/api/gamecast/games")
+async def api_gamecast_games() -> List[dict]:
+    """Get list of today's NBA games."""
+    games = await asyncio.to_thread(get_live_games)
+    return [
+        {
+            "game_id": g.game_id,
+            "home_team": g.home_team,
+            "away_team": g.away_team,
+            "home_abbr": g.home_abbr,
+            "away_abbr": g.away_abbr,
+            "home_score": g.home_score,
+            "away_score": g.away_score,
+            "status": g.status,
+            "period": g.period,
+            "clock": g.clock,
+            "start_time": g.start_time,
+        }
+        for g in games
+    ]
+
+
+@app.get("/api/gamecast/odds/{game_id}")
+async def api_gamecast_odds(game_id: str) -> dict:
+    """Get current odds for a game."""
+    odds = await asyncio.to_thread(get_game_odds, game_id)
+    if not odds:
+        return {"error": "Odds not available"}
+    return {
+        "spread": odds.spread,
+        "spread_odds": odds.spread_odds,
+        "over_under": odds.over_under,
+        "over_odds": odds.over_odds,
+        "under_odds": odds.under_odds,
+        "home_ml": odds.home_ml,
+        "away_ml": odds.away_ml,
+        "home_win_pct": odds.home_win_pct,
+        "away_win_pct": odds.away_win_pct,
+        "home_ats_record": odds.home_ats_record,
+        "away_ats_record": odds.away_ats_record,
+    }
+
+
+@app.get("/api/gamecast/boxscore/{game_id}")
+async def api_gamecast_boxscore(game_id: str) -> dict:
+    """Get current box score for a game."""
+    box = await asyncio.to_thread(get_box_score, game_id)
+    if not box:
+        return {"error": "Box score not available"}
+    
+    def player_to_dict(p):
+        return {
+            "name": p.name,
+            "position": p.position,
+            "minutes": p.minutes,
+            "points": p.points,
+            "rebounds": p.rebounds,
+            "assists": p.assists,
+            "fg": p.fg,
+            "fg3": p.fg3,
+            "ft": p.ft,
+        }
+    
+    return {
+        "home_players": [player_to_dict(p) for p in box.home_players],
+        "away_players": [player_to_dict(p) for p in box.away_players],
+        "home_totals": box.home_totals,
+        "away_totals": box.away_totals,
+    }
+
+
+@app.get("/api/gamecast/stream/{game_id}")
+async def api_gamecast_stream(game_id: str) -> StreamingResponse:
+    """Stream live game events via SSE."""
+    
+    async def generate() -> AsyncGenerator[str, None]:
+        client = GamecastClient(game_id)
+        last_play_id = ""
+        last_odds_time = 0.0
+        poll_interval = 10.0
+        odds_interval = 30.0
+        
+        # Send initial odds
+        odds = await asyncio.to_thread(get_game_odds, game_id)
+        if odds:
+            yield f"data: {json.dumps({'type': 'odds', 'data': _odds_to_dict(odds)})}\n\n"
+            last_odds_time = time.time()
+        
+        # Stream play-by-play
+        while True:
+            try:
+                # Check for new plays
+                plays = await asyncio.to_thread(get_play_by_play, game_id, last_play_id)
+                
+                for play in reversed(plays):  # Oldest first
+                    yield f"data: {json.dumps({'type': 'play', 'data': _play_to_dict(play)})}\n\n"
+                    last_play_id = play.event_id
+                
+                # Update score
+                if plays:
+                    games = await asyncio.to_thread(get_live_games)
+                    game = next((g for g in games if g.game_id == game_id), None)
+                    if game:
+                        yield f"data: {json.dumps({'type': 'score', 'data': _game_to_dict(game)})}\n\n"
+                
+                # Periodic odds update
+                now = time.time()
+                if now - last_odds_time >= odds_interval:
+                    odds = await asyncio.to_thread(get_game_odds, game_id)
+                    if odds:
+                        yield f"data: {json.dumps({'type': 'odds', 'data': _odds_to_dict(odds)})}\n\n"
+                    last_odds_time = now
+                
+                # Check if game is over
+                games = await asyncio.to_thread(get_live_games)
+                game = next((g for g in games if g.game_id == game_id), None)
+                if game and game.status == "final":
+                    yield f"data: {json.dumps({'type': 'final', 'data': _game_to_dict(game)})}\n\n"
+                    break
+                
+                await asyncio.sleep(poll_interval)
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                await asyncio.sleep(poll_interval)
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _odds_to_dict(odds: GameOdds) -> dict:
+    """Convert GameOdds to dict for JSON serialization."""
+    return {
+        "spread": odds.spread,
+        "spread_odds": odds.spread_odds,
+        "over_under": odds.over_under,
+        "over_odds": odds.over_odds,
+        "under_odds": odds.under_odds,
+        "home_ml": odds.home_ml,
+        "away_ml": odds.away_ml,
+        "home_win_pct": odds.home_win_pct,
+        "away_win_pct": odds.away_win_pct,
+        "home_ats_record": odds.home_ats_record,
+        "away_ats_record": odds.away_ats_record,
+    }
+
+
+def _play_to_dict(play: PlayEvent) -> dict:
+    """Convert PlayEvent to dict for JSON serialization."""
+    return {
+        "event_id": play.event_id,
+        "clock": play.clock,
+        "period": play.period,
+        "text": play.text,
+        "team": play.team,
+        "score_home": play.score_home,
+        "score_away": play.score_away,
+        "event_type": play.event_type,
+    }
+
+
+def _game_to_dict(game: GameInfo) -> dict:
+    """Convert GameInfo to dict for JSON serialization."""
+    return {
+        "game_id": game.game_id,
+        "home_team": game.home_team,
+        "away_team": game.away_team,
+        "home_abbr": game.home_abbr,
+        "away_abbr": game.away_abbr,
+        "home_score": game.home_score,
+        "away_score": game.away_score,
+        "status": game.status,
+        "period": game.period,
+        "clock": game.clock,
+    }
 
 
 def create_app() -> FastAPI:

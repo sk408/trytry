@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+{% set title = "Gamecast" %}
+
+{% block content %}
+<h1 class="page-title">Gamecast</h1>
+
+<!-- Game Selector -->
+<div class="card">
+  <h2>Select Game</h2>
+  {% if games %}
+  <div class="games-list">
+    {% for g in games %}
+    <a href="/gamecast?game_id={{ g.game_id }}" 
+       class="game-row {% if game_id == g.game_id %}active{% endif %}">
+      <div class="game-teams">
+        <span>{{ g.away_abbr }}</span>
+        <span class="at">@</span>
+        <span class="home">{{ g.home_abbr }}</span>
+      </div>
+      <div class="game-status">
+        {% if g.status == 'in_progress' %}
+          <span class="text-success">LIVE Q{{ g.period }} {{ g.clock }}</span>
+          <span style="margin-left: 8px;">{{ g.away_score }} - {{ g.home_score }}</span>
+        {% elif g.status == 'final' %}
+          <span class="text-muted">FINAL</span>
+          <span style="margin-left: 8px;">{{ g.away_score }} - {{ g.home_score }}</span>
+        {% else %}
+          <span class="text-muted">{{ g.start_time[:16] if g.start_time else 'Upcoming' }}</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No games scheduled today</p>
+  </div>
+  {% endif %}
+</div>
+
+{% if selected_game %}
+<!-- Live Score -->
+<div class="card" id="score-card">
+  <div class="score-display">
+    <div class="score-team">
+      <span class="team-name">{{ selected_game.away_team }}</span>
+      <span class="team-abbr">{{ selected_game.away_abbr }}</span>
+      <span class="team-score" id="away-score">{{ selected_game.away_score }}</span>
+    </div>
+    <div class="score-status">
+      {% if selected_game.status == 'in_progress' %}
+        <span class="live-badge">LIVE</span>
+        <span id="period">Q{{ selected_game.period }}</span>
+        <span id="clock">{{ selected_game.clock }}</span>
+      {% elif selected_game.status == 'final' %}
+        <span class="final-badge">FINAL</span>
+      {% else %}
+        <span class="upcoming-badge">UPCOMING</span>
+      {% endif %}
+    </div>
+    <div class="score-team">
+      <span class="team-name">{{ selected_game.home_team }}</span>
+      <span class="team-abbr">{{ selected_game.home_abbr }}</span>
+      <span class="team-score" id="home-score">{{ selected_game.home_score }}</span>
+    </div>
+  </div>
+</div>
+
+<!-- Live Odds Panel -->
+{% if odds %}
+<div class="card" id="odds-card">
+  <h2>Live Odds</h2>
+  
+  <!-- Win Probability Bar -->
+  <div class="win-prob-container">
+    <div class="win-prob-labels">
+      <span>{{ selected_game.away_abbr }} <span id="away-win-pct">{{ "%.1f"|format(odds.away_win_pct) }}%</span></span>
+      <span><span id="home-win-pct">{{ "%.1f"|format(odds.home_win_pct) }}%</span> {{ selected_game.home_abbr }}</span>
+    </div>
+    <div class="win-prob-bar">
+      <div class="win-prob-away" id="win-prob-away" style="width: {{ odds.away_win_pct }}%"></div>
+      <div class="win-prob-home" id="win-prob-home" style="width: {{ odds.home_win_pct }}%"></div>
+    </div>
+  </div>
+  
+  <!-- Betting Lines -->
+  <div class="odds-grid">
+    <div class="odds-item">
+      <span class="odds-label">Spread</span>
+      <span class="odds-value" id="spread">{{ selected_game.home_abbr }} {{ "%+.1f"|format(odds.spread) if odds.spread else 'N/A' }}</span>
+      <span class="odds-sub" id="spread-odds">{{ odds.spread_odds or '' }}</span>
+    </div>
+    <div class="odds-item">
+      <span class="odds-label">Over/Under</span>
+      <span class="odds-value" id="over-under">{{ "%.1f"|format(odds.over_under) if odds.over_under else 'N/A' }}</span>
+      <span class="odds-sub">O {{ odds.over_odds or '' }} / U {{ odds.under_odds or '' }}</span>
+    </div>
+    <div class="odds-item">
+      <span class="odds-label">{{ selected_game.away_abbr }} ML</span>
+      <span class="odds-value" id="away-ml">{{ odds.away_ml or 'N/A' }}</span>
+      <span class="odds-sub">ATS: {{ odds.away_ats_record or 'N/A' }}</span>
+    </div>
+    <div class="odds-item">
+      <span class="odds-label">{{ selected_game.home_abbr }} ML</span>
+      <span class="odds-value" id="home-ml">{{ odds.home_ml or 'N/A' }}</span>
+      <span class="odds-sub">ATS: {{ odds.home_ats_record or 'N/A' }}</span>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Play-by-Play Feed -->
+<div class="card">
+  <h2>Play-by-Play</h2>
+  <div class="play-feed" id="play-feed">
+    {% if recent_plays %}
+      {% for play in recent_plays %}
+      <div class="play-item {{ 'scoring' if play.event_type in ['made shot', 'free throw'] else '' }}">
+        <div class="play-meta">
+          <span class="play-period">Q{{ play.period }}</span>
+          <span class="play-clock">{{ play.clock }}</span>
+          {% if play.team %}
+          <span class="play-team">{{ play.team }}</span>
+          {% endif %}
+        </div>
+        <div class="play-text">{{ play.text }}</div>
+        <div class="play-score">{{ play.score_away }} - {{ play.score_home }}</div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">
+        <p>No plays yet</p>
+        {% if selected_game.status == 'scheduled' %}
+        <p class="text-muted">Game has not started</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Box Score -->
+{% if box and (box.home_players or box.away_players) %}
+<div class="card">
+  <h2>Box Score</h2>
+  
+  <!-- Away Team -->
+  <h3>{{ selected_game.away_team }}</h3>
+  <div class="scroll-x">
+    <table class="box-table">
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>MIN</th>
+          <th>PTS</th>
+          <th>REB</th>
+          <th>AST</th>
+          <th>FG</th>
+          <th>3PT</th>
+          <th>FT</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in box.away_players %}
+        <tr>
+          <td>{{ p.name }} <span class="text-muted">{{ p.position }}</span></td>
+          <td>{{ p.minutes }}</td>
+          <td><strong>{{ p.points }}</strong></td>
+          <td>{{ p.rebounds }}</td>
+          <td>{{ p.assists }}</td>
+          <td>{{ p.fg }}</td>
+          <td>{{ p.fg3 }}</td>
+          <td>{{ p.ft }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  
+  <!-- Home Team -->
+  <h3 class="mt-4">{{ selected_game.home_team }}</h3>
+  <div class="scroll-x">
+    <table class="box-table">
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>MIN</th>
+          <th>PTS</th>
+          <th>REB</th>
+          <th>AST</th>
+          <th>FG</th>
+          <th>3PT</th>
+          <th>FT</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in box.home_players %}
+        <tr>
+          <td>{{ p.name }} <span class="text-muted">{{ p.position }}</span></td>
+          <td>{{ p.minutes }}</td>
+          <td><strong>{{ p.points }}</strong></td>
+          <td>{{ p.rebounds }}</td>
+          <td>{{ p.assists }}</td>
+          <td>{{ p.fg }}</td>
+          <td>{{ p.fg3 }}</td>
+          <td>{{ p.ft }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Live Streaming Script -->
+{% if selected_game.status == 'in_progress' %}
+<script>
+const gameId = "{{ game_id }}";
+let eventSource = null;
+
+function startStream() {
+  if (eventSource) {
+    eventSource.close();
+  }
+  
+  eventSource = new EventSource(`/api/gamecast/stream/${gameId}`);
+  
+  eventSource.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    
+    switch(data.type) {
+      case 'play':
+        addPlay(data.data);
+        break;
+      case 'score':
+        updateScore(data.data);
+        break;
+      case 'odds':
+        updateOdds(data.data);
+        break;
+      case 'final':
+        handleFinal(data.data);
+        break;
+      case 'error':
+        console.error('Stream error:', data.message);
+        break;
+    }
+  };
+  
+  eventSource.onerror = function() {
+    console.log('Stream connection lost, reconnecting...');
+    setTimeout(startStream, 5000);
+  };
+}
+
+function addPlay(play) {
+  const feed = document.getElementById('play-feed');
+  const emptyState = feed.querySelector('.empty-state');
+  if (emptyState) {
+    emptyState.remove();
+  }
+  
+  const playEl = document.createElement('div');
+  playEl.className = 'play-item new';
+  playEl.innerHTML = `
+    <div class="play-meta">
+      <span class="play-period">Q${play.period}</span>
+      <span class="play-clock">${play.clock}</span>
+      ${play.team ? `<span class="play-team">${play.team}</span>` : ''}
+    </div>
+    <div class="play-text">${play.text}</div>
+    <div class="play-score">${play.score_away} - ${play.score_home}</div>
+  `;
+  
+  feed.insertBefore(playEl, feed.firstChild);
+  
+  // Keep only last 30 plays
+  while (feed.children.length > 30) {
+    feed.removeChild(feed.lastChild);
+  }
+}
+
+function updateScore(game) {
+  document.getElementById('away-score').textContent = game.away_score;
+  document.getElementById('home-score').textContent = game.home_score;
+  
+  const period = document.getElementById('period');
+  const clock = document.getElementById('clock');
+  if (period) period.textContent = `Q${game.period}`;
+  if (clock) clock.textContent = game.clock;
+}
+
+function updateOdds(odds) {
+  const awayPct = document.getElementById('away-win-pct');
+  const homePct = document.getElementById('home-win-pct');
+  const awayBar = document.getElementById('win-prob-away');
+  const homeBar = document.getElementById('win-prob-home');
+  
+  if (awayPct) awayPct.textContent = odds.away_win_pct.toFixed(1) + '%';
+  if (homePct) homePct.textContent = odds.home_win_pct.toFixed(1) + '%';
+  if (awayBar) awayBar.style.width = odds.away_win_pct + '%';
+  if (homeBar) homeBar.style.width = odds.home_win_pct + '%';
+  
+  const spread = document.getElementById('spread');
+  const overUnder = document.getElementById('over-under');
+  const awayMl = document.getElementById('away-ml');
+  const homeMl = document.getElementById('home-ml');
+  
+  if (spread && odds.spread) {
+    spread.textContent = (odds.spread > 0 ? '+' : '') + odds.spread.toFixed(1);
+  }
+  if (overUnder && odds.over_under) {
+    overUnder.textContent = odds.over_under.toFixed(1);
+  }
+  if (awayMl) awayMl.textContent = odds.away_ml || 'N/A';
+  if (homeMl) homeMl.textContent = odds.home_ml || 'N/A';
+}
+
+function handleFinal(game) {
+  if (eventSource) {
+    eventSource.close();
+  }
+  // Refresh page to show final state
+  location.reload();
+}
+
+// Start streaming when page loads
+document.addEventListener('DOMContentLoaded', startStream);
+
+// Clean up on page unload
+window.addEventListener('beforeunload', function() {
+  if (eventSource) {
+    eventSource.close();
+  }
+});
+</script>
+{% endif %}
+
+{% endif %}
+
+<style>
+/* Score Display */
+.score-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0;
+}
+
+.score-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.team-name {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.team-abbr {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.team-score {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.score-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+}
+
+.live-badge {
+  background: var(--danger);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  animation: pulse 2s infinite;
+}
+
+.final-badge {
+  background: var(--border);
+  color: var(--text);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.upcoming-badge {
+  background: var(--accent);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Win Probability */
+.win-prob-container {
+  margin-bottom: 20px;
+}
+
+.win-prob-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.win-prob-bar {
+  display: flex;
+  height: 24px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-dark);
+}
+
+.win-prob-away {
+  background: var(--danger);
+  transition: width 0.5s ease;
+}
+
+.win-prob-home {
+  background: var(--accent);
+  transition: width 0.5s ease;
+}
+
+/* Odds Grid */
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.odds-item {
+  background: var(--bg-dark);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.odds-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.odds-value {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.odds-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Play Feed */
+.play-feed {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.play-item {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.3s;
+}
+
+.play-item:last-child {
+  border-bottom: none;
+}
+
+.play-item.new {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.play-item.scoring {
+  border-left: 3px solid var(--success);
+}
+
+.play-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.play-period {
+  font-weight: 700;
+}
+
+.play-team {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.play-text {
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.play-score {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Box Score Table */
+.box-table {
+  font-size: 0.8rem;
+}
+
+.box-table th {
+  font-size: 0.7rem;
+  padding: 8px 6px;
+}
+
+.box-table td {
+  padding: 8px 6px;
+}
+
+/* Desktop */
+@media (min-width: 768px) {
+  .odds-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  
+  .team-score {
+    font-size: 3.5rem;
+  }
+  
+  .team-name {
+    font-size: 0.875rem;
+  }
+}
+</style>
+{% endblock %}
