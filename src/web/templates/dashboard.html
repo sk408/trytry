@@ -6,8 +6,8 @@
   <div class="status" id="status">{{ status }}</div>
   
   <div class="actions">
-    <button type="button" onclick="runSync('/api/sync/data', 'Syncing today\'s games...')" id="btn-sync">
-      Sync Today
+    <button type="button" onclick="runSync('/api/sync/data', 'Syncing next 3 days...')" id="btn-sync">
+      Sync 3 Days
     </button>
     <button type="button" onclick="runSync('/api/sync/season', 'Syncing full season (this takes a while)...')" id="btn-season">
       Sync Full Season
@@ -21,7 +21,7 @@
   </div>
   
   <p class="text-muted" style="font-size: 0.8rem; margin-top: 8px;">
-    <strong>Sync Today:</strong> Fetches teams/rosters for today's games + last 7 days of stats<br>
+    <strong>Sync 3 Days:</strong> Fetches teams/rosters for today + next 2 days + last 7 days of stats<br>
     <strong>Sync Full Season:</strong> Fetches entire season's game stats (~120 days, may take 10+ minutes)
   </p>
   

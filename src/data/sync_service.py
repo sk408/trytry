@@ -38,27 +38,35 @@ def sync_reference_data(
     
     For college basketball, we use on-demand loading:
     - If team_ids provided, only sync those teams
-    - Otherwise, sync teams from today's scheduled games
+    - Otherwise, sync teams from today + next 2 days of scheduled games
     
     Returns:
         DataFrame of synced players
     """
+    from datetime import date, timedelta
+    
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
     migrations.init_db()
     migrations.ensure_columns()
     
-    # Get team IDs from today's games if not provided
+    # Get team IDs from today + next 2 days of games if not provided
     if team_ids is None:
-        progress("Fetching today's scheduled games...")
-        games = fetch_scoreboard(league=league)
+        progress("Fetching games for today + next 2 days...")
+        all_games = []
+        for day_offset in range(3):  # Today, tomorrow, day after
+            game_date = date.today() + timedelta(days=day_offset)
+            date_str = game_date.strftime("%Y%m%d")
+            day_games = fetch_scoreboard(league=league, dates=date_str)
+            all_games.extend(day_games)
+        
         team_ids = list(set(
-            [g["home_team_id"] for g in games] + [g["away_team_id"] for g in games]
+            [g["home_team_id"] for g in all_games] + [g["away_team_id"] for g in all_games]
         ))
-        progress(f"Found {len(team_ids)} teams from {len(games)} games")
+        progress(f"Found {len(team_ids)} teams from {len(all_games)} games (3 days)")
     
     if not team_ids:
-        progress("No games today - no teams to sync")
+        progress("No games in next 3 days - no teams to sync")
         return pd.DataFrame(columns=["id", "full_name", "team_id", "position"])
     
     # Fetch teams
@@ -618,7 +626,7 @@ def full_sync(
     
     Day-ahead loading approach:
     1. Get upcoming schedule (14 days) and sync team names
-    2. Sync teams and rosters for today's games
+    2. Sync teams and rosters for today + next 2 days of games
     3. Sync recent game stats (or full season if full_season=True)
     4. Sync current injuries
     
@@ -641,7 +649,7 @@ def full_sync(
     except Exception as exc:
         progress(f"Schedule team sync skipped: {exc}")
     
-    progress("Sync: reference data (teams + rosters from today's games)")
+    progress("Sync: reference data (teams + rosters for next 3 days)")
     players_df = sync_reference_data(progress_cb=progress, season=season, league=league)
     
     if not players_df.empty:
