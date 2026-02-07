@@ -74,19 +74,166 @@
     <div class="injury-item {{ home_injury.status }}">
       <strong>{{ home_stats.team_abbr }}:</strong> 
       {{ home_injury.text }}
-      {% if home_injury.lost_ppg > 0 %}(-{{ "%.1f"|format(home_injury.lost_ppg) }} PPG){% endif %}
+      {% if home_injury.lost_ppg > 0 %}
+        (-{{ "%.1f"|format(home_injury.lost_ppg) }} PPG
+        {%- if home_injury.lost_rpg > 0 %}, -{{ "%.1f"|format(home_injury.lost_rpg) }} RPG{% endif %}
+        {%- if home_injury.lost_apg > 0 %}, -{{ "%.1f"|format(home_injury.lost_apg) }} APG{% endif %})
+      {% endif %}
     </div>
     {% endif %}
     {% if away_injury %}
     <div class="injury-item {{ away_injury.status }}">
       <strong>{{ away_stats.team_abbr }}:</strong>
       {{ away_injury.text }}
-      {% if away_injury.lost_ppg > 0 %}(-{{ "%.1f"|format(away_injury.lost_ppg) }} PPG){% endif %}
+      {% if away_injury.lost_ppg > 0 %}
+        (-{{ "%.1f"|format(away_injury.lost_ppg) }} PPG
+        {%- if away_injury.lost_rpg > 0 %}, -{{ "%.1f"|format(away_injury.lost_rpg) }} RPG{% endif %}
+        {%- if away_injury.lost_apg > 0 %}, -{{ "%.1f"|format(away_injury.lost_apg) }} APG{% endif %})
+      {% endif %}
     </div>
     {% endif %}
   </div>
   {% endif %}
 </div>
+
+<!-- Efficiency Comparison -->
+{% if home_stats and away_stats %}
+<div class="card">
+  <h2>Efficiency Comparison</h2>
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>{{ home_stats.team_abbr }} (Home)</th>
+          <th>{{ away_stats.team_abbr }} (Away)</th>
+          <th>Edge</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Offensive Rating</strong></td>
+          <td>{{ "%.1f"|format(home_stats.offensive_rating) }}</td>
+          <td>{{ "%.1f"|format(away_stats.offensive_rating) }}</td>
+          <td>{{ home_stats.team_abbr if home_stats.offensive_rating > away_stats.offensive_rating else away_stats.team_abbr }}</td>
+        </tr>
+        <tr>
+          <td><strong>Defensive Rating</strong></td>
+          <td>{{ "%.1f"|format(home_stats.defensive_rating) }}</td>
+          <td>{{ "%.1f"|format(away_stats.defensive_rating) }}</td>
+          <td>{{ home_stats.team_abbr if home_stats.defensive_rating < away_stats.defensive_rating else away_stats.team_abbr }}</td>
+        </tr>
+        <tr>
+          <td><strong>Net Rating</strong></td>
+          <td>{{ "%+.1f"|format(home_stats.net_rating) }}</td>
+          <td>{{ "%+.1f"|format(away_stats.net_rating) }}</td>
+          <td>{{ home_stats.team_abbr if home_stats.net_rating > away_stats.net_rating else away_stats.team_abbr }}</td>
+        </tr>
+        <tr>
+          <td><strong>Pace</strong></td>
+          <td>{{ "%.1f"|format(home_stats.pace) }}</td>
+          <td>{{ "%.1f"|format(away_stats.pace) }}</td>
+          <td>{{ "%.1f"|format((home_stats.pace + away_stats.pace) / 2) }} avg</td>
+        </tr>
+        <tr>
+          <td><strong>True Shooting %</strong></td>
+          <td>{{ "%.1f"|format(home_stats.team_ts_pct) }}%</td>
+          <td>{{ "%.1f"|format(away_stats.team_ts_pct) }}%</td>
+          <td>{{ home_stats.team_abbr if home_stats.team_ts_pct > away_stats.team_ts_pct else away_stats.team_abbr }}</td>
+        </tr>
+        <tr>
+          <td><strong>Turnover Margin</strong></td>
+          <td>{{ "%+.1f"|format(home_stats.turnover_margin) }}</td>
+          <td>{{ "%+.1f"|format(away_stats.turnover_margin) }}</td>
+          <td>{{ home_stats.team_abbr if home_stats.turnover_margin > away_stats.turnover_margin else away_stats.team_abbr }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Rebounding & Assists Matchup -->
+<div class="card">
+  <h2>Rebounding &amp; Assists Matchup</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(home_stats.total_rpg) }}</div>
+      <div class="stat-label">{{ home_stats.team_abbr }} RPG</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(away_stats.total_rpg) }}</div>
+      <div class="stat-label">{{ away_stats.team_abbr }} RPG</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%+.1f"|format(home_stats.total_rpg - away_stats.total_rpg) }}</div>
+      <div class="stat-label">Rebound Diff</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(home_stats.total_apg) }}</div>
+      <div class="stat-label">{{ home_stats.team_abbr }} APG</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(away_stats.total_apg) }}</div>
+      <div class="stat-label">{{ away_stats.team_abbr }} APG</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%+.1f"|format(home_stats.total_apg - away_stats.total_apg) }}</div>
+      <div class="stat-label">Assist Diff</div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Form & Strength of Schedule -->
+<div class="card">
+  <h2>Recent Form &amp; Schedule Strength</h2>
+  <div class="stats-grid">
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(home_stats.recent_ppg) }}</div>
+      <div class="stat-label">{{ home_stats.team_abbr }} Last 5 PPG</div>
+      <div class="stat-sub">
+        {% if home_stats.recent_ppg > home_stats.total_ppg %}
+          Trending Up (+{{ "%.1f"|format(home_stats.recent_ppg - home_stats.total_ppg) }})
+        {% elif home_stats.recent_ppg < home_stats.total_ppg %}
+          Trending Down ({{ "%.1f"|format(home_stats.recent_ppg - home_stats.total_ppg) }})
+        {% else %}
+          Steady
+        {% endif %}
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%.1f"|format(away_stats.recent_ppg) }}</div>
+      <div class="stat-label">{{ away_stats.team_abbr }} Last 5 PPG</div>
+      <div class="stat-sub">
+        {% if away_stats.recent_ppg > away_stats.total_ppg %}
+          Trending Up (+{{ "%.1f"|format(away_stats.recent_ppg - away_stats.total_ppg) }})
+        {% elif away_stats.recent_ppg < away_stats.total_ppg %}
+          Trending Down ({{ "%.1f"|format(away_stats.recent_ppg - away_stats.total_ppg) }})
+        {% else %}
+          Steady
+        {% endif %}
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%+.1f"|format(home_stats.sos) }}</div>
+      <div class="stat-label">{{ home_stats.team_abbr }} SOS</div>
+      <div class="stat-sub">
+        {% if home_stats.sos > 2 %}Strong schedule
+        {% elif home_stats.sos < -2 %}Weak schedule
+        {% else %}Average schedule{% endif %}
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">{{ "%+.1f"|format(away_stats.sos) }}</div>
+      <div class="stat-label">{{ away_stats.team_abbr }} SOS</div>
+      <div class="stat-sub">
+        {% if away_stats.sos > 2 %}Strong schedule
+        {% elif away_stats.sos < -2 %}Weak schedule
+        {% else %}Average schedule{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- Historical Performance -->
 {% if backtest %}

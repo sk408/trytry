@@ -120,6 +120,23 @@ CREATE TABLE IF NOT EXISTS synced_games (
 
 CREATE INDEX IF NOT EXISTS idx_synced_games_date
     ON synced_games(game_date);
+
+-- Autotuned prediction weight overrides (per-team or global)
+CREATE TABLE IF NOT EXISTS team_weights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_id INTEGER,                -- NULL = global weights
+    weight_key TEXT NOT NULL,       -- key from PREDICTION_CONFIG
+    weight_value REAL NOT NULL,     -- tuned value
+    tuned_at TEXT NOT NULL,         -- ISO timestamp
+    spread_error_before REAL,       -- avg |spread error| before tuning
+    spread_error_after REAL,        -- avg |spread error| after tuning
+    total_error_before REAL,
+    total_error_after REAL,
+    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_weights_team
+    ON team_weights(team_id);
 """
 
 

@@ -65,6 +65,15 @@ class TeamMatchupStats:
     team_ft_rate: float = 0.0   # team FT attempt rate
     # Net ratings
     turnover_margin: float = 0.0  # steals - turnovers (positive = good)
+    # Pace-adjusted efficiency (per 100 possessions)
+    offensive_rating: float = 0.0   # points scored per 100 possessions
+    defensive_rating: float = 0.0   # points allowed per 100 possessions
+    net_rating: float = 0.0         # ORtg - DRtg
+    pace: float = 0.0               # estimated possessions per game
+    # Strength of schedule
+    sos: float = 0.0                # normalized SOS (0.0 = average)
+    # Recent form
+    recent_ppg: float = 0.0         # last 5 games team PPG (for trend display)
 
 
 def _load_player_df(player_id: int) -> pd.DataFrame:
@@ -284,7 +293,14 @@ def get_team_matchup_stats(
     
     # High-scoring injured players (15+ PPG) create usage boost for remaining scorers
     high_scorer_injured_ppg = sum(p.ppg for p in injured if p.ppg >= 15)
-    
+
+    # ============ INJURED REBOUNDS / ASSISTS / DEFENSE LOSS ============
+    # Track lost production beyond just points
+    injured_rpg_by_pos = {pos: sum(p.rpg for p in plist) for pos, plist in injured_by_pos.items()}
+    injured_apg_by_pos = {pos: sum(p.apg for p in plist) for pos, plist in injured_by_pos.items()}
+    injured_spg_by_pos = {pos: sum(p.spg for p in plist) for pos, plist in injured_by_pos.items()}
+    injured_bpg_by_pos = {pos: sum(p.bpg for p in plist) for pos, plist in injured_by_pos.items()}
+
     # ============ FT EFFICIENCY LOSS CALCULATION ============
     # When a high-FT% shooter is injured, their replacement may be worse at FTs
     # This matters especially in late-game foul situations
@@ -373,61 +389,65 @@ def get_team_matchup_stats(
         pos_group = _get_position_group(p.position)
         pos_injured_minutes = injured_minutes_by_pos.get(pos_group, 0)
         pos_active_mpg = active_mpg_by_pos.get(pos_group, 0)
-        
+
         extra_minutes = 0.0
         extra_points = 0.0
-        
+        extra_rebounds = 0.0
+        extra_assists = 0.0
+
         # 1. Position-based minute redistribution
         if pos_active_mpg > 0 and pos_injured_minutes > 0:
-            # Player's share of position minutes
             pos_share = p.mpg / pos_active_mpg
-            # Extra minutes from injured players at same position
             extra_minutes = pos_injured_minutes * pos_share
-            # Cap at ~38 total minutes (college games are 40 min, players rarely play full game)
             max_extra = max(0, 38 - p.mpg)
             extra_minutes = min(extra_minutes, max_extra)
             # Points from extra minutes (with fatigue discount)
             extra_points = extra_minutes * get_ppm(p) * 0.85
-        
+
+            # Rebounds redistribution: replacements recover ~70 % efficiency
+            pos_lost_rpg = injured_rpg_by_pos.get(pos_group, 0)
+            if pos_lost_rpg > 0:
+                rpm = (p.rpg / p.mpg) if p.mpg > 0 else 0.0
+                extra_rebounds = extra_minutes * rpm * 0.70
+
+            # Assists redistribution: playmaking is harder to replace (~60 %)
+            pos_lost_apg = injured_apg_by_pos.get(pos_group, 0)
+            if pos_lost_apg > 0:
+                apm = (p.apg / p.mpg) if p.mpg > 0 else 0.0
+                extra_assists = extra_minutes * apm * 0.60
+
         # 2. Usage boost for high scorers when other high scorers are out
-        # When a 20 PPG player is out, other scorers get more touches
         if high_scorer_injured_ppg > 0 and p.ppg >= 12 and total_high_scorer_ppg > 0:
-            # This player's share of high-scorer production
             usage_share = p.ppg / total_high_scorer_ppg
-            # Redistribute ~30% of lost scoring (rest goes to role players, bench, etc.)
             usage_boost = high_scorer_injured_ppg * usage_share * 0.30
             extra_points += usage_boost
-        
+
         # 3. Adjacent position spillover
-        # If no guards available, forwards/wings might play some guard minutes
-        # And vice versa - this handles position flexibility
         adjacent_positions = {"G": ["F"], "F": ["G", "C"], "C": ["F"]}
         for adj_pos in adjacent_positions.get(pos_group, []):
             adj_injured_minutes = injured_minutes_by_pos.get(adj_pos, 0)
             adj_active_mpg = active_mpg_by_pos.get(adj_pos, 0)
-            
-            # If adjacent position has injuries and few active players there
+
             if adj_injured_minutes > 5 and adj_active_mpg < 50:
-                # This player might pick up some of those minutes (spillover)
-                spillover_minutes = min(3, adj_injured_minutes * 0.15)  # Small amount
-                spillover_points = spillover_minutes * get_ppm(p) * 0.75  # Lower efficiency
+                spillover_minutes = min(3, adj_injured_minutes * 0.15)
+                spillover_points = spillover_minutes * get_ppm(p) * 0.75
                 extra_points += spillover_points
-        
-        # Base stats (no change)
+
+        # Base stats + redistribution for rebounds/assists
         total_ppg += p.ppg
-        total_rpg += p.rpg
-        total_apg += p.apg
+        total_rpg += p.rpg + extra_rebounds
+        total_apg += p.apg + extra_assists
         total_spg += p.spg
         total_bpg += p.bpg
         total_tpg += p.tpg
-        
+
         # Weight efficiency metrics by minutes
         if p.mpg > 0:
             weighted_ts_sum += p.ts_pct * p.mpg
             weighted_fg3_rate_sum += p.fg3_rate * p.mpg
             weighted_ft_rate_sum += p.ft_rate * p.mpg
             total_minutes_weight += p.mpg
-        
+
         # For projection, weight by context
         base = p.ppg * 0.4
         loc_val = p.ppg_home if is_home else p.ppg_away
@@ -462,7 +482,12 @@ def get_team_matchup_stats(
     
     # Turnover margin: positive means team creates more turnovers than commits
     turnover_margin = total_spg - total_tpg
-    
+
+    # ============ TEAM-LEVEL RATINGS, PACE, SOS, RECENT FORM ============
+    ratings = calculate_team_ratings(team_id)
+    sos = calculate_strength_of_schedule(team_id)
+    recent_ppg = calculate_recent_form(team_id, last_n=5)
+
     return TeamMatchupStats(
         team_id=team_id,
         team_abbr=team_info[1],
@@ -480,6 +505,14 @@ def get_team_matchup_stats(
         team_fg3_rate=team_fg3_rate,
         team_ft_rate=team_ft_rate,
         turnover_margin=turnover_margin,
+        # Pace-adjusted efficiency
+        offensive_rating=ratings["offensive_rating"],
+        defensive_rating=ratings["defensive_rating"],
+        net_rating=ratings["net_rating"],
+        pace=ratings["pace"],
+        # Strength of schedule & recent form
+        sos=sos,
+        recent_ppg=recent_ppg,
     )
 
 
@@ -488,78 +521,106 @@ def player_splits(
     opponent_team_id: Optional[int] = None,
     is_home: Optional[bool] = None,
     recent_games: Optional[int] = 10,
+    use_recency_weights: bool = True,
 ) -> Dict[str, float]:
     """
-    Get player stats splits with extended metrics.
-    
+    Get player stats splits with extended metrics and optional recency weighting.
+
+    When *use_recency_weights* is True the average is computed as a tiered
+    blend so that recent performance counts more than early-season games:
+        - Last 5 games:  50 % weight
+        - Games 6-10:    30 % weight
+        - Games 11+:     20 % weight
+    The shooting *totals* (fg_made, fg_attempted, ...) are still raw sums
+    from the selected window so that aggregate efficiency calculations stay
+    consistent.
+
     Returns comprehensive stats including shooting efficiency and defensive stats.
     """
+    from src.analytics.prediction import PREDICTION_CONFIG
+
     df = _load_player_df(player_id)
+    _empty: Dict[str, float] = {
+        "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
+        "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+        "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
+        "ft_made": 0, "ft_attempted": 0,
+        "ts_pct": 0.0, "fg3_rate": 0.0,
+    }
     if df.empty:
-        return {
-            "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
-            "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
-            "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
-            "ft_made": 0, "ft_attempted": 0,
-            "ts_pct": 0.0, "fg3_rate": 0.0,
-        }
+        return _empty
 
     # Store original df for fallback
     original_df = df.copy()
-    
+
     # Apply filters
     if opponent_team_id is not None:
         filtered = df[df["opponent_team_id"] == opponent_team_id]
-        # Only use filtered if we have data, otherwise keep original
         if not filtered.empty:
             df = filtered
-    
+
     if is_home is not None:
         filtered = df[df["is_home"] == int(is_home)]
-        # Only use filtered if we have data, otherwise fall back
         if not filtered.empty:
             df = filtered
         elif not original_df.empty:
-            # Fall back to recent games if no home/away split data
             df = original_df
-    
+
     if recent_games:
         df = df.head(recent_games)
 
-    def safe_mean(col, default=0.0):
-        if col not in df.columns or df.empty:
-            return default
-        val = df[col].mean()
-        return val if pd.notna(val) else default
-    
+    # ---- helpers ----
     def safe_sum(col, default=0):
         if col not in df.columns or df.empty:
             return default
         return int(df[col].sum())
-    
-    # Compute shooting totals for efficiency calculation
+
+    stat_cols = ["points", "rebounds", "assists", "minutes",
+                 "steals", "blocks", "turnovers"]
+
+    # ---- recency-weighted means ----
+    if use_recency_weights and len(df) > 5:
+        w5 = PREDICTION_CONFIG["last5_weight"]    # 0.50
+        w10 = PREDICTION_CONFIG["last10_weight"]   # 0.30
+        ws = PREDICTION_CONFIG["season_weight"]     # 0.20
+
+        last5 = df.head(5)
+        mid = df.iloc[5:10]
+        rest = df.iloc[10:]
+
+        def _tier_mean(col: str, default: float = 0.0) -> float:
+            if col not in df.columns:
+                return default
+            m5 = last5[col].mean() if not last5.empty else 0.0
+            m10 = mid[col].mean() if not mid.empty else m5
+            ms = rest[col].mean() if not rest.empty else m10
+            m5 = m5 if pd.notna(m5) else 0.0
+            m10 = m10 if pd.notna(m10) else m5
+            ms = ms if pd.notna(ms) else m10
+            return m5 * w5 + m10 * w10 + ms * ws
+
+        means = {col: _tier_mean(col) for col in stat_cols}
+    else:
+        def _safe_mean(col: str, default: float = 0.0) -> float:
+            if col not in df.columns or df.empty:
+                return default
+            val = df[col].mean()
+            return val if pd.notna(val) else default
+
+        means = {col: _safe_mean(col) for col in stat_cols}
+
+    # ---- shooting totals (raw sums – not weighted) ----
     total_pts = safe_sum("points")
     total_fga = safe_sum("fg_attempted")
     total_fg3a = safe_sum("fg3_attempted")
     total_fta = safe_sum("ft_attempted")
-    
-    # True Shooting %
+
     ts_denom = 2 * (total_fga + 0.44 * total_fta)
     ts_pct = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
-    
-    # 3PT attempt rate
     fg3_rate = (total_fg3a / total_fga * 100) if total_fga > 0 else 0.0
 
     return {
-        # Basic stats
-        "points": safe_mean("points"),
-        "rebounds": safe_mean("rebounds"),
-        "assists": safe_mean("assists"),
-        "minutes": safe_mean("minutes"),
-        # Defensive stats
-        "steals": safe_mean("steals"),
-        "blocks": safe_mean("blocks"),
-        "turnovers": safe_mean("turnovers"),
+        **means,
         # Shooting totals (for aggregate efficiency)
         "fg_made": safe_sum("fg_made"),
         "fg_attempted": safe_sum("fg_attempted"),
@@ -596,6 +657,186 @@ def team_strength(team_id: int, opponent_team_id: Optional[int] = None) -> Dict[
     }
 
 
+def calculate_team_pace(team_id: int) -> float:
+    """
+    Estimate a team's average possessions per game.
+
+    Uses the standard possession estimate:
+        Possessions ~ FGA - OREB + TO + 0.44 * FTA
+    Offensive rebounds aren't tracked separately so we estimate them as
+    ~30 % of total rebounds (college average).
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT
+                SUM(ps.fg_attempted)  AS fga,
+                SUM(ps.rebounds)      AS reb,
+                SUM(ps.turnovers)     AS tov,
+                SUM(ps.ft_attempted)  AS fta,
+                COUNT(DISTINCT ps.game_date) AS games
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            """,
+            conn,
+            params=[team_id],
+        )
+    if df.empty or df.iloc[0]["games"] == 0:
+        return 0.0
+
+    row = df.iloc[0]
+    games = int(row["games"])
+    fga = float(row["fga"] or 0) / games
+    reb = float(row["reb"] or 0) / games
+    tov = float(row["tov"] or 0) / games
+    fta = float(row["fta"] or 0) / games
+    oreb_est = reb * 0.30  # ~30 % of total rebounds are offensive (college avg)
+    pace = fga - oreb_est + tov + 0.44 * fta
+    return pace
+
+
+def calculate_team_ratings(team_id: int) -> Dict[str, float]:
+    """
+    Compute Offensive Rating, Defensive Rating and Net Rating for a team.
+
+    ORtg = team points per 100 possessions
+    DRtg = opponent points per 100 possessions (from games where
+           the opponent's stats are linked via opponent_team_id)
+    Net  = ORtg - DRtg
+    """
+    pace = calculate_team_pace(team_id)
+    if pace <= 0:
+        return {"offensive_rating": 0.0, "defensive_rating": 0.0, "net_rating": 0.0, "pace": 0.0}
+
+    with get_conn() as conn:
+        # Team's own per-game scoring
+        own = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) AS team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id],
+        )
+        # Opponent scoring in those same games
+        opp = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) AS opp_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE ps.opponent_team_id = ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id],
+        )
+    if own.empty:
+        return {"offensive_rating": 0.0, "defensive_rating": 0.0, "net_rating": 0.0, "pace": pace}
+
+    avg_pts = own["team_pts"].mean()
+    avg_opp = opp["opp_pts"].mean() if not opp.empty else avg_pts
+
+    ortg = (avg_pts / pace) * 100 if pace > 0 else 0.0
+    drtg = (avg_opp / pace) * 100 if pace > 0 else 0.0
+
+    return {
+        "offensive_rating": ortg,
+        "defensive_rating": drtg,
+        "net_rating": ortg - drtg,
+        "pace": pace,
+    }
+
+
+def calculate_strength_of_schedule(team_id: int) -> float:
+    """
+    Compute a normalised Strength-of-Schedule metric for a team.
+
+    Method: average scoring margin of all opponents the team has faced.
+    The result is centred around 0.0 (league average).  A positive SOS
+    means the team played opponents who score more than they allow on
+    average (tougher schedule).
+
+    Returns a float in roughly the range [-10, +10].
+    """
+    with get_conn() as conn:
+        # Get distinct opponents this team has faced
+        opp_ids = pd.read_sql(
+            """
+            SELECT DISTINCT ps.opponent_team_id AS opp_id
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            """,
+            conn,
+            params=[team_id],
+        )
+    if opp_ids.empty:
+        return 0.0
+
+    margins: List[float] = []
+    for _, row in opp_ids.iterrows():
+        oid = int(row["opp_id"])
+        with get_conn() as conn:
+            # Opponent's own scoring per game
+            own = pd.read_sql(
+                """
+                SELECT ps.game_date, SUM(ps.points) AS pts
+                FROM player_stats ps
+                JOIN players p ON p.player_id = ps.player_id
+                WHERE p.team_id = ?
+                GROUP BY ps.game_date
+                """,
+                conn,
+                params=[oid],
+            )
+            # Points allowed by opponent per game
+            allowed = pd.read_sql(
+                """
+                SELECT ps.game_date, SUM(ps.points) AS pts
+                FROM player_stats ps
+                JOIN players p ON p.player_id = ps.player_id
+                WHERE ps.opponent_team_id = ?
+                GROUP BY ps.game_date
+                """,
+                conn,
+                params=[oid],
+            )
+        if own.empty or allowed.empty:
+            continue
+        margin = own["pts"].mean() - allowed["pts"].mean()
+        margins.append(margin)
+
+    return sum(margins) / len(margins) if margins else 0.0
+
+
+def calculate_recent_form(team_id: int, last_n: int = 5) -> float:
+    """
+    Return the team's average PPG over their most recent *last_n* games.
+    Useful for trend / momentum display on the UI.
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) AS team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            GROUP BY ps.game_date
+            ORDER BY ps.game_date DESC
+            LIMIT ?
+            """,
+            conn,
+            params=[team_id, last_n],
+        )
+    if df.empty:
+        return 0.0
+    return float(df["team_pts"].mean())
+
+
 def aggregate_projection(
     player_ids: Iterable[int],
     opponent_team_id: Optional[int] = None,
@@ -604,7 +845,7 @@ def aggregate_projection(
 ) -> Dict[str, float]:
     """
     Aggregate player stats for team projection with extended metrics.
-    
+
     Returns:
         Dict with team totals for all stats plus efficiency metrics.
     """

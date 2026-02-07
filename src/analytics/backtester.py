@@ -61,6 +61,21 @@ class TeamAccuracy:
     losses: int = 0
 
 
+@dataclass
+class FactorBreakdown:
+    """Per-factor contribution tracking for a single prediction."""
+    base_spread: float = 0.0
+    home_court: float = 0.0
+    turnover_adj: float = 0.0
+    ts_adj: float = 0.0
+    rebound_adj: float = 0.0
+    assist_adj: float = 0.0
+    net_rating_adj: float = 0.0
+    sos_adj: float = 0.0
+    injury_adj: float = 0.0
+    pace_adj: float = 0.0      # how much pace scaled the total
+
+
 @dataclass 
 class BacktestResults:
     predictions: List[GamePrediction] = field(default_factory=list)
@@ -68,6 +83,8 @@ class BacktestResults:
     overall_spread_accuracy: float = 0.0
     overall_total_accuracy: float = 0.0
     total_games: int = 0
+    # Per-factor average absolute contribution to spread error
+    factor_error_breakdown: Dict[str, float] = field(default_factory=dict)
 
 
 def get_team_record_before_date(team_id: int, before_date: date) -> Tuple[int, int]:
@@ -226,125 +243,225 @@ def calculate_injury_adjustment(
     return final_adjustment, injured_players
 
 
+def _get_team_agg_stats_before(team_id: int, before_date) -> Dict[str, float]:
+    """
+    Aggregate per-game averages for rebounds, assists, steals, blocks,
+    turnovers, and shooting stats for *team_id* using only games before
+    *before_date*.  Returns a dict with per-game averages.
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT ps.game_date,
+                   SUM(ps.rebounds) AS reb, SUM(ps.assists) AS ast,
+                   SUM(ps.steals) AS stl, SUM(ps.blocks) AS blk,
+                   SUM(ps.turnovers) AS tov, SUM(ps.points) AS pts,
+                   SUM(ps.fg_attempted) AS fga, SUM(ps.fg3_attempted) AS fg3a,
+                   SUM(ps.ft_attempted) AS fta, SUM(ps.fg_made) AS fgm
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+    if df.empty:
+        return {"reb": 0.0, "ast": 0.0, "stl": 0.0, "blk": 0.0,
+                "tov": 0.0, "pts": 0.0, "fga": 0.0, "fg3a": 0.0,
+                "fta": 0.0, "fgm": 0.0, "games": 0, "pace": 0.0,
+                "ts_pct": 0.0}
+    games = len(df)
+    avg = {c: float(df[c].mean()) for c in df.columns if c != "game_date"}
+    avg["games"] = games
+
+    # Pace estimate
+    oreb_est = avg["reb"] * 0.30
+    avg["pace"] = avg["fga"] - oreb_est + avg["tov"] + 0.44 * avg["fta"]
+
+    # TS%
+    ts_denom = 2 * (avg["fga"] + 0.44 * avg["fta"])
+    avg["ts_pct"] = (avg["pts"] / ts_denom * 100) if ts_denom > 0 else 0.0
+
+    return avg
+
+
+def _get_opponent_ppg_before(team_id: int, before_date) -> float:
+    """Average points *allowed* by team_id (opponent scoring) before a date."""
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) AS opp_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE ps.opponent_team_id = ? AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+    return float(df["opp_pts"].mean()) if not df.empty else 0.0
+
+
 def predict_game_historical(
     home_team_id: int,
     away_team_id: int,
     game_date: date,
-    home_court_adv: float = 3.0,
+    home_court_adv: float = 2.5,
     use_injury_adjustment: bool = True,
-) -> Tuple[float, float, float, float]:
+) -> Tuple[float, float, float, float, FactorBreakdown]:
     """
     Predict spread and total using only data available before the game date.
-    Returns: (spread, total, home_projected, away_projected)
-    
-    Uses actual completed game scores, not player-based aggregation.
-    This avoids issues with player trades affecting team totals.
-    
-    Weights:
-    - 50% season average (before this game)
-    - 30% home/away splits
-    - 20% head-to-head history (or similar opponents)
-    
-    If use_injury_adjustment=True, applies injury-based scoring adjustments.
+
+    Returns: (spread, total, home_projected, away_projected, factor_breakdown)
+
+    Now incorporates all the enhanced factors:
+      - Rebounding differential
+      - Assist differential
+      - Net Rating differential
+      - Strength of Schedule
+      - Pace-adjusted total
     """
+    from src.analytics.prediction import PREDICTION_CONFIG as cfg
+
+    fb = FactorBreakdown()
+
     # Get actual game results which properly aggregates team scores
     all_games = get_actual_game_results()
-    
+
     if all_games.empty:
-        return 0.0, 210.0, 105.0, 105.0
-    
-    # Filter to games before this date
+        return 0.0, 210.0, 105.0, 105.0, fb
+
     all_games = all_games[all_games["game_date"] < game_date]
-    
     if all_games.empty:
-        return 0.0, 210.0, 105.0, 105.0
-    
+        return 0.0, 210.0, 105.0, 105.0, fb
+
+    # ---- helper: team games view ----
     def get_team_games(team_id: int, as_home: Optional[bool] = None) -> pd.DataFrame:
-        """Get all games for a team, optionally filtered by home/away."""
-        # Games where this team was home
         home_mask = all_games["home_team_id"] == team_id
-        # Games where this team was away
         away_mask = all_games["away_team_id"] == team_id
-        
-        results = []
-        
-        # Home games for this team
+        parts = []
         if as_home is None or as_home is True:
-            home_games = all_games[home_mask].copy()
-            if not home_games.empty:
-                home_games["team_score"] = home_games["home_score"]
-                home_games["opp_score"] = home_games["away_score"]
-                home_games["opp_id"] = home_games["away_team_id"]
-                home_games["was_home"] = True
-                results.append(home_games)
-        
-        # Away games for this team
+            hg = all_games[home_mask].copy()
+            if not hg.empty:
+                hg["team_score"] = hg["home_score"]
+                hg["opp_score"] = hg["away_score"]
+                hg["opp_id"] = hg["away_team_id"]
+                hg["was_home"] = True
+                parts.append(hg)
         if as_home is None or as_home is False:
-            away_games = all_games[away_mask].copy()
-            if not away_games.empty:
-                away_games["team_score"] = away_games["away_score"]
-                away_games["opp_score"] = away_games["home_score"]
-                away_games["opp_id"] = away_games["home_team_id"]
-                away_games["was_home"] = False
-                results.append(away_games)
-        
-        if not results:
-            return pd.DataFrame()
-        
-        return pd.concat(results, ignore_index=True)
-    
-    # Get all games for each team
+            ag = all_games[away_mask].copy()
+            if not ag.empty:
+                ag["team_score"] = ag["away_score"]
+                ag["opp_score"] = ag["home_score"]
+                ag["opp_id"] = ag["home_team_id"]
+                ag["was_home"] = False
+                parts.append(ag)
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
     home_team_games = get_team_games(home_team_id)
     away_team_games = get_team_games(away_team_id)
-    
+
     if home_team_games.empty or away_team_games.empty:
-        return 0.0, 210.0, 105.0, 105.0
-    
-    def calc_team_projection(games_df: pd.DataFrame, opp_id: int, predicting_home: bool, similar_teams: List[int]) -> float:
-        # Season average PPG (50%)
+        return 0.0, 210.0, 105.0, 105.0, fb
+
+    def calc_team_projection(games_df, opp_id, predicting_home, similar_teams):
         season_ppg = games_df["team_score"].mean()
-        
-        # Home/Away split PPG (30%)
-        location_df = games_df[games_df["was_home"] == predicting_home]
-        if not location_df.empty:
-            location_ppg = location_df["team_score"].mean()
-        else:
-            location_ppg = season_ppg
-        
-        # Head-to-head PPG or similar opponents (20%)
+        loc_df = games_df[games_df["was_home"] == predicting_home]
+        location_ppg = loc_df["team_score"].mean() if not loc_df.empty else season_ppg
         h2h_df = games_df[games_df["opp_id"] == opp_id]
         if not h2h_df.empty:
             h2h_ppg = h2h_df["team_score"].mean()
         elif similar_teams:
-            similar_df = games_df[games_df["opp_id"].isin(similar_teams)]
-            if not similar_df.empty:
-                h2h_ppg = similar_df["team_score"].mean()
-            else:
-                h2h_ppg = season_ppg
+            sim_df = games_df[games_df["opp_id"].isin(similar_teams)]
+            h2h_ppg = sim_df["team_score"].mean() if not sim_df.empty else season_ppg
         else:
             h2h_ppg = season_ppg
-        
         return season_ppg * 0.5 + location_ppg * 0.3 + h2h_ppg * 0.2
-    
-    # Find similar teams for each
+
     similar_to_away = find_similar_teams(away_team_id, game_date)
     similar_to_home = find_similar_teams(home_team_id, game_date)
-    
+
     home_proj = calc_team_projection(home_team_games, away_team_id, True, similar_to_away)
     away_proj = calc_team_projection(away_team_games, home_team_id, False, similar_to_home)
-    
-    # Apply injury adjustments if enabled
+
+    # Injury adjustments
     if use_injury_adjustment:
         home_adj, _ = calculate_injury_adjustment(home_team_id, game_date, home_proj)
         away_adj, _ = calculate_injury_adjustment(away_team_id, game_date, away_proj)
         home_proj += home_adj
         away_proj += away_adj
-    
-    # Apply home court advantage to spread only
-    spread = (home_proj - away_proj) + home_court_adv
+        fb.injury_adj = home_adj - away_adj
+
+    fb.base_spread = home_proj - away_proj
+    fb.home_court = home_court_adv
+
+    spread = fb.base_spread + fb.home_court
+
+    # ---- Enhanced factors using pre-game aggregated stats ----
+    home_agg = _get_team_agg_stats_before(home_team_id, game_date)
+    away_agg = _get_team_agg_stats_before(away_team_id, game_date)
+
+    if home_agg["games"] >= 3 and away_agg["games"] >= 3:
+        # Turnover margin
+        home_to_margin = home_agg["stl"] - home_agg["tov"]
+        away_to_margin = away_agg["stl"] - away_agg["tov"]
+        fb.turnover_adj = (home_to_margin - away_to_margin) * cfg["turnover_multiplier"]
+        spread += fb.turnover_adj
+
+        # TS% advantage
+        ts_adv = home_agg["ts_pct"] - away_agg["ts_pct"]
+        fb.ts_adj = ts_adv * cfg["ts_pct_multiplier"]
+        spread += fb.ts_adj
+
+        # Rebound differential
+        reb_adv = home_agg["reb"] - away_agg["reb"]
+        fb.rebound_adj = reb_adv * cfg["rebound_multiplier"]
+        spread += fb.rebound_adj
+
+        # Assist differential
+        ast_adv = home_agg["ast"] - away_agg["ast"]
+        fb.assist_adj = ast_adv * cfg["assist_multiplier"]
+        spread += fb.assist_adj
+
+        # Net Rating
+        home_opp_ppg = _get_opponent_ppg_before(home_team_id, game_date)
+        away_opp_ppg = _get_opponent_ppg_before(away_team_id, game_date)
+        home_pace = home_agg["pace"]
+        away_pace = away_agg["pace"]
+        if home_pace > 0 and away_pace > 0:
+            home_ortg = (home_agg["pts"] / home_pace) * 100
+            home_drtg = (home_opp_ppg / home_pace) * 100 if home_opp_ppg else home_ortg
+            away_ortg = (away_agg["pts"] / away_pace) * 100
+            away_drtg = (away_opp_ppg / away_pace) * 100 if away_opp_ppg else away_ortg
+            home_net = home_ortg - home_drtg
+            away_net = away_ortg - away_drtg
+            fb.net_rating_adj = (home_net - away_net) * cfg["net_rating_multiplier"]
+            spread += fb.net_rating_adj
+
+        # Strength of Schedule (simplified: average margin of opponents)
+        home_opp_margin = home_agg["pts"] - home_opp_ppg if home_opp_ppg else 0.0
+        away_opp_margin = away_agg["pts"] - away_opp_ppg if away_opp_ppg else 0.0
+        # Reverse: team with lower own margin might have faced harder opponents
+        # Use opponent average scoring as a rough SOS proxy
+        if home_opp_ppg > 0 and away_opp_ppg > 0:
+            # Normalize: higher opponent scoring = harder schedule
+            avg_opp_ppg = (home_opp_ppg + away_opp_ppg) / 2
+            home_sos = (home_opp_ppg - avg_opp_ppg) / 10.0  # scale to ~[-1, +1]
+            away_sos = (away_opp_ppg - avg_opp_ppg) / 10.0
+            fb.sos_adj = (home_sos - away_sos) * cfg["sos_multiplier"]
+            spread += fb.sos_adj
+
     total = home_proj + away_proj
-    
-    return spread, total, home_proj, away_proj
+
+    # Pace-adjusted total
+    if home_agg["pace"] > 0 and away_agg["pace"] > 0:
+        combined_pace = (home_agg["pace"] + away_agg["pace"]) / 2
+        pace_factor = combined_pace / cfg["college_avg_pace"]
+        fb.pace_adj = total * (pace_factor - 1.0)
+        total *= pace_factor
+
+    return spread, total, home_proj, away_proj, fb
 
 
 def get_actual_game_results() -> pd.DataFrame:
@@ -494,8 +611,9 @@ def run_backtest(
         )
     
     predictions = []
+    factor_breakdowns: List[FactorBreakdown] = []
     total_to_process = len(games_df)
-    
+
     for idx, (_, game) in enumerate(games_df.iterrows()):
         if idx % 20 == 0:
             progress(f"Analyzing game {idx + 1}/{total_to_process}...")
@@ -521,10 +639,11 @@ def run_backtest(
         away_injury_names = [p.get("name", "Unknown") for p in away_injured if p.get("avg_minutes", 0) >= 12]
         
         # Make prediction using only data before this game
-        pred_spread, pred_total, pred_home, pred_away = predict_game_historical(
+        pred_spread, pred_total, pred_home, pred_away, fb = predict_game_historical(
             home_id, away_id, game_date, use_injury_adjustment=use_injury_adjustment
         )
-        
+        factor_breakdowns.append(fb)
+
         actual_spread = home_score - away_score
         actual_total = home_score + away_score
         
@@ -606,26 +725,41 @@ def run_backtest(
     
     results.predictions = predictions
     results.total_games = len(predictions)
-    
+
     progress("Calculating accuracy stats...")
-    
+
     # Calculate final accuracy percentages
     if results.total_games > 0:
         total_winner_correct = sum(1 for p in predictions if p.winner_correct)
         total_total_correct = sum(1 for p in predictions if p.total_within_10)
         results.overall_spread_accuracy = total_winner_correct / results.total_games * 100
         results.overall_total_accuracy = total_total_correct / results.total_games * 100
-    
+
     for ta in results.team_accuracy.values():
         if ta.games_analyzed > 0:
             ta.spread_accuracy = ta.spread_correct / ta.games_analyzed * 100
             ta.total_accuracy = ta.total_correct / ta.games_analyzed * 100
-            errors = [abs(p.spread_error) for p in predictions 
+            errors = [abs(p.spread_error) for p in predictions
                      if p.home_team_id == ta.team_id or p.away_team_id == ta.team_id]
             ta.avg_spread_error = sum(errors) / len(errors) if errors else 0
-            total_errors = [abs(p.total_error) for p in predictions 
+            total_errors = [abs(p.total_error) for p in predictions
                           if p.home_team_id == ta.team_id or p.away_team_id == ta.team_id]
             ta.avg_total_error = sum(total_errors) / len(total_errors) if total_errors else 0
-    
+
+    # --- Per-factor average absolute contribution ---
+    # This shows how much each factor contributed on average so you can
+    # see which factors are most influential and potentially overtune.
+    if factor_breakdowns:
+        factor_names = ["base_spread", "home_court", "turnover_adj", "ts_adj",
+                        "rebound_adj", "assist_adj", "net_rating_adj",
+                        "sos_adj", "injury_adj", "pace_adj"]
+        for fname in factor_names:
+            vals = [abs(getattr(fb, fname)) for fb in factor_breakdowns]
+            results.factor_error_breakdown[fname] = sum(vals) / len(vals) if vals else 0.0
+        progress(
+            "Factor breakdown (avg |contribution|): "
+            + ", ".join(f"{k}={v:.2f}" for k, v in results.factor_error_breakdown.items())
+        )
+
     progress(f"Backtest complete: {results.total_games} games analyzed")
     return results

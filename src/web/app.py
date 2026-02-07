@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
 from src.analytics.live_recommendations import build_live_recommendations
+from src.analytics.autotuner import get_effective_config
 from src.analytics.prediction import predict_matchup
 from src.analytics.stats_engine import get_scheduled_games, get_team_matchup_stats, TeamMatchupStats
 from src.data.sync_service import (
@@ -548,23 +549,27 @@ def _get_matchup_backtest(home_id: int, away_id: int) -> dict:
 
 
 def _get_injury_summary(stats: TeamMatchupStats) -> dict:
-    """Get injury impact summary for a team."""
+    """Get injury impact summary for a team, including rebounds and assists lost."""
     injured = [p for p in stats.players if p.is_injured and p.mpg > 0]
     if not injured:
-        return {"status": "healthy", "text": "No injuries", "lost_ppg": 0}
+        return {"status": "healthy", "text": "No injuries", "lost_ppg": 0,
+                "lost_rpg": 0, "lost_apg": 0}
 
     lost_ppg = sum(p.ppg for p in injured)
+    lost_rpg = sum(p.rpg for p in injured)
+    lost_apg = sum(p.apg for p in injured)
     key = [p for p in injured if p.mpg >= 25]
     rotation = [p for p in injured if 15 <= p.mpg < 25]
 
+    base = {"lost_ppg": lost_ppg, "lost_rpg": lost_rpg, "lost_apg": lost_apg}
     if key:
         names = ", ".join(p.name.split()[-1] for p in key[:2])
-        return {"status": "critical", "text": f"KEY OUT: {names}", "lost_ppg": lost_ppg}
+        return {**base, "status": "critical", "text": f"KEY OUT: {names}"}
     elif rotation:
         names = ", ".join(p.name.split()[-1] for p in rotation[:2])
-        return {"status": "moderate", "text": f"OUT: {names}", "lost_ppg": lost_ppg}
+        return {**base, "status": "moderate", "text": f"OUT: {names}"}
     else:
-        return {"status": "minor", "text": f"{len(injured)} minor injuries", "lost_ppg": lost_ppg}
+        return {**base, "status": "minor", "text": f"{len(injured)} minor injuries"}
 
 
 def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> List[dict]:
@@ -656,12 +661,35 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
             )
 
             if home_stats.players and away_stats.players:
-                # Calculate prediction
+                # Use the full prediction engine with all new factors
+                home_player_ids = _team_players(home_team_id)
+                away_player_ids = _team_players(away_team_id)
+
+                # Load autotuned weight overrides (if any)
+                effective_cfg = await asyncio.to_thread(
+                    get_effective_config, home_team_id, away_team_id
+                )
+
+                pred = await asyncio.to_thread(
+                    predict_matchup,
+                    home_team_id,
+                    away_team_id,
+                    home_player_ids,
+                    away_player_ids,
+                    home_pace=home_stats.pace,
+                    away_pace=away_stats.pace,
+                    home_net_rating=home_stats.net_rating,
+                    away_net_rating=away_stats.net_rating,
+                    home_sos=home_stats.sos,
+                    away_sos=away_stats.sos,
+                    config_overrides=effective_cfg,
+                )
+
                 home_proj = home_stats.projected_points + HOME_COURT_ADV
                 away_proj = away_stats.projected_points
                 prediction = {
-                    "predicted_spread": home_proj - away_proj,
-                    "predicted_total": home_proj + away_proj,
+                    "predicted_spread": pred.predicted_spread,
+                    "predicted_total": pred.predicted_total,
                     "home_projected": home_proj,
                     "away_projected": away_proj,
                 }
@@ -798,6 +826,174 @@ async def accuracy(
             "error": error,
             "use_injuries": use_injuries_flag,
         },
+    )
+
+
+# ============ AUTOTUNE ============
+
+@app.get("/autotune", response_class=HTMLResponse)
+async def autotune_page(request: Request, team_id: int | None = None) -> HTMLResponse:
+    """Render the autotune page with team selector and current weights."""
+    from src.analytics.autotuner import (
+        load_team_weights,
+        TUNABLE_KEYS,
+        WEIGHT_BOUNDS,
+    )
+    from src.analytics.prediction import PREDICTION_CONFIG
+
+    teams = _team_list()
+
+    # Build effective weights for the selected team (or global)
+    global_defaults = {k: PREDICTION_CONFIG[k] for k in TUNABLE_KEYS}
+    overrides = load_team_weights(team_id) if team_id else load_team_weights(None)
+    effective = {**global_defaults, **overrides}
+
+    # Check which keys have been tuned
+    tuned_keys = set(overrides.keys())
+
+    # Get error metrics from last tune (if any)
+    tune_metrics = None
+    if overrides:
+        with get_conn() as conn:
+            if team_id:
+                row = conn.execute(
+                    """SELECT spread_error_before, spread_error_after,
+                              total_error_before, total_error_after, tuned_at
+                       FROM team_weights WHERE team_id = ? LIMIT 1""",
+                    (team_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT spread_error_before, spread_error_after,
+                              total_error_before, total_error_after, tuned_at
+                       FROM team_weights WHERE team_id IS NULL LIMIT 1"""
+                ).fetchone()
+            if row:
+                tune_metrics = {
+                    "spread_before": row[0],
+                    "spread_after": row[1],
+                    "total_before": row[2],
+                    "total_after": row[3],
+                    "tuned_at": row[4],
+                }
+
+    weights = [
+        {
+            "key": k,
+            "default": global_defaults[k],
+            "effective": effective[k],
+            "is_tuned": k in tuned_keys,
+            "bounds_lo": WEIGHT_BOUNDS[k][0],
+            "bounds_hi": WEIGHT_BOUNDS[k][1],
+        }
+        for k in TUNABLE_KEYS
+    ]
+
+    return templates.TemplateResponse(
+        "autotune.html",
+        {
+            "request": request,
+            "teams": teams,
+            "team_id": team_id,
+            "weights": weights,
+            "tune_metrics": tune_metrics,
+            "has_overrides": bool(overrides),
+        },
+    )
+
+
+@app.get("/api/autotune")
+async def stream_autotune(
+    team_id: int | None = None,
+    action: str = "tune",
+) -> StreamingResponse:
+    """SSE endpoint for autotune operations."""
+    from src.analytics.autotuner import (
+        autotune_team,
+        autotune_global,
+        save_team_weights,
+        clear_team_weights,
+    )
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_tune() -> None:
+            try:
+                if action == "reset":
+                    clear_team_weights(team_id)
+                    msg_queue.put("[DONE] Weights reset to defaults")
+                elif action == "tune":
+                    if team_id:
+                        result = autotune_team(team_id, progress_cb)
+                    else:
+                        result = autotune_global(progress_cb)
+
+                    if result.games_used < 3:
+                        msg_queue.put("[ERROR] Not enough games for tuning")
+                    else:
+                        # Auto-save tuned weights
+                        save_team_weights(
+                            team_id,
+                            result.weights_after,
+                            result.spread_error_before,
+                            result.spread_error_after,
+                            result.total_error_before,
+                            result.total_error_after,
+                        )
+                        msg_queue.put(
+                            f"[RESULT] spread_before={result.spread_error_before:.2f}"
+                        )
+                        msg_queue.put(
+                            f"[RESULT] spread_after={result.spread_error_after:.2f}"
+                        )
+                        msg_queue.put(
+                            f"[RESULT] total_before={result.total_error_before:.2f}"
+                        )
+                        msg_queue.put(
+                            f"[RESULT] total_after={result.total_error_after:.2f}"
+                        )
+                        msg_queue.put(
+                            f"[RESULT] games={result.games_used}"
+                        )
+                        msg_queue.put(
+                            f"[RESULT] iterations={result.iterations}"
+                        )
+                        # Send per-weight changes
+                        for k in result.weights_after:
+                            before = result.weights_before.get(k, 0)
+                            after = result.weights_after[k]
+                            msg_queue.put(
+                                f"[WEIGHT] {k}={after:.4f} (was {before:.4f})"
+                            )
+                        msg_queue.put("[DONE] Tuning complete and saved")
+                else:
+                    msg_queue.put(f"[ERROR] Unknown action: {action}")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_tune, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

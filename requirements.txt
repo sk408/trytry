@@ -9,3 +9,4 @@ linedrive
 websocket-client
 tzdata  # Timezone data for Windows
 CBBpy  # College basketball data (play-by-play, boxscores)
+scipy  # Optimization for autotuning prediction weights
