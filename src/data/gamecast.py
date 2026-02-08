@@ -73,6 +73,12 @@ class PlayEvent:
     score_away: int = 0
     event_type: str = ""  # shot, foul, turnover, etc.
     timestamp: float = field(default_factory=time.time)
+    # Foul metadata
+    is_foul: bool = False
+    shooting_foul: bool = False       # foul that automatically awards FTs
+    flagrant_foul: bool = False
+    technical_foul: bool = False
+    offensive_foul: bool = False      # doesn't count toward team bonus
 
 
 @dataclass 
@@ -87,6 +93,7 @@ class BoxScorePlayer:
     fg: str  # e.g. "5-10"
     fg3: str  # e.g. "2-4"
     ft: str  # e.g. "3-4"
+    fouls: int = 0  # personal fouls
 
 
 @dataclass
@@ -478,6 +485,7 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
                 fg=stat_dict.get("fg", "0-0"),
                 fg3=stat_dict.get("3pt", "0-0"),
                 ft=stat_dict.get("ft", "0-0"),
+                fouls=int(stat_dict.get("pf", 0) or 0),
             ))
         
         # Get totals
@@ -544,6 +552,17 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
 
         play_type = play.get("type", {})
         type_text = play_type.get("text", "") if play_type else ""
+        et_lower = type_text.lower() if type_text else ""
+
+        # Classify foul types
+        is_foul = "foul" in et_lower
+        shooting_foul = any(kw in et_lower for kw in (
+            "shooting foul", "shooting block foul", "away from play foul",
+            "inbound foul", "clear path foul",
+        ))
+        flagrant = "flagrant" in et_lower
+        technical = "technical" in et_lower
+        offensive = "offensive" in et_lower
 
         parsed.append(PlayEvent(
             event_id=str(play.get("id", "")),
@@ -553,12 +572,62 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
             team=team_abbr,
             score_home=int(play.get("homeScore", 0) or 0),
             score_away=int(play.get("awayScore", 0) or 0),
-            event_type=type_text.lower() if type_text else "",
+            event_type=et_lower,
+            is_foul=is_foul,
+            shooting_foul=shooting_foul or flagrant,
+            flagrant_foul=flagrant,
+            technical_foul=technical,
+            offensive_foul=offensive,
         ))
 
     # Return newest first
     parsed.reverse()
     return parsed
+
+
+def compute_bonus_status(
+    plays: List[PlayEvent],
+    home_abbr: str,
+    away_abbr: str,
+    current_period: int,
+) -> Dict[str, Any]:
+    """Compute team foul counts per quarter and bonus status.
+
+    NBA bonus rules:
+    - A team enters the bonus after the *opposing* team commits 5 fouls
+      in the quarter (non-offensive, non-technical fouls count).
+    - After that, every non-offensive foul by the opposing team awards
+      2 free throws.
+
+    Returns dict:
+        home_fouls_q: int  – home team fouls in current quarter
+        away_fouls_q: int  – away team fouls in current quarter
+        home_in_bonus: bool – home team shooting bonus FTs
+        away_in_bonus: bool – away team shooting bonus FTs
+    """
+    home_fouls_q = 0
+    away_fouls_q = 0
+
+    for p in plays:
+        if p.period != current_period:
+            continue
+        if not p.is_foul:
+            continue
+        # Offensive and technical fouls don't count toward team bonus
+        if p.offensive_foul or p.technical_foul:
+            continue
+        if p.team == home_abbr:
+            home_fouls_q += 1
+        elif p.team == away_abbr:
+            away_fouls_q += 1
+
+    # A team is *in the bonus* when the OPPOSING team has 5+ fouls
+    return {
+        "home_fouls_q": home_fouls_q,
+        "away_fouls_q": away_fouls_q,
+        "home_in_bonus": away_fouls_q >= 5,  # home shoots FTs when away has 5+
+        "away_in_bonus": home_fouls_q >= 5,  # away shoots FTs when home has 5+
+    }
 
 
 class GamecastClient:

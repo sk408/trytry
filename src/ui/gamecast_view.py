@@ -29,6 +29,8 @@ from src.data.gamecast import (
     BoxScore,
     GameInfo,
     GameOdds,
+    PlayEvent,
+    compute_bonus_status,
     get_box_score,
     get_game_odds,
     get_live_games,
@@ -126,6 +128,11 @@ class GamecastView(QWidget):
         self.quarter_scores_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.quarter_scores_lbl.setStyleSheet("color: gray; font-size: 11px;")
 
+        # Bonus / team-foul strip
+        self.bonus_lbl = QLabel("")
+        self.bonus_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.bonus_lbl.setStyleSheet("font-size: 11px;")
+
         score_layout = QHBoxLayout()
         score_layout.addWidget(self.away_logo_lbl)
         for w in (self.away_name_lbl, self.away_score_lbl,
@@ -138,6 +145,7 @@ class GamecastView(QWidget):
         score_inner = QVBoxLayout()
         score_inner.addLayout(score_layout)
         score_inner.addWidget(self.quarter_scores_lbl)
+        score_inner.addWidget(self.bonus_lbl)
         score_box.setLayout(score_inner)
 
         # ── live prediction panel ──
@@ -344,6 +352,11 @@ class GamecastView(QWidget):
 
         game_date = game.start_time[:10] if game.start_time else ""
 
+        # For final games, show post-game analysis instead of live prediction
+        if game.status == "final":
+            self._render_final_analysis(home_id, away_id, game_date, game)
+            return
+
         try:
             lp = live_predict(
                 home_team_id=home_id,
@@ -361,6 +374,55 @@ class GamecastView(QWidget):
 
         self._render_prediction(lp, game)
 
+    def _render_final_analysis(
+        self, home_id: int, away_id: int, game_date: str, game: GameInfo
+    ) -> None:
+        """Show post-game comparison: our pre-game prediction vs actual result."""
+        ha = game.home_abbr
+        aa = game.away_abbr
+
+        # Get cached pre-game prediction
+        from src.analytics.live_prediction import _cached_pregame
+        try:
+            pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
+                home_id, away_id, game_date,
+            )
+        except Exception:
+            pg_home, pg_away, pg_total, pg_spread = 110.0, 110.0, 220.0, 0.0
+
+        actual_spread = game.home_score - game.away_score
+        actual_total = game.home_score + game.away_score
+        spread_err = abs(pg_spread - actual_spread)
+        total_err = abs(pg_total - actual_total)
+        winner_ok = (pg_spread > 0 and actual_spread > 0) or (pg_spread < 0 and actual_spread < 0)
+
+        self.pregame_lbl.setText(
+            f"Pre-game model: {ha} {pg_spread:+.1f}  |  Total {pg_total:.1f}  "
+            f"({ha} {pg_home:.0f} – {aa} {pg_away:.0f})"
+        )
+
+        winner_icon = "✓" if winner_ok else "✗"
+        self.live_proj_lbl.setText(
+            f"Final Analysis: {ha} {actual_spread:+d}  |  Total {actual_total}  "
+            f"| Winner {winner_icon}  |  Spread Err {spread_err:.1f}  |  Total Err {total_err:.1f}"
+        )
+        if winner_ok:
+            self.live_proj_lbl.setStyleSheet("color: #27ae60; font-weight: bold;")
+        else:
+            self.live_proj_lbl.setStyleSheet("color: #e74c3c; font-weight: bold;")
+
+        self.pace_lbl.setText("")
+        self.quarter_hist_lbl.setText("")
+
+        self.signal_lbl.setText(
+            f"Spread error: {spread_err:.1f} pts  |  Total error: {total_err:.1f} pts"
+        )
+        self.signal_lbl.setStyleSheet("color: gray;")
+
+        # Blend bar not applicable for final
+        self.blend_bar.setValue(100)
+        self.blend_bar.setFormat("Game Complete")
+
     def _render_prediction(self, lp: LivePrediction, game: GameInfo) -> None:
         ha = game.home_abbr
         aa = game.away_abbr
@@ -374,6 +436,7 @@ class GamecastView(QWidget):
             f"Live Projection: {ha} {lp.projected_spread:+.1f}  |  Total {lp.projected_total:.1f}  "
             f"({ha} {lp.projected_home_score:.0f} – {aa} {lp.projected_away_score:.0f})"
         )
+        self.live_proj_lbl.setStyleSheet("")  # reset any prior final-analysis styling
 
         self.pace_lbl.setText(
             f"At current pace: Total {lp.pace_total:.1f}  "
@@ -453,7 +516,8 @@ class GamecastView(QWidget):
 
     @staticmethod
     def _fill_box_table(table: QTableWidget, players) -> None:
-        headers = ["Player", "MIN", "PTS", "REB", "AST", "FG", "3PT", "FT"]
+        from PySide6.QtGui import QColor
+        headers = ["Player", "MIN", "PTS", "REB", "AST", "FG", "3PT", "FT", "PF"]
         table.clear()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
@@ -462,14 +526,23 @@ class GamecastView(QWidget):
             for c, val in enumerate([
                 f"{p.name} ({p.position})", p.minutes,
                 str(p.points), str(p.rebounds), str(p.assists),
-                p.fg, p.fg3, p.ft,
+                p.fg, p.fg3, p.ft, str(p.fouls),
             ]):
-                table.setItem(r, c, QTableWidgetItem(val))
+                item = QTableWidgetItem(val)
+                # Highlight high foul counts
+                if c == 8:  # PF column
+                    if p.fouls >= 5:
+                        item.setForeground(QColor("#e74c3c"))
+                    elif p.fouls >= 4:
+                        item.setForeground(QColor("#f39c12"))
+                table.setItem(r, c, item)
         table.resizeColumnsToContents()
 
     # ── play-by-play ──
 
     def _update_plays(self, game_id: str) -> None:
+        from PySide6.QtGui import QColor
+
         try:
             plays = get_play_by_play(game_id, self._last_play_id)
         except Exception:
@@ -478,24 +551,95 @@ class GamecastView(QWidget):
         if not plays:
             return
 
+        # Determine home/away abbreviations for coloring
+        game: GameInfo | None = self.game_combo.currentData()
+        home_abbr = game.home_abbr if game else ""
+        away_abbr = game.away_abbr if game else ""
+
         # `plays` arrives **newest-first** from get_play_by_play().
         # For incremental updates we prepend them at position 0 so they
         # appear above the existing rows.  Because the list is already
         # newest-first, we must iterate in *reverse* so that the newest
         # play ends up at row 0.
         for play in reversed(plays):
-            text = f"Q{play.period} {play.clock}  {play.team:>3}  {play.text}  ({play.score_away}-{play.score_home})"
+            # Build foul tag
+            foul_tag = ""
+            if play.is_foul:
+                if play.flagrant_foul:
+                    foul_tag = " [FLAGRANT]"
+                elif play.technical_foul:
+                    foul_tag = " [TECH]"
+                elif play.shooting_foul:
+                    foul_tag = " [FTs]"
+                elif play.offensive_foul:
+                    foul_tag = " [OFF FOUL]"
+                else:
+                    foul_tag = " [FOUL]"
+
+            team_tag = f"[{play.team}]" if play.team else "     "
+            text = (
+                f"Q{play.period} {play.clock}  {team_tag:<6} "
+                f"{play.text}{foul_tag}  "
+                f"({away_abbr} {play.score_away} - {play.score_home} {home_abbr})"
+            )
             item = QListWidgetItem(text)
-            if play.event_type and "shot" in play.event_type:
-                item.setForeground(Qt.GlobalColor.green)
+
+            # Color by event type and team
+            if play.is_foul:
+                if play.flagrant_foul:
+                    item.setForeground(QColor("#e74c3c"))
+                elif play.technical_foul:
+                    item.setForeground(QColor("#9b59b6"))
+                else:
+                    item.setForeground(QColor("#f39c12"))
+            elif play.event_type and ("made shot" in play.event_type or "free throw" in play.event_type):
+                item.setForeground(QColor("#27ae60"))
+            elif play.team == home_abbr:
+                item.setForeground(QColor("#3498db"))
+            elif play.team == away_abbr:
+                item.setForeground(QColor("#e67e22"))
+
             self.play_list.insertItem(0, item)
 
         # The newest play is plays[0]; remember it for incremental polling
         self._last_play_id = plays[0].event_id
 
+        # Update bonus status from all plays in this game
+        if game and game.status == "in_progress":
+            try:
+                all_plays = get_play_by_play(game_id, "")
+                bonus = compute_bonus_status(
+                    all_plays, home_abbr, away_abbr, game.period,
+                )
+                self._render_bonus(bonus, home_abbr, away_abbr)
+            except Exception:
+                pass
+
         # Cap at 200 items to keep all quarters visible
         while self.play_list.count() > 200:
             self.play_list.takeItem(self.play_list.count() - 1)
+
+    # ── bonus rendering ──
+
+    def _render_bonus(self, bonus: dict, home_abbr: str, away_abbr: str) -> None:
+        """Update the bonus / team-foul strip below the score."""
+        away_f = bonus.get("away_fouls_q", 0)
+        home_f = bonus.get("home_fouls_q", 0)
+        away_bonus = bonus.get("away_in_bonus", False)
+        home_bonus = bonus.get("home_in_bonus", False)
+
+        parts = []
+        away_txt = f"{away_abbr} Fouls: {away_f}"
+        if away_bonus:
+            away_txt += "  <b style='color:#f39c12;'>BONUS</b>"
+        parts.append(away_txt)
+
+        home_txt = f"{home_abbr} Fouls: {home_f}"
+        if home_bonus:
+            home_txt += "  <b style='color:#f39c12;'>BONUS</b>"
+        parts.append(home_txt)
+
+        self.bonus_lbl.setText("  |  ".join(parts))
 
     # ── clear ──
 
@@ -506,6 +650,7 @@ class GamecastView(QWidget):
             lbl.setText("")
         self.status_lbl.setText("")
         self.quarter_scores_lbl.setText("")
+        self.bonus_lbl.setText("")
         self.pregame_lbl.setText("Pre-game: --")
         self.live_proj_lbl.setText("Live Projection: --")
         self.pace_lbl.setText("Pace: --")

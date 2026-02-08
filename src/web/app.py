@@ -39,6 +39,7 @@ from src.data.gamecast import (
     get_box_score,
     get_play_by_play,
     get_game_leaders,
+    compute_bonus_status,
     GamecastClient,
     GameInfo,
     GameOdds,
@@ -299,11 +300,25 @@ async def stream_sync_images() -> StreamingResponse:
 
 @app.get("/api/backtest")
 async def stream_backtest(
-    home_team_id: int | None = None,
-    away_team_id: int | None = None,
+    home_team_id: str | None = None,
+    away_team_id: str | None = None,
     use_injuries: str | None = None,
 ) -> StreamingResponse:
     """Stream backtest progress via SSE."""
+    # Convert empty strings to None
+    _home_tid: int | None = None
+    _away_tid: int | None = None
+    if home_team_id and home_team_id.strip():
+        try:
+            _home_tid = int(home_team_id)
+        except ValueError:
+            pass
+    if away_team_id and away_team_id.strip():
+        try:
+            _away_tid = int(away_team_id)
+        except ValueError:
+            pass
+    home_team_id_int, away_team_id_int = _home_tid, _away_tid  # noqa: F841
     use_injuries_flag = True
     if use_injuries is not None:
         use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
@@ -317,7 +332,7 @@ async def stream_backtest(
         def run_bt() -> None:
             try:
                 results = run_backtest(
-                    5, home_team_id, away_team_id, progress_cb, use_injuries_flag
+                    5, home_team_id_int, away_team_id_int, progress_cb, use_injuries_flag
                 )
                 # Send results summary
                 msg_queue.put(f"[RESULT] games={results.total_games}")
@@ -792,12 +807,26 @@ def _format_predictions(results: BacktestResults) -> List[dict]:
 async def accuracy(
     request: Request,
     run: str | None = None,
-    home_team_id: int | None = None,
-    away_team_id: int | None = None,
+    home_team_id: str | None = None,
+    away_team_id: str | None = None,
     use_injuries: str | None = None,
 ) -> HTMLResponse:
     teams = _team_list()
     progress: List[str] = []
+
+    # Convert team_id strings: empty → None, otherwise int
+    home_tid: int | None = None
+    away_tid: int | None = None
+    if home_team_id and home_team_id.strip():
+        try:
+            home_tid = int(home_team_id)
+        except ValueError:
+            pass
+    if away_team_id and away_team_id.strip():
+        try:
+            away_tid = int(away_team_id)
+        except ValueError:
+            pass
 
     use_injuries_flag = True
     if use_injuries is not None:
@@ -818,8 +847,8 @@ async def accuracy(
             results = await asyncio.to_thread(
                 run_backtest,
                 5,
-                home_team_id,
-                away_team_id,
+                home_tid,
+                away_tid,
                 _cb,
                 use_injuries_flag,
             )
@@ -835,8 +864,8 @@ async def accuracy(
         {
             "request": request,
             "teams": teams,
-            "home_team_id": home_team_id,
-            "away_team_id": away_team_id,
+            "home_team_id": home_tid,
+            "away_team_id": away_tid,
             "results": results,
             "predictions": predictions,
             "avg_spread_err": avg_spread_err,
@@ -852,11 +881,19 @@ async def accuracy(
 async def autotune_page(
     request: Request,
     run: str | None = None,
-    team_id: int | None = None,
+    team_id: str | None = None,
     strength: float = 0.75,
     min_threshold: float = 1.5,
 ) -> HTMLResponse:
     """Autotune page -- run player-level historical analysis per team."""
+    # Convert team_id: empty string or None → None, otherwise int
+    team_id_int: int | None = None
+    if team_id and team_id.strip():
+        try:
+            team_id_int = int(team_id)
+        except ValueError:
+            team_id_int = None
+
     teams = _team_list()
     progress: List[str] = []
     results: List[dict] = []
@@ -867,10 +904,10 @@ async def autotune_page(
             progress.append(msg)
 
         try:
-            if team_id:
+            if team_id_int:
                 # Single team
                 res = await asyncio.to_thread(
-                    autotune_team, team_id, strength, min_threshold, _cb,
+                    autotune_team, team_id_int, strength, min_threshold, _cb,
                 )
                 results = [res]
             else:
@@ -889,7 +926,7 @@ async def autotune_page(
         {
             "request": request,
             "teams": teams,
-            "team_id": team_id,
+            "team_id": team_id_int,
             "strength": strength,
             "min_threshold": min_threshold,
             "progress": progress,
@@ -903,10 +940,16 @@ async def autotune_page(
 @app.post("/autotune/clear", response_class=HTMLResponse)
 async def autotune_clear(
     request: Request,
-    team_id: int | None = Form(None),
+    team_id: str | None = Form(None),
 ) -> HTMLResponse:
     """Clear autotune corrections for one team or all teams."""
-    await asyncio.to_thread(clear_tuning, team_id)
+    tid: int | None = None
+    if team_id and team_id.strip():
+        try:
+            tid = int(team_id)
+        except ValueError:
+            pass
+    await asyncio.to_thread(clear_tuning, tid)
     return RedirectResponse(url="/autotune", status_code=303)
 
 
@@ -1017,8 +1060,10 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
     box: BoxScore | None = None
     leaders: GameLeaders | None = None
     recent_plays: List[PlayEvent] = []
+    all_plays: List[PlayEvent] = []
     our_prediction: Optional[dict] = None
     live_pred: Optional[LivePrediction] = None
+    bonus: dict = {}
     
     if game_id:
         # Find the selected game
@@ -1028,8 +1073,18 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
         odds = await asyncio.to_thread(get_game_odds, game_id)
         box = await asyncio.to_thread(get_box_score, game_id)
         leaders = await asyncio.to_thread(get_game_leaders, game_id)
-        recent_plays = await asyncio.to_thread(get_play_by_play, game_id, "")
-        recent_plays = recent_plays[:20]  # Last 20 plays
+        all_plays = await asyncio.to_thread(get_play_by_play, game_id, "")
+        recent_plays = all_plays[:30]  # Last 30 plays for display
+
+        # Compute bonus status from full play list
+        if selected_game and all_plays:
+            # all_plays is newest-first; compute_bonus_status iterates all
+            bonus = compute_bonus_status(
+                all_plays,
+                selected_game.home_abbr,
+                selected_game.away_abbr,
+                selected_game.period,
+            )
         
         # Get our model's pre-game prediction (legacy)
         if selected_game:
@@ -1037,24 +1092,25 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
                 _get_our_prediction, selected_game.home_abbr, selected_game.away_abbr
             )
 
-            # Enhanced live prediction (blended engine)
-            home_id = _get_team_id_by_abbr(selected_game.home_abbr)
-            away_id = _get_team_id_by_abbr(selected_game.away_abbr)
-            if home_id and away_id:
-                try:
-                    live_pred = await asyncio.to_thread(
-                        live_predict,
-                        home_team_id=home_id,
-                        away_team_id=away_id,
-                        home_score=selected_game.home_score,
-                        away_score=selected_game.away_score,
-                        period=selected_game.period,
-                        clock=selected_game.clock,
-                        game_id=game_id,
-                        game_date_str=selected_game.start_time[:10] if selected_game.start_time else "",
-                    )
-                except Exception as e:
-                    print(f"[gamecast] live_predict error: {e}")
+            # Enhanced live prediction (blended engine) -- only for in-progress games
+            if selected_game.status == "in_progress":
+                home_id = _get_team_id_by_abbr(selected_game.home_abbr)
+                away_id = _get_team_id_by_abbr(selected_game.away_abbr)
+                if home_id and away_id:
+                    try:
+                        live_pred = await asyncio.to_thread(
+                            live_predict,
+                            home_team_id=home_id,
+                            away_team_id=away_id,
+                            home_score=selected_game.home_score,
+                            away_score=selected_game.away_score,
+                            period=selected_game.period,
+                            clock=selected_game.clock,
+                            game_id=game_id,
+                            game_date_str=selected_game.start_time[:10] if selected_game.start_time else "",
+                        )
+                    except Exception as e:
+                        print(f"[gamecast] live_predict error: {e}")
     
     return templates.TemplateResponse(
         "gamecast.html",
@@ -1069,6 +1125,7 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
             "recent_plays": recent_plays,
             "our_prediction": our_prediction,
             "live_pred": live_pred,
+            "bonus": bonus,
         },
     )
 
