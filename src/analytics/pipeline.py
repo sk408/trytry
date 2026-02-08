@@ -129,7 +129,7 @@ def run_full_pipeline(
     t0 = time.perf_counter()
     try:
         from src.data.sync_service import full_sync
-        full_sync(progress_cb=progress)
+        full_sync(progress_cb=progress, force=force_rerun)
         state = mark_step_done(state, "sync")
     except Exception as exc:
         progress(f"  Sync error (continuing): {exc}")

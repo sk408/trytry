@@ -58,14 +58,146 @@ def _update_player_cache(conn, player_id: int, games_count: int, latest_date: Op
     )
 
 
+# ============ SYNC-META FRESHNESS TRACKING ============
+
+def _get_db_game_snapshot(conn) -> tuple[int, str]:
+    """Return (game_count, last_game_date) from player_stats.
+
+    This is the authoritative measure of 'what completed games are in the DB'.
+    When a game finishes and box scores are finalized, new player_stats rows
+    appear, bumping the count and/or the max date.
+    """
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT game_id), MAX(game_date) FROM player_stats "
+        "WHERE game_id IS NOT NULL AND game_id != ''"
+    ).fetchone()
+    return (row[0] or 0, row[1] or "")
+
+
+def _get_sync_meta(conn, step_name: str) -> Optional[tuple[str, int, str]]:
+    """Return (last_synced_at, game_count_at_sync, last_game_date_at_sync) or None."""
+    row = conn.execute(
+        "SELECT last_synced_at, game_count_at_sync, last_game_date_at_sync "
+        "FROM sync_meta WHERE step_name = ?",
+        (step_name,),
+    ).fetchone()
+    return row if row else None
+
+
+def _set_sync_meta(conn, step_name: str, game_count: int, last_game_date: str) -> None:
+    """Record that *step_name* was just completed."""
+    conn.execute(
+        """
+        INSERT INTO sync_meta (step_name, last_synced_at, game_count_at_sync, last_game_date_at_sync)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(step_name) DO UPDATE SET
+            last_synced_at = excluded.last_synced_at,
+            game_count_at_sync = excluded.game_count_at_sync,
+            last_game_date_at_sync = excluded.last_game_date_at_sync
+        """,
+        (step_name, datetime.now().isoformat(), game_count, last_game_date),
+    )
+    conn.commit()
+
+
+def _is_step_fresh(conn, step_name: str, max_age_hours: float = 6.0) -> bool:
+    """A step is fresh if:
+    1. It was synced within *max_age_hours*, AND
+    2. No new completed games have appeared since (game count + last date unchanged).
+    """
+    meta = _get_sync_meta(conn, step_name)
+    if not meta:
+        return False  # never ran
+    last_synced_at, saved_count, saved_date = meta
+
+    # Check age
+    try:
+        synced_dt = datetime.fromisoformat(last_synced_at)
+        if (datetime.now() - synced_dt) > timedelta(hours=max_age_hours):
+            return False  # too old
+    except (ValueError, TypeError):
+        return False
+
+    # Check if completed games changed
+    current_count, current_date = _get_db_game_snapshot(conn)
+    if current_count != saved_count or current_date != saved_date:
+        return False  # new games completed since last sync
+
+    return True
+
+
+def _get_teams_with_new_games(conn, step_name: str) -> Set[int]:
+    """Return team IDs that have new completed games since the last sync of *step_name*.
+
+    Used for targeted game-log syncing: only re-fetch players on teams
+    that actually played since the last sync.
+    """
+    meta = _get_sync_meta(conn, step_name)
+    if not meta:
+        return set()  # never ran — caller should do full sync
+
+    _, saved_count, saved_date = meta
+
+    # Find games newer than what we had at last sync.
+    # A game is "new" if its game_date is after saved_date, or if game count grew
+    # (could be same date, late games).
+    if saved_date:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT opponent_team_id FROM player_stats
+            WHERE game_date >= ? AND game_id IS NOT NULL AND game_id != ''
+            UNION
+            SELECT DISTINCT ps2.opponent_team_id FROM player_stats ps2
+            WHERE ps2.game_date = ? AND ps2.game_id IS NOT NULL AND ps2.game_id != ''
+            """,
+            (saved_date, saved_date),
+        ).fetchall()
+        # Also include the "home" side: player's own team
+        player_rows = conn.execute(
+            """
+            SELECT DISTINCT p.team_id FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE ps.game_date >= ? AND ps.game_id IS NOT NULL AND ps.game_id != ''
+            """,
+            (saved_date,),
+        ).fetchall()
+        team_ids = {r[0] for r in rows} | {r[0] for r in player_rows}
+        return team_ids
+    return set()
+
+
 def sync_reference_data(
-    progress_cb: Optional[Callable[[str], None]] = None, season: Optional[str] = None
+    progress_cb: Optional[Callable[[str], None]] = None,
+    season: Optional[str] = None,
+    force: bool = False,
 ) -> pd.DataFrame:
+    """Sync teams and players to DB, returns players_df for reuse.
+
+    Freshness: rosters rarely change mid-day.  If teams + players already
+    exist in the DB and were synced within the last 6 hours, skip the API
+    calls and return a DataFrame built from the DB instead.
+    """
     season = season or get_current_season()
-    """Sync teams and players to DB, returns players_df for reuse."""
     progress = progress_cb or (lambda _msg: None)
     migrations.init_db()
     migrations.ensure_columns()
+
+    # ── Freshness check ──
+    if not force:
+        with get_conn() as conn:
+            if _is_step_fresh(conn, "reference_data", max_age_hours=6.0):
+                team_count = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+                player_count = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+                if team_count >= 30 and player_count > 100:
+                    progress(f"Reference data fresh (synced <6 hrs ago, {player_count} players) — skipping API calls")
+                    # Build players_df from DB
+                    players_df = pd.read_sql(
+                        "SELECT player_id AS id, name AS full_name, team_id, position, "
+                        "height, weight, age, experience FROM players",
+                        conn,
+                    )
+                    return players_df
+
     progress("Fetching teams...")
     teams_df = fetch_teams()
     progress("Fetching players...")
@@ -108,7 +240,13 @@ def sync_reference_data(
             players_df[["id", "full_name", "team_id", "position",
                         "height", "weight", "age", "experience"]].itertuples(index=False),
         )
+
+        # Record freshness
+        gc, gd = _get_db_game_snapshot(conn)
+        _set_sync_meta(conn, "reference_data", gc, gd)
         conn.commit()
+
+    progress(f"Reference data synced: {len(players_df)} players across {len(teams_df)} teams")
     return players_df
 
 
@@ -126,17 +264,17 @@ def sync_player_logs(
     skip_cached: bool = True,
     cache_max_age_hours: int = 24,
     force_recent_days: int = 3,
+    force: bool = False,
 ) -> None:
     """
     Sync all player game logs with comprehensive stats.
     
-    Caching behavior:
-    - Players synced within cache_max_age_hours are skipped (unless they have recent games)
-    - Players with games in the last force_recent_days are always re-fetched
-    - Set skip_cached=False to force full re-sync of all players
-    
-    Now stores extended stats: steals, blocks, turnovers, shooting stats,
-    rebound breakdown, and plus/minus.
+    Freshness / caching behaviour:
+    - If no new completed games since last sync, skip entirely (fast path).
+    - Otherwise, use the per-player sync cache: players synced within
+      cache_max_age_hours are skipped UNLESS they have recent games or are
+      on a team that just played.
+    - Set force=True to bypass all freshness checks.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
@@ -145,10 +283,20 @@ def sync_player_logs(
     
     with get_conn() as conn:
         abbr_to_id = _team_abbr_lookup(conn)
+
+        # ── Fast-path freshness check ──
+        if not force and _is_step_fresh(conn, "game_logs", max_age_hours=24.0):
+            cached_count = conn.execute(
+                "SELECT COUNT(*) FROM player_sync_cache"
+            ).fetchone()[0]
+            if cached_count > 100:
+                progress(f"Game logs fresh (no new completed games since last sync, "
+                         f"{cached_count} players cached) — skipping")
+                return
         
         # Determine which players to skip
         players_to_skip: Set[int] = set()
-        if skip_cached:
+        if skip_cached and not force:
             cached_players = _get_cached_players(conn, max_age_hours=cache_max_age_hours)
             recent_game_players = _get_players_with_recent_games(conn, days=force_recent_days)
 
@@ -274,9 +422,12 @@ def sync_player_logs(
             # Rate limit between successful fetches
             time.sleep(sleep_between)
         
+        # Record freshness snapshot AFTER writing new data
+        gc, gd = _get_db_game_snapshot(conn)
+        _set_sync_meta(conn, "game_logs", gc, gd)
         conn.commit()
         
-        if skip_cached:
+        if skip_cached or force:
             progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
 
 
@@ -351,10 +502,15 @@ def sync_schedule(
 def sync_team_metrics(
     season: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
+    force: bool = False,
 ) -> int:
     """
     Sync comprehensive team metrics from multiple NBA API endpoints into
     the consolidated team_metrics table.
+
+    Freshness: these are season aggregates that only change when games
+    complete.  If no new completed games since the last sync, skip all
+    8 API calls entirely.
 
     Endpoints called:
     - TeamEstimatedMetrics (off/def/net rating, pace)
@@ -372,6 +528,16 @@ def sync_team_metrics(
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
     migrations.init_db()
+
+    # ── Freshness check ──
+    if not force:
+        with get_conn() as conn:
+            if _is_step_fresh(conn, "team_metrics", max_age_hours=168.0):  # up to 7 days if no new games
+                existing = conn.execute("SELECT COUNT(*) FROM team_metrics").fetchone()[0]
+                if existing >= 30:
+                    progress(f"Team metrics fresh (no new completed games since last sync, "
+                             f"{existing} teams cached) — skipping 8 API calls")
+                    return existing
 
     # Accumulate per-team data in a dict keyed by team_id
     team_data: dict[int, dict] = {}
@@ -542,6 +708,11 @@ def sync_team_metrics(
             )
         conn.commit()
 
+    # Record freshness
+    with get_conn() as conn:
+        gc, gd = _get_db_game_snapshot(conn)
+        _set_sync_meta(conn, "team_metrics", gc, gd)
+
     progress(f"Team metrics synced for {len(team_data)} teams")
     return len(team_data)
 
@@ -549,9 +720,13 @@ def sync_team_metrics(
 def sync_player_impact(
     season: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
+    force: bool = False,
 ) -> int:
     """
     Sync player on/off impact and estimated metrics into player_impact table.
+
+    Freshness: like team metrics, these only change after completed games.
+    Skip the 31+ API calls if no new games.
 
     - PlayerEstimatedMetrics: one call for all players (USG%, ratings)
     - TeamPlayerOnOffSummary: one call per team (on/off net rating differential)
@@ -560,6 +735,16 @@ def sync_player_impact(
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
     migrations.init_db()
+
+    # ── Freshness check ──
+    if not force:
+        with get_conn() as conn:
+            if _is_step_fresh(conn, "player_impact", max_age_hours=168.0):
+                existing = conn.execute("SELECT COUNT(*) FROM player_impact").fetchone()[0]
+                if existing > 100:
+                    progress(f"Player impact fresh (no new completed games since last sync, "
+                             f"{existing} players cached) — skipping API calls")
+                    return existing
 
     player_data: dict[int, dict] = {}
 
@@ -647,25 +832,47 @@ def sync_player_impact(
             )
         conn.commit()
 
+    # Record freshness
+    with get_conn() as conn:
+        gc, gd = _get_db_game_snapshot(conn)
+        _set_sync_meta(conn, "player_impact", gc, gd)
+
     progress(f"Player impact synced for {len(player_data)} players")
     return len(player_data)
 
 
 def full_sync(
-    active_only: bool = True, season: Optional[str] = None, progress_cb: Optional[Callable[[str], None]] = None
+    active_only: bool = True,
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    force: bool = False,
 ) -> None:
+    """Full data sync with smart freshness checks.
+
+    Each step independently checks whether it needs to re-fetch from the
+    NBA API.  The key principle: **if no new games have completed since the
+    last sync of that step, skip the API calls**.
+
+    Set *force=True* to bypass all freshness checks.
+    """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
 
+    if force:
+        progress("Force mode: all freshness checks bypassed")
+
     # 1. Core reference data (teams + rosters with height/weight/age/exp)
     progress("Sync: reference data (teams + rosters)")
-    players_df = sync_reference_data(progress_cb=progress_cb, season=season)
+    players_df = sync_reference_data(progress_cb=progress_cb, season=season, force=force)
 
     # 2. Player game logs (now includes WL and PF)
-    progress(f"Sync: game logs for {len(players_df)} players (this may take a while)...")
-    sync_player_logs(players_df["id"].tolist(), season=season, progress_cb=progress_cb)
+    progress(f"Sync: game logs for {len(players_df)} players...")
+    sync_player_logs(
+        players_df["id"].tolist(), season=season, progress_cb=progress_cb,
+        force=force,
+    )
 
-    # 3. Current injuries
+    # 3. Current injuries (ALWAYS refresh — lightweight and can change any time)
     progress("Sync: current injuries")
     try:
         sync_injuries(progress_cb=progress)
@@ -673,27 +880,39 @@ def full_sync(
     except Exception as exc:
         progress(f"Current injuries sync skipped: {exc}")
 
-    # 4. Historical injury inference
+    # 4. Historical injury inference (skip if game log count unchanged)
     progress("Building historical injury data...")
     try:
-        count = sync_injury_history(progress_cb=progress)
-        progress(f"Historical injury data built: {count} records")
+        _skip_history = False
+        if not force:
+            with get_conn() as conn:
+                if _is_step_fresh(conn, "injury_history", max_age_hours=168.0):
+                    existing = conn.execute("SELECT COUNT(*) FROM injury_history").fetchone()[0]
+                    if existing > 0:
+                        progress(f"Injury history fresh ({existing} records, no new games) — skipping")
+                        _skip_history = True
+        if not _skip_history:
+            count = sync_injury_history(progress_cb=progress)
+            progress(f"Historical injury data built: {count} records")
+            with get_conn() as conn:
+                gc, gd = _get_db_game_snapshot(conn)
+                _set_sync_meta(conn, "injury_history", gc, gd)
     except Exception as exc:
         progress(f"Historical injury build skipped: {exc}")
 
     # 5. Team advanced metrics (official NBA ratings, Four Factors, clutch, hustle, splits)
     progress("Sync: team advanced metrics (8 API endpoints)...")
     try:
-        n = sync_team_metrics(season=season, progress_cb=progress_cb)
-        progress(f"Team metrics synced: {n} teams")
+        n = sync_team_metrics(season=season, progress_cb=progress_cb, force=force)
+        progress(f"Team metrics: {n} teams")
     except Exception as exc:
         progress(f"Team metrics sync skipped: {exc}")
 
     # 6. Player impact (on/off + estimated metrics)
     progress("Sync: player impact data (on/off + estimated metrics)...")
     try:
-        n = sync_player_impact(season=season, progress_cb=progress_cb)
-        progress(f"Player impact synced: {n} players")
+        n = sync_player_impact(season=season, progress_cb=progress_cb, force=force)
+        progress(f"Player impact: {n} players")
     except Exception as exc:
         progress(f"Player impact sync skipped: {exc}")
 

@@ -129,6 +129,35 @@ CREATE INDEX IF NOT EXISTS idx_injury_history_team_date
 CREATE INDEX IF NOT EXISTS idx_injury_history_player
     ON injury_history(player_id, game_date);
 
+-- ============ INJURY STATUS LOG (for injury intelligence) ============
+-- Tracks every observed injury status over time so we can compute
+-- play-through rates and predict whether "Questionable" / "Day-to-Day"
+-- players will actually suit up.
+
+CREATE TABLE IF NOT EXISTS injury_status_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    log_date TEXT NOT NULL,           -- date we observed this status (ISO)
+    status_level TEXT NOT NULL,       -- Out | Doubtful | Questionable | Probable | Day-To-Day | GTD | Available
+    injury_keyword TEXT DEFAULT '',   -- normalised category: ankle, knee, rest, illness, etc.
+    injury_detail TEXT DEFAULT '',    -- full injury text from source
+    next_game_date TEXT,              -- the team's next game after log_date (backfilled)
+    did_play INTEGER,                 -- 1 = played next game, 0 = did not, NULL = unknown
+    UNIQUE(player_id, log_date, status_level),
+    FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_injury_status_log_player
+    ON injury_status_log(player_id, log_date);
+
+CREATE INDEX IF NOT EXISTS idx_injury_status_log_status
+    ON injury_status_log(status_level, did_play);
+
+CREATE INDEX IF NOT EXISTS idx_injury_status_log_team
+    ON injury_status_log(team_id, log_date);
+
 -- ============ SYNC CACHE ============
 
 CREATE TABLE IF NOT EXISTS player_sync_cache (
@@ -140,6 +169,14 @@ CREATE TABLE IF NOT EXISTS player_sync_cache (
 
 CREATE INDEX IF NOT EXISTS idx_player_sync_cache_date
     ON player_sync_cache(last_synced_at);
+
+CREATE TABLE IF NOT EXISTS sync_meta (
+    step_name TEXT PRIMARY KEY,
+    last_synced_at TEXT NOT NULL,
+    game_count_at_sync INTEGER DEFAULT 0,
+    last_game_date_at_sync TEXT DEFAULT '',
+    extra TEXT DEFAULT ''
+);
 
 -- ============ AUTOTUNE ============
 
@@ -394,3 +431,40 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE player_stats ADD COLUMN win_loss TEXT;")
     if not has_column("player_stats", "personal_fouls"):
         conn.execute("ALTER TABLE player_stats ADD COLUMN personal_fouls REAL DEFAULT 0;")
+
+    # injury_status_log table (injury intelligence)
+    if not has_table("injury_status_log"):
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS injury_status_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                log_date TEXT NOT NULL,
+                status_level TEXT NOT NULL,
+                injury_keyword TEXT DEFAULT '',
+                injury_detail TEXT DEFAULT '',
+                next_game_date TEXT,
+                did_play INTEGER,
+                UNIQUE(player_id, log_date, status_level),
+                FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
+                FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_injury_status_log_player
+                ON injury_status_log(player_id, log_date);
+            CREATE INDEX IF NOT EXISTS idx_injury_status_log_status
+                ON injury_status_log(status_level, did_play);
+            CREATE INDEX IF NOT EXISTS idx_injury_status_log_team
+                ON injury_status_log(team_id, log_date);
+        """)
+
+    # sync_meta table (may be missing on older DBs created before schema update)
+    if not has_table("sync_meta"):
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sync_meta (
+                step_name TEXT PRIMARY KEY,
+                last_synced_at TEXT NOT NULL,
+                game_count_at_sync INTEGER DEFAULT 0,
+                last_game_date_at_sync TEXT DEFAULT '',
+                extra TEXT DEFAULT ''
+            )
+        """)
