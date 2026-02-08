@@ -184,7 +184,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
     
     # Extract all available stats
     cols = [
-        "GAME_ID",
+        "Game_ID",
         "GAME_DATE",
         "MATCHUP",
         "WL",
@@ -224,7 +224,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
     
     # Rename columns to snake_case
     rename_map = {
-        "GAME_ID": "game_id",
+        "Game_ID": "game_id",
         "PTS": "points",
         "REB": "rebounds",
         "AST": "assists",

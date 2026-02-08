@@ -1,12 +1,41 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.data.nba_fetcher import get_current_season
 from src.data.sync_service import sync_schedule
 from src.database.db import get_conn
+
+
+def _relative_date_label(game_date: date, today: date) -> str:
+    """Return a human-friendly relative date label.
+
+    Examples: 'Today', 'Tomorrow', '+2 days', 'Yesterday', '-3 days'.
+    """
+    delta = (game_date - today).days
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Tomorrow"
+    if delta == -1:
+        return "Yesterday"
+    if delta > 1:
+        return f"+{delta} days"
+    # delta < -1
+    return f"{delta} days"
 
 
 class ScheduleView(QWidget):
@@ -57,32 +86,84 @@ class ScheduleView(QWidget):
             self._games_data = []
             return
 
+        today = date.today()
+
         # Store game data for lookup when user clicks a row
         self._games_data = []
         for _, row in df.iterrows():
+            raw_date = row.get("game_date", "")
+            # Normalise to a date object so we can sort and label
+            if isinstance(raw_date, date):
+                gd = raw_date
+            else:
+                try:
+                    gd = date.fromisoformat(str(raw_date)[:10])
+                except (ValueError, TypeError):
+                    gd = today  # fallback
+
             self._games_data.append({
                 "home_team_id": int(row.get("home_team_id", 0) or 0),
                 "away_team_id": int(row.get("away_team_id", 0) or 0),
-                "game_date": str(row.get("game_date", "")),
+                "game_date_obj": gd,
+                "game_date_str": gd.strftime("%a %m/%d"),
+                "date_label": _relative_date_label(gd, today),
                 "home_abbr": str(row.get("home_abbr", "")),
                 "away_abbr": str(row.get("away_abbr", "")),
                 "game_time": str(row.get("game_time", "")),
                 "arena": str(row.get("arena", "")),
             })
 
+        # Sort: today first, then ascending future, then most-recent past
+        def _sort_key(g: dict) -> tuple:
+            delta = (g["game_date_obj"] - today).days
+            if delta == 0:
+                return (0, 0)
+            if delta > 0:
+                return (1, delta)          # closest future first
+            return (2, abs(delta))         # most-recent past first
+
+        self._games_data.sort(key=_sort_key)
+
         self.table.clear()
-        headers = ["Date", "Away", "@", "Home", "Time", "Arena"]
+        headers = ["Day", "Date", "Away", "@", "Home", "Time", "Arena"]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self._games_data))
 
+        bold_font = QFont()
+        bold_font.setBold(True)
+        today_bg = QColor(45, 80, 140)       # subtle blue highlight for today
+        tomorrow_bg = QColor(55, 70, 95)     # dimmer highlight for tomorrow
+
         for row_idx, g in enumerate(self._games_data):
-            self.table.setItem(row_idx, 0, QTableWidgetItem(g["game_date"]))
-            self.table.setItem(row_idx, 1, QTableWidgetItem(g["away_abbr"]))
-            self.table.setItem(row_idx, 2, QTableWidgetItem("@"))
-            self.table.setItem(row_idx, 3, QTableWidgetItem(g["home_abbr"]))
-            self.table.setItem(row_idx, 4, QTableWidgetItem(g["game_time"]))
-            self.table.setItem(row_idx, 5, QTableWidgetItem(g["arena"]))
+            day_item = QTableWidgetItem(g["date_label"])
+            date_item = QTableWidgetItem(g["game_date_str"])
+            away_item = QTableWidgetItem(g["away_abbr"])
+            at_item = QTableWidgetItem("@")
+            home_item = QTableWidgetItem(g["home_abbr"])
+            time_item = QTableWidgetItem(g["game_time"])
+            arena_item = QTableWidgetItem(g["arena"])
+
+            row_items = [day_item, date_item, away_item, at_item,
+                         home_item, time_item, arena_item]
+
+            # Highlight today / tomorrow rows
+            if g["date_label"] == "Today":
+                for item in row_items:
+                    item.setFont(bold_font)
+                    item.setBackground(today_bg)
+            elif g["date_label"] == "Tomorrow":
+                for item in row_items:
+                    item.setBackground(tomorrow_bg)
+
+            self.table.setItem(row_idx, 0, day_item)
+            self.table.setItem(row_idx, 1, date_item)
+            self.table.setItem(row_idx, 2, away_item)
+            self.table.setItem(row_idx, 3, at_item)
+            self.table.setItem(row_idx, 4, home_item)
+            self.table.setItem(row_idx, 5, time_item)
+            self.table.setItem(row_idx, 6, arena_item)
+
         self.table.resizeColumnsToContents()
 
     def _on_double_click(self, index) -> None:

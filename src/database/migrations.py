@@ -281,6 +281,27 @@ CREATE TABLE IF NOT EXISTS player_impact (
 
 CREATE INDEX IF NOT EXISTS idx_player_impact_team
     ON player_impact(team_id, season);
+
+-- ============ QUARTER SCORES (for live prediction history) ============
+-- Stores per-quarter scoring from ESPN linescores.
+-- One row per team per game.  Populated opportunistically when viewing gamecast.
+
+CREATE TABLE IF NOT EXISTS game_quarter_scores (
+    game_id TEXT NOT NULL,
+    team_id INTEGER NOT NULL,
+    q1 INTEGER,
+    q2 INTEGER,
+    q3 INTEGER,
+    q4 INTEGER,
+    ot INTEGER DEFAULT 0,
+    final_score INTEGER,
+    game_date TEXT,
+    is_home INTEGER DEFAULT 0,
+    PRIMARY KEY (game_id, team_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quarter_scores_team_date
+    ON game_quarter_scores(team_id, game_date);
 """
 
 

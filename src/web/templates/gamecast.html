@@ -109,8 +109,130 @@
 </div>
 {% endif %}
 
-<!-- Our Prediction vs Reality -->
-{% if our_prediction %}
+<!-- Live Prediction (blended engine) -->
+{% if live_pred %}
+<div class="card">
+  <h2>Live Prediction</h2>
+
+  <!-- Blend weight bar -->
+  <div class="blend-bar-container">
+    <div class="blend-bar-labels">
+      <span>Pre-game {{ "%.0f"|format(live_pred.blend_weights.get('pregame', 0) * 100) }}%</span>
+      <span>Pace {{ "%.0f"|format(live_pred.blend_weights.get('pace', 0) * 100) }}%</span>
+      <span>Quarter-Hist {{ "%.0f"|format(live_pred.blend_weights.get('quarter', 0) * 100) }}%</span>
+    </div>
+    <div class="blend-bar">
+      <div class="blend-segment blend-pregame" style="width: {{ live_pred.blend_weights.get('pregame', 0) * 100 }}%"></div>
+      <div class="blend-segment blend-pace" style="width: {{ live_pred.blend_weights.get('pace', 0) * 100 }}%"></div>
+      <div class="blend-segment blend-quarter" style="width: {{ live_pred.blend_weights.get('quarter', 0) * 100 }}%"></div>
+    </div>
+  </div>
+
+  <!-- Blended projection (main) -->
+  <div class="pred-summary">
+    <div class="pred-item" style="border-left: 3px solid var(--accent);">
+      <span class="pred-label">LIVE SPREAD</span>
+      <span class="pred-value" style="font-size: 1.3rem;">{{ selected_game.home_abbr }} {{ "%+.1f"|format(live_pred.projected_spread) }}</span>
+    </div>
+    <div class="pred-item" style="border-left: 3px solid var(--accent);">
+      <span class="pred-label">LIVE TOTAL</span>
+      <span class="pred-value" style="font-size: 1.3rem;">{{ "%.1f"|format(live_pred.projected_total) }}</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Live {{ selected_game.home_abbr }}</span>
+      <span class="pred-value">{{ "%.0f"|format(live_pred.projected_home_score) }}</span>
+      <span class="odds-sub">Actual: {{ selected_game.home_score }}</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Live {{ selected_game.away_abbr }}</span>
+      <span class="pred-value">{{ "%.0f"|format(live_pred.projected_away_score) }}</span>
+      <span class="odds-sub">Actual: {{ selected_game.away_score }}</span>
+    </div>
+  </div>
+
+  <!-- Signals -->
+  {% if live_pred.over_under_signal or live_pred.spread_signal %}
+  <div class="pace-projection">
+    {% if live_pred.over_under_signal %}
+    <span class="{% if 'OVER' in live_pred.over_under_signal %}text-success{% elif 'UNDER' in live_pred.over_under_signal %}text-danger{% else %}text-muted{% endif %}" style="font-weight: 700;">
+      {{ live_pred.over_under_signal }}
+    </span>
+    {% endif %}
+    {% if live_pred.spread_signal and live_pred.spread_signal != 'Too early' %}
+    <span style="margin-left: 16px;" class="{% if 'Home' in live_pred.spread_signal %}text-success{% elif 'Away' in live_pred.spread_signal %}text-danger{% else %}text-muted{% endif %}">
+      {{ live_pred.spread_signal }}
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Component breakdown -->
+  <div class="pred-summary" style="margin-top: 12px;">
+    <div class="pred-item">
+      <span class="pred-label">Pre-game Spread</span>
+      <span class="pred-value">{{ selected_game.home_abbr }} {{ "%+.1f"|format(live_pred.pregame_spread) }}</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Pre-game Total</span>
+      <span class="pred-value">{{ "%.1f"|format(live_pred.pregame_total) }}</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Pace Total</span>
+      <span class="pred-value">{{ "%.1f"|format(live_pred.pace_total) }}</span>
+    </div>
+    {% if live_pred.quarter_history_total %}
+    <div class="pred-item">
+      <span class="pred-label">Quarter Hist Total</span>
+      <span class="pred-value">{{ "%.1f"|format(live_pred.quarter_history_total) }}</span>
+    </div>
+    {% else %}
+    <div class="pred-item">
+      <span class="pred-label">Quarter Hist</span>
+      <span class="pred-value text-muted">N/A</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Quarter analysis -->
+  {% if live_pred.quarter_analysis_home or live_pred.quarter_analysis_away %}
+  <div class="pace-projection" style="margin-top: 8px;">
+    {% if live_pred.quarter_analysis_home %}
+    <div><span class="text-muted">{{ selected_game.home_abbr }}:</span> {{ live_pred.quarter_analysis_home }}</div>
+    {% endif %}
+    {% if live_pred.quarter_analysis_away %}
+    <div><span class="text-muted">{{ selected_game.away_abbr }}:</span> {{ live_pred.quarter_analysis_away }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Actual vs predicted comparison -->
+  {% if selected_game.period > 0 %}
+  <div class="pred-summary" style="margin-top: 12px;">
+    <div class="pred-item">
+      <span class="pred-label">Current Spread</span>
+      {% set actual_spread = selected_game.home_score - selected_game.away_score %}
+      <span class="pred-value {% if (actual_spread > 0) == (live_pred.pregame_spread > 0) %}text-success{% else %}text-danger{% endif %}">
+        {{ selected_game.home_abbr }} {{ "%+d"|format(actual_spread) }}
+      </span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Current Total</span>
+      {% set actual_total = selected_game.home_score + selected_game.away_score %}
+      <span class="pred-value">{{ actual_total }}</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Elapsed</span>
+      <span class="pred-value">{{ "%.0f"|format(live_pred.minutes_elapsed) }} min</span>
+    </div>
+    <div class="pred-item">
+      <span class="pred-label">Remaining</span>
+      <span class="pred-value">{{ "%.0f"|format(48 - live_pred.minutes_elapsed) }} min</span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% elif our_prediction %}
+<!-- Fallback: pre-game only (game hasn't started or live_pred unavailable) -->
 <div class="card">
   <h2>Our Prediction</h2>
   <div class="prediction-comparison">
@@ -118,17 +240,13 @@
       <div class="pred-team">
         <span class="pred-abbr">{{ our_prediction.away_abbr }}</span>
         <span class="pred-projected">Proj: {{ "%.0f"|format(our_prediction.away_projected_score) }}</span>
-        <span class="pred-actual {% if selected_game.away_score > our_prediction.away_projected_score %}text-success{% elif selected_game.away_score < our_prediction.away_projected_score - 5 %}text-danger{% endif %}">
-          Actual: {{ selected_game.away_score }}
-        </span>
+        <span class="pred-actual">Actual: {{ selected_game.away_score }}</span>
       </div>
       <div class="pred-vs">@</div>
       <div class="pred-team">
         <span class="pred-abbr">{{ our_prediction.home_abbr }}</span>
         <span class="pred-projected">Proj: {{ "%.0f"|format(our_prediction.home_projected_score) }}</span>
-        <span class="pred-actual {% if selected_game.home_score > our_prediction.home_projected_score %}text-success{% elif selected_game.home_score < our_prediction.home_projected_score - 5 %}text-danger{% endif %}">
-          Actual: {{ selected_game.home_score }}
-        </span>
+        <span class="pred-actual">Actual: {{ selected_game.home_score }}</span>
       </div>
     </div>
     <div class="pred-summary">
@@ -137,40 +255,10 @@
         <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(our_prediction.predicted_spread) }}</span>
       </div>
       <div class="pred-item">
-        <span class="pred-label">Actual Spread</span>
-        {% set actual_spread = selected_game.home_score - selected_game.away_score %}
-        <span class="pred-value {% if (actual_spread > 0) == (our_prediction.predicted_spread > 0) %}text-success{% else %}text-danger{% endif %}">
-          {{ our_prediction.home_abbr }} {{ "%+d"|format(actual_spread) }}
-        </span>
-      </div>
-      <div class="pred-item">
         <span class="pred-label">Pred Total</span>
         <span class="pred-value">{{ "%.1f"|format(our_prediction.predicted_total) }}</span>
       </div>
-      <div class="pred-item">
-        <span class="pred-label">Actual Total</span>
-        {% set actual_total = selected_game.home_score + selected_game.away_score %}
-        <span class="pred-value {% if actual_total > our_prediction.predicted_total %}text-success{% else %}text-warning{% endif %}">
-          {{ actual_total }}
-        </span>
-      </div>
     </div>
-    <!-- Pace projection -->
-    {% if selected_game.period > 0 %}
-    <div class="pace-projection">
-      {% set minutes_played = (selected_game.period - 1) * 12 + (12 - (selected_game.clock|replace(':', '.')|float if ':' in selected_game.clock else 12)) %}
-      {% set pace_factor = 48.0 / minutes_played if minutes_played > 0 else 1 %}
-      {% set projected_final_total = actual_total * pace_factor %}
-      <span class="text-muted">
-        Pace: ~{{ "%.0f"|format(projected_final_total) }} total projected at current rate
-        {% if projected_final_total > our_prediction.predicted_total %}
-          (OVER likely)
-        {% else %}
-          (UNDER likely)
-        {% endif %}
-      </span>
-    </div>
-    {% endif %}
   </div>
 </div>
 {% endif %}
@@ -800,6 +888,43 @@ window.addEventListener('beforeunload', function() {
   font-size: 1rem;
   font-weight: 700;
   color: var(--accent);
+}
+
+/* Blend Weight Bar */
+.blend-bar-container {
+  margin-bottom: 16px;
+}
+
+.blend-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.blend-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-dark);
+}
+
+.blend-segment {
+  transition: width 0.5s ease;
+}
+
+.blend-pregame {
+  background: #3498db;
+}
+
+.blend-pace {
+  background: #e67e22;
+}
+
+.blend-quarter {
+  background: #9b59b6;
 }
 
 /* Desktop */

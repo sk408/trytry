@@ -9,6 +9,7 @@ from src.ui.accuracy_view import AccuracyView
 from src.ui.autotune_view import AutotuneView
 from src.ui.dashboard import Dashboard
 from src.ui.admin_view import AdminView
+from src.ui.gamecast_view import GamecastView
 from src.ui.live_view import LiveView
 from src.ui.matchup_view import MatchupView
 from src.ui.players_view import PlayersView
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.matchup_view, "Matchups")
         self.tabs.addTab(self.schedule_view, "Schedule")
         self.tabs.addTab(LiveView(), "Live")
+        self.tabs.addTab(GamecastView(), "Gamecast")
         self.tabs.addTab(AccuracyView(), "Accuracy")
         self.tabs.addTab(AutotuneView(), "Autotune")
         self.tabs.addTab(AdminView(), "Admin")

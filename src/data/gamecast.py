@@ -33,6 +33,11 @@ class GameInfo:
     period: int = 0
     clock: str = ""
     start_time: str = ""
+    # Quarter-by-quarter scores (from ESPN linescores)
+    home_linescores: List[int] = field(default_factory=list)  # [Q1, Q2, Q3, Q4, OT...]
+    away_linescores: List[int] = field(default_factory=list)
+    home_team_id: str = ""   # ESPN team ID for DB mapping
+    away_team_id: str = ""
 
 
 @dataclass
@@ -143,6 +148,14 @@ def get_live_games() -> List[GameInfo]:
         
         status_map = {"pre": "scheduled", "in": "in_progress", "post": "final"}
         
+        # Parse linescores (quarter-by-quarter scores)
+        home_linescores = []
+        away_linescores = []
+        for ls in home.get("linescores", []):
+            home_linescores.append(int(ls.get("value", 0) or 0))
+        for ls in away.get("linescores", []):
+            away_linescores.append(int(ls.get("value", 0) or 0))
+
         games.append(GameInfo(
             game_id=event.get("id", ""),
             home_team=home_team.get("displayName", "Home"),
@@ -155,9 +168,66 @@ def get_live_games() -> List[GameInfo]:
             period=int(status_obj.get("period", 0) or 0),
             clock=status_obj.get("displayClock", ""),
             start_time=event.get("date", ""),
+            home_linescores=home_linescores,
+            away_linescores=away_linescores,
+            home_team_id=str(home_team.get("id", "")),
+            away_team_id=str(away_team.get("id", "")),
         ))
     
     return games
+
+
+def get_quarter_scores(game_id: str) -> Optional[Dict[str, Any]]:
+    """Parse quarter-by-quarter scores from ESPN Summary API.
+
+    Returns dict with keys:
+        home_team_id, away_team_id (ESPN IDs as strings),
+        home_abbr, away_abbr,
+        home_linescores, away_linescores (list of ints per quarter/OT),
+        home_final, away_final,
+        game_date (ISO string),
+        status ('scheduled' | 'in_progress' | 'final').
+    Returns None on error or if no data available.
+    """
+    try:
+        resp = requests.get(
+            ESPN_SUMMARY_URL,
+            params={"event": game_id},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[gamecast] Error fetching quarter scores for {game_id}: {e}")
+        return None
+
+    header = data.get("header", {})
+    comp = header.get("competitions", [{}])[0]
+    competitors = comp.get("competitors", [])
+    if len(competitors) < 2:
+        return None
+
+    status_type = comp.get("status", {}).get("type", {})
+    status_state = status_type.get("state", "pre")
+    status_map = {"pre": "scheduled", "in": "in_progress", "post": "final"}
+    game_date = comp.get("date", "")
+
+    result: Dict[str, Any] = {
+        "status": status_map.get(status_state, "scheduled"),
+        "game_date": game_date[:10] if game_date else "",
+    }
+
+    for c in competitors:
+        team = c.get("team", {})
+        is_home = c.get("homeAway") == "home"
+        prefix = "home" if is_home else "away"
+        result[f"{prefix}_team_id"] = str(team.get("id", ""))
+        result[f"{prefix}_abbr"] = team.get("abbreviation", "")
+        linescores = [int(ls.get("value", 0) or 0) for ls in c.get("linescores", [])]
+        result[f"{prefix}_linescores"] = linescores
+        result[f"{prefix}_final"] = int(c.get("score", 0) or 0)
+
+    return result
 
 
 def get_game_odds(game_id: str) -> Optional[GameOdds]:
@@ -429,19 +499,20 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
 
 def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
     """Fetch play-by-play events from ESPN summary API.
-    
+
     Args:
         game_id: ESPN game ID
-        last_event_id: Only return events after this ID (for incremental updates)
-    
+        last_event_id: Only return events *newer* than this ID
+                       (for incremental updates).  Pass ``""`` to get all.
+
     Returns:
-        List of play events, newest first
+        List of play events, **newest first**.
     """
     try:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
-            timeout=10
+            timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -449,46 +520,45 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
         print(f"[gamecast] Error fetching play-by-play for {game_id}: {e}")
         return []
 
-    plays = []
     plays_data = data.get("plays", [])
-    
-    found_last = not last_event_id  # If no last_event_id, return all
-    
-    for play in reversed(plays_data):  # Newest first
-        play_id = str(play.get("id", ""))
-        
-        if play_id == last_event_id:
-            found_last = True
-            continue
-            
-        if not found_last:
-            continue
-        
-        # Parse team info
+    # ESPN returns plays in chronological order (oldest first).
+
+    # When last_event_id is given, skip everything up to and including
+    # that event so we only return *newer* plays.
+    if last_event_id:
+        idx = None
+        for i, p in enumerate(plays_data):
+            if str(p.get("id", "")) == last_event_id:
+                idx = i
+                break
+        if idx is not None:
+            plays_data = plays_data[idx + 1:]  # everything after the match
+        else:
+            # ID not found (game reset / new data) – return all
+            pass
+
+    parsed: List[PlayEvent] = []
+    for play in plays_data:
         team = play.get("team", {})
         team_abbr = team.get("abbreviation", "") if team else ""
-        
-        # Parse score
-        score_value = play.get("scoreValue", 0)
-        home_score = int(play.get("homeScore", 0) or 0)
-        away_score = int(play.get("awayScore", 0) or 0)
-        
-        # Determine event type
+
         play_type = play.get("type", {})
         type_text = play_type.get("text", "") if play_type else ""
-        
-        plays.append(PlayEvent(
-            event_id=play_id,
+
+        parsed.append(PlayEvent(
+            event_id=str(play.get("id", "")),
             clock=play.get("clock", {}).get("displayValue", ""),
             period=int(play.get("period", {}).get("number", 0) or 0),
             text=play.get("text", ""),
             team=team_abbr,
-            score_home=home_score,
-            score_away=away_score,
+            score_home=int(play.get("homeScore", 0) or 0),
+            score_away=int(play.get("awayScore", 0) or 0),
             event_type=type_text.lower() if type_text else "",
         ))
-    
-    return plays
+
+    # Return newest first
+    parsed.reverse()
+    return parsed
 
 
 class GamecastClient:

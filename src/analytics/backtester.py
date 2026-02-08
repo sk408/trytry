@@ -531,9 +531,9 @@ def predict_game_historical(
     combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
     total -= combined_fatigue * 0.3
 
-    # Sanity clamps
-    spread = max(-25.0, min(25.0, spread))
-    total = max(185.0, min(260.0, total))
+    # Sanity clamps – realistic pre-game prediction ranges
+    spread = max(-18.0, min(18.0, spread))
+    total = max(195.0, min(248.0, total))
     
     return spread, total, home_proj, away_proj
 

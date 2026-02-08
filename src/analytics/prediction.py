@@ -204,9 +204,11 @@ def predict_matchup(
         )
 
     # ============ SANITY CLAMPS ============
-    # NBA scores are almost always 85-140 per team; totals 185-260.
-    spread = max(-25.0, min(25.0, spread))
-    total = max(185.0, min(260.0, total))
+    # Realistic pre-game prediction ranges (regulation, no OT):
+    #   Spread: rarely exceeds ±18 even for lopsided matchups
+    #   Total: very defensive ~195, very fast ~248
+    spread = max(-18.0, min(18.0, spread))
+    total = max(195.0, min(248.0, total))
 
     # ============ DERIVE INDIVIDUAL SCORES ============
     pred_home_score = (total + spread) / 2

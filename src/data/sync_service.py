@@ -746,3 +746,74 @@ def _ensure_teams_exist(team_ids: set[int]) -> None:
             subset[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
         )
         conn.commit()
+
+
+def sync_quarter_scores(game_id: str) -> bool:
+    """Opportunistically store quarter-by-quarter scores for a game.
+
+    Called when viewing a game in the Gamecast tab.  Pulls linescores
+    from the ESPN Summary API and upserts into ``game_quarter_scores``.
+
+    Returns True if any rows were stored / updated.
+    """
+    from src.data.gamecast import get_quarter_scores
+
+    migrations.init_db()
+    qs = get_quarter_scores(game_id)
+    if not qs:
+        return False
+
+    # We need our internal team_id (NBA API), not ESPN's team ID.
+    # Map via abbreviation.
+    with get_conn() as conn:
+        abbr_to_id = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT abbreviation, team_id FROM teams"
+            ).fetchall()
+        }
+
+    # ESPN uses shorter abbreviations for a few teams
+    espn_to_nba = {
+        "GS": "GSW", "SA": "SAS", "NY": "NYK",
+        "NO": "NOP", "UTAH": "UTA", "WSH": "WAS",
+    }
+
+    rows = []
+    for prefix in ("home", "away"):
+        abbr = qs.get(f"{prefix}_abbr", "")
+        abbr = espn_to_nba.get(abbr, abbr)  # normalise ESPN → NBA
+        team_id = abbr_to_id.get(abbr)
+        if not team_id:
+            continue
+        linescores = qs.get(f"{prefix}_linescores", [])
+        q1 = linescores[0] if len(linescores) > 0 else None
+        q2 = linescores[1] if len(linescores) > 1 else None
+        q3 = linescores[2] if len(linescores) > 2 else None
+        q4 = linescores[3] if len(linescores) > 3 else None
+        ot = sum(linescores[4:]) if len(linescores) > 4 else 0
+        final = qs.get(f"{prefix}_final", 0)
+        game_date = qs.get("game_date", "")
+        is_home = 1 if prefix == "home" else 0
+        rows.append((
+            game_id, team_id, q1, q2, q3, q4, ot, final, game_date, is_home,
+        ))
+
+    if not rows:
+        return False
+
+    with get_conn() as conn:
+        conn.executemany(
+            """
+            INSERT INTO game_quarter_scores
+                (game_id, team_id, q1, q2, q3, q4, ot, final_score, game_date, is_home)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(game_id, team_id) DO UPDATE SET
+                q1=excluded.q1, q2=excluded.q2, q3=excluded.q3, q4=excluded.q4,
+                ot=excluded.ot, final_score=excluded.final_score,
+                game_date=excluded.game_date, is_home=excluded.is_home
+            """,
+            rows,
+        )
+        conn.commit()
+    return True

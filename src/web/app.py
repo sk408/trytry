@@ -21,6 +21,7 @@ from src.analytics.autotune import (
     get_all_tunings,
 )
 from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
+from src.analytics.live_prediction import LivePrediction, live_predict
 from src.analytics.live_recommendations import build_live_recommendations
 from src.analytics.prediction import predict_matchup
 from src.analytics.stats_engine import get_scheduled_games, get_team_matchup_stats, TeamMatchupStats
@@ -830,11 +831,27 @@ async def admin_reset(request: Request) -> HTMLResponse:
 
 # --- Gamecast (ESPN real-time game data) ---
 
+# ESPN uses shorter abbreviations for a few teams.  Map to the NBA-API
+# values stored in our ``teams`` table.
+_ESPN_TO_NBA_ABBR = {
+    "GS": "GSW",
+    "SA": "SAS",
+    "NY": "NYK",
+    "NO": "NOP",
+    "UTAH": "UTA",
+    "WSH": "WAS",
+}
+
+
 def _get_team_id_by_abbr(abbr: str) -> Optional[int]:
-    """Look up team ID by abbreviation."""
+    """Look up team ID by abbreviation.
+
+    Handles known ESPN ↔ NBA-API abbreviation mismatches (e.g. GS → GSW).
+    """
+    canonical = _ESPN_TO_NBA_ABBR.get(abbr, abbr)
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT team_id FROM teams WHERE abbreviation = ?", (abbr,)
+            "SELECT team_id FROM teams WHERE abbreviation = ?", (canonical,)
         ).fetchone()
     return int(row[0]) if row else None
 
@@ -889,6 +906,7 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
     leaders: GameLeaders | None = None
     recent_plays: List[PlayEvent] = []
     our_prediction: Optional[dict] = None
+    live_pred: Optional[LivePrediction] = None
     
     if game_id:
         # Find the selected game
@@ -901,11 +919,30 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
         recent_plays = await asyncio.to_thread(get_play_by_play, game_id, "")
         recent_plays = recent_plays[:20]  # Last 20 plays
         
-        # Get our model's prediction
+        # Get our model's pre-game prediction (legacy)
         if selected_game:
             our_prediction = await asyncio.to_thread(
                 _get_our_prediction, selected_game.home_abbr, selected_game.away_abbr
             )
+
+            # Enhanced live prediction (blended engine)
+            home_id = _get_team_id_by_abbr(selected_game.home_abbr)
+            away_id = _get_team_id_by_abbr(selected_game.away_abbr)
+            if home_id and away_id:
+                try:
+                    live_pred = await asyncio.to_thread(
+                        live_predict,
+                        home_team_id=home_id,
+                        away_team_id=away_id,
+                        home_score=selected_game.home_score,
+                        away_score=selected_game.away_score,
+                        period=selected_game.period,
+                        clock=selected_game.clock,
+                        game_id=game_id,
+                        game_date_str=selected_game.start_time[:10] if selected_game.start_time else "",
+                    )
+                except Exception as e:
+                    print(f"[gamecast] live_predict error: {e}")
     
     return templates.TemplateResponse(
         "gamecast.html",
@@ -919,6 +956,7 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
             "leaders": leaders,
             "recent_plays": recent_plays,
             "our_prediction": our_prediction,
+            "live_pred": live_pred,
         },
     )
 

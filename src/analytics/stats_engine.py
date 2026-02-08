@@ -733,7 +733,29 @@ def aggregate_projection(
         )
         for k in totals:
             totals[k] = totals[k] + splits.get(k, 0.0)
-    
+
+    # ---- MINUTE NORMALIZATION ----
+    # A game has 240 player-minutes (5 players × 48 min).
+    # Summing every roster player's per-game averages overcounts because
+    # bench players' minutes overlap with starters' rest minutes.
+    # Scale all counting stats down proportionally when total exceeds the budget.
+    TEAM_MINUTES_PER_GAME = 240.0
+    total_projected_minutes = totals.get("minutes", 0.0)
+    if total_projected_minutes > TEAM_MINUTES_PER_GAME:
+        scale = TEAM_MINUTES_PER_GAME / total_projected_minutes
+        count_keys = [
+            "points", "rebounds", "assists", "minutes",
+            "steals", "blocks", "turnovers",
+            "oreb", "dreb",
+            "fg_made", "fg_attempted",
+            "fg3_made", "fg3_attempted",
+            "ft_made", "ft_attempted",
+            "fga_pg", "fta_pg",
+        ]
+        for k in count_keys:
+            if k in totals:
+                totals[k] *= scale
+
     # Calculate team-level efficiency from aggregated shooting stats
     total_fga = totals["fg_attempted"]
     total_fg3a = totals["fg3_attempted"]
