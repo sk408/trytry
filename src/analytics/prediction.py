@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from src.analytics.stats_engine import (
     aggregate_projection,
@@ -18,7 +18,11 @@ from src.analytics.stats_engine import (
     get_team_metrics,
 )
 from src.analytics.autotune import get_team_tuning
-from src.analytics.weight_config import WeightConfig, get_weight_config
+from src.analytics.weight_config import (
+    WeightConfig,
+    get_weight_config,
+    load_team_weights,
+)
 from src.database.db import get_conn
 
 
@@ -77,7 +81,15 @@ def predict_matchup(
     - Recent form weighting (last 5 games 60%, older 40%)
     """
     gd = game_date or date.today()
-    w = get_weight_config()
+
+    # Check for per-team weight overrides (use home team's overrides if they
+    # exist, otherwise away team's, otherwise global).  This lets the per-team
+    # refinement influence predictions for that team's games.
+    w = (
+        load_team_weights(home_team_id)
+        or load_team_weights(away_team_id)
+        or get_weight_config()
+    )
 
     # ============ 1. PLAYER-LEVEL PROJECTIONS ============
     home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
@@ -417,6 +429,232 @@ def _blend_with_espn(
         blended *= w.espn_disagree_damp
 
     return blended, True
+
+
+# ============ PRECOMPUTED FAST-PATH FOR OPTIMISER ============
+
+@dataclass
+class PrecomputedGame:
+    """All raw inputs for a single game, extracted once from the DB.
+    The optimiser can re-derive spread/total with different weights
+    without touching the database."""
+    # Identifiers
+    game_date: date
+    home_team_id: int
+    away_team_id: int
+    actual_home_score: float
+    actual_away_score: float
+    # Player-level projections (weight-independent aggregates)
+    home_proj: dict  # from aggregate_projection
+    away_proj: dict
+    # Team-level raw data (weight-independent)
+    home_court: float
+    away_def_factor_raw: float  # before dampening
+    home_def_factor_raw: float
+    home_tuning_home_corr: float  # 0.0 if no tuning
+    away_tuning_away_corr: float
+    home_fatigue_penalty: float
+    away_fatigue_penalty: float
+    home_off: float
+    away_off: float
+    home_def: float
+    away_def: float
+    home_pace: float
+    away_pace: float
+    home_ff: dict  # four factors
+    away_ff: dict
+    home_clutch: dict
+    away_clutch: dict
+    home_hustle: dict
+    away_hustle: dict
+
+
+def precompute_game_data(
+    progress_cb: Optional[Callable] = None,
+) -> list["PrecomputedGame"]:
+    """Extract all raw game data from the DB once.
+
+    Returns a list of ``PrecomputedGame`` that the optimiser can
+    re-evaluate with different weights purely in memory.
+    """
+    from src.analytics.backtester import (
+        get_actual_game_results,
+        get_team_profile,
+        _get_roster_for_game,
+    )
+    from src.analytics.autotune import get_team_tuning
+
+    progress = progress_cb or (lambda _: None)
+    progress("Loading game results for precomputation...")
+
+    games_df = get_actual_game_results()
+    if games_df.empty:
+        return []
+
+    games_df = games_df.sort_values("game_date")
+    precomputed: list[PrecomputedGame] = []
+    total = len(games_df)
+
+    for idx, (_, game) in enumerate(games_df.iterrows()):
+        if idx % 40 == 0:
+            progress(f"Precomputing game {idx + 1}/{total}...")
+
+        gd_raw = game["game_date"]
+        if isinstance(gd_raw, str):
+            gd = date.fromisoformat(gd_raw[:10])
+        else:
+            gd = gd_raw
+
+        home_id = int(game["home_team_id"])
+        away_id = int(game["away_team_id"])
+
+        # Skip if not enough history
+        home_profile = get_team_profile(home_id, gd)
+        away_profile = get_team_profile(away_id, gd)
+        if home_profile["games"] < 5 or away_profile["games"] < 5:
+            continue
+
+        # Rosters
+        home_pids = _get_roster_for_game(home_id, gd)
+        away_pids = _get_roster_for_game(away_id, gd)
+        if not home_pids or not away_pids:
+            continue
+
+        # Player projections
+        home_proj = aggregate_projection(home_pids, opponent_team_id=away_id, is_home=True)
+        away_proj = aggregate_projection(away_pids, opponent_team_id=home_id, is_home=False)
+
+        # Team metrics
+        hca = get_home_court_advantage(home_id)
+        adf = get_opponent_defensive_factor(away_id)
+        hdf = get_opponent_defensive_factor(home_id)
+        home_fatigue_info = detect_fatigue(home_id, gd)
+        away_fatigue_info = detect_fatigue(away_id, gd)
+
+        # Tuning
+        ht = get_team_tuning(home_id)
+        at = get_team_tuning(away_id)
+
+        precomputed.append(PrecomputedGame(
+            game_date=gd,
+            home_team_id=home_id,
+            away_team_id=away_id,
+            actual_home_score=float(game["home_score"]),
+            actual_away_score=float(game["away_score"]),
+            home_proj=dict(home_proj),
+            away_proj=dict(away_proj),
+            home_court=hca,
+            away_def_factor_raw=adf,
+            home_def_factor_raw=hdf,
+            home_tuning_home_corr=ht["home_pts_correction"] if ht else 0.0,
+            away_tuning_away_corr=at["away_pts_correction"] if at else 0.0,
+            home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
+            away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
+            home_off=get_offensive_rating(home_id),
+            away_off=get_offensive_rating(away_id),
+            home_def=get_defensive_rating(home_id),
+            away_def=get_defensive_rating(away_id),
+            home_pace=get_pace(home_id),
+            away_pace=get_pace(away_id),
+            home_ff=get_four_factors(home_id),
+            away_ff=get_four_factors(away_id),
+            home_clutch=get_clutch_stats(home_id),
+            away_clutch=get_clutch_stats(away_id),
+            home_hustle=get_hustle_stats(home_id),
+            away_hustle=get_hustle_stats(away_id),
+        ))
+
+    progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")
+    return precomputed
+
+
+def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[float, float]:
+    """Recompute spread and total from precomputed data + weights.
+
+    Pure arithmetic — zero DB access.  Returns ``(spread, total)``.
+    """
+    # Defensive factor dampening
+    adf = 1.0 + (g.away_def_factor_raw - 1.0) * w.def_factor_dampening
+    hdf = 1.0 + (g.home_def_factor_raw - 1.0) * w.def_factor_dampening
+
+    home_base_pts = g.home_proj["points"] * adf
+    away_base_pts = g.away_proj["points"] * hdf
+
+    # Autotune corrections
+    home_base_pts += g.home_tuning_home_corr
+    away_base_pts += g.away_tuning_away_corr
+
+    # Fatigue
+    fatigue_adj = g.home_fatigue_penalty - g.away_fatigue_penalty
+
+    # Spread
+    spread = (home_base_pts - away_base_pts) + g.home_court - fatigue_adj
+
+    # Turnover differential
+    h_to = g.home_proj.get("turnover_margin", 0)
+    a_to = g.away_proj.get("turnover_margin", 0)
+    spread += (h_to - a_to) * w.turnover_margin_mult
+
+    # Rebound diff
+    h_reb = g.home_proj.get("rebounds", 0)
+    a_reb = g.away_proj.get("rebounds", 0)
+    spread += (h_reb - a_reb) * w.rebound_diff_mult
+
+    # Off/Def rating matchup
+    home_edge = g.home_off - g.away_def
+    away_edge = g.away_off - g.home_def
+    spread += (home_edge - away_edge) * w.rating_matchup_mult
+
+    # Four Factors
+    ff_adj = _compute_four_factors_spread(g.home_ff, g.away_ff, w)
+    spread += ff_adj
+
+    # Clutch
+    clutch_adj = 0.0
+    if abs(spread) < w.clutch_threshold:
+        clutch_adj = _compute_clutch_adjustment(g.home_clutch, g.away_clutch, w)
+        spread += clutch_adj
+
+    # Hustle
+    hustle_adj = _compute_hustle_spread(g.home_hustle, g.away_hustle, w)
+    spread += hustle_adj
+
+    # Clamp spread
+    spread = max(-w.spread_clamp, min(w.spread_clamp, spread))
+
+    # Calibration (skip during optimisation — it's a post-hoc correction)
+    # spread = _apply_calibration(spread)
+
+    # ── Total ──
+    total = home_base_pts + away_base_pts
+
+    # Pace
+    exp_pace = (g.home_pace + g.away_pace) / 2
+    pace_factor = (exp_pace - w.pace_baseline) / w.pace_baseline
+    total *= (1 + pace_factor * w.pace_mult)
+
+    # Defensive disruption
+    combined_steals = g.home_proj.get("steals", 0) + g.away_proj.get("steals", 0)
+    combined_blocks = g.home_proj.get("blocks", 0) + g.away_proj.get("blocks", 0)
+    total -= (max(0, combined_steals - w.steals_threshold) * w.steals_penalty +
+              max(0, combined_blocks - w.blocks_threshold) * w.blocks_penalty)
+
+    # OREB
+    combined_oreb = g.home_proj.get("oreb", 0) + g.away_proj.get("oreb", 0)
+    total += (combined_oreb - w.oreb_baseline) * w.oreb_mult
+
+    # Hustle total
+    hustle_total = _compute_hustle_total(g.home_hustle, g.away_hustle, w)
+    total += hustle_total
+
+    # Fatigue total
+    combined_fatigue = g.home_fatigue_penalty + g.away_fatigue_penalty
+    total -= combined_fatigue * w.fatigue_total_mult
+
+    # Clamp total
+    total = max(w.total_min, min(w.total_max, total))
+
+    return spread, total
 
 
 def save_prediction(prediction: MatchupPrediction) -> None:

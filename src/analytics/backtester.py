@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date
+import hashlib
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -9,6 +14,118 @@ import pandas as pd
 from src.database.db import get_conn
 from src.analytics.injury_history import get_injuries_for_game
 from src.analytics.stats_engine import get_team_metrics, detect_fatigue
+
+
+# ──── Backtest result cache ────────────────────────────────────────────────
+
+_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "backtest_cache"
+
+
+def _cache_key(
+    home_team_filter: int | None,
+    away_team_filter: int | None,
+    use_injury_adjustment: bool,
+) -> str:
+    """Deterministic hash for a set of backtest settings."""
+    raw = f"home={home_team_filter}|away={away_team_filter}|inj={use_injury_adjustment}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _cache_path(key: str) -> Path:
+    return _CACHE_DIR / f"bt_{key}.json"
+
+
+def save_backtest_cache(
+    results: "BacktestResults",
+    home_team_filter: int | None,
+    away_team_filter: int | None,
+    use_injury_adjustment: bool,
+) -> None:
+    """Serialize a BacktestResults to disk."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    key = _cache_key(home_team_filter, away_team_filter, use_injury_adjustment)
+    payload = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "settings": {
+            "home_team_filter": home_team_filter,
+            "away_team_filter": away_team_filter,
+            "use_injury_adjustment": use_injury_adjustment,
+        },
+        "results": {
+            "total_games": results.total_games,
+            "overall_spread_accuracy": results.overall_spread_accuracy,
+            "overall_total_accuracy": results.overall_total_accuracy,
+            "predictions": [asdict(p) for p in results.predictions],
+            "team_accuracy": {
+                str(k): asdict(v) for k, v in results.team_accuracy.items()
+            },
+        },
+    }
+    _cache_path(key).write_text(json.dumps(payload, default=str), encoding="utf-8")
+
+
+def load_backtest_cache(
+    home_team_filter: int | None,
+    away_team_filter: int | None,
+    use_injury_adjustment: bool,
+    max_age_minutes: int = 60,
+) -> "BacktestResults | None":
+    """Load cached results if they exist and are fresh enough."""
+    key = _cache_key(home_team_filter, away_team_filter, use_injury_adjustment)
+    path = _cache_path(key)
+    if not path.exists():
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        ts = datetime.fromisoformat(payload["timestamp"])
+        age_minutes = (datetime.utcnow() - ts).total_seconds() / 60
+        if age_minutes > max_age_minutes:
+            return None
+
+        data = payload["results"]
+
+        # Rebuild predictions
+        predictions: List[GamePrediction] = []
+        for p in data["predictions"]:
+            # Convert date strings back to date objects
+            gd = p.get("game_date", "")
+            if isinstance(gd, str) and gd:
+                p["game_date"] = date.fromisoformat(gd[:10])
+            predictions.append(GamePrediction(**p))
+
+        # Rebuild team accuracy
+        team_accuracy: Dict[int, TeamAccuracy] = {}
+        for tid_str, ta in data["team_accuracy"].items():
+            team_accuracy[int(tid_str)] = TeamAccuracy(**ta)
+
+        return BacktestResults(
+            predictions=predictions,
+            team_accuracy=team_accuracy,
+            overall_spread_accuracy=data["overall_spread_accuracy"],
+            overall_total_accuracy=data["overall_total_accuracy"],
+            total_games=data["total_games"],
+        )
+    except Exception:
+        return None
+
+
+def get_backtest_cache_age(
+    home_team_filter: int | None,
+    away_team_filter: int | None,
+    use_injury_adjustment: bool,
+) -> float | None:
+    """Return cache age in minutes, or None if no cache exists."""
+    key = _cache_key(home_team_filter, away_team_filter, use_injury_adjustment)
+    path = _cache_path(key)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        ts = datetime.fromisoformat(payload["timestamp"])
+        return (datetime.utcnow() - ts).total_seconds() / 60
+    except Exception:
+        return None
 
 
 @dataclass
@@ -171,11 +288,13 @@ def _get_position_group(position: str) -> str:
 
 # Cache for advanced profiles to avoid redundant DB queries during backtests
 _adv_profile_cache: Dict[tuple, Dict[str, float]] = {}
+_adv_profile_lock = threading.Lock()
 
 
 def clear_advanced_profile_cache() -> None:
     """Clear the cached advanced profiles (call before each backtest run)."""
-    _adv_profile_cache.clear()
+    with _adv_profile_lock:
+        _adv_profile_cache.clear()
 
 
 def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, float]:
@@ -187,8 +306,9 @@ def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, floa
     computing from player game logs.  Results are cached for performance.
     """
     cache_key = (team_id, str(before_date))
-    if cache_key in _adv_profile_cache:
-        return _adv_profile_cache[cache_key]
+    with _adv_profile_lock:
+        if cache_key in _adv_profile_cache:
+            return _adv_profile_cache[cache_key]
     
     result = {
         "rebounds_pg": 0.0,
@@ -301,7 +421,8 @@ def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, floa
                 hca = float(home_df["team_pts"].mean()) - float(away_df2["team_pts"].mean())
                 result["hca"] = max(1.5, min(5.0, hca))
 
-    _adv_profile_cache[cache_key] = result
+    with _adv_profile_lock:
+        _adv_profile_cache[cache_key] = result
     return result
 
 
@@ -689,15 +810,114 @@ def get_actual_game_results() -> pd.DataFrame:
     return pd.DataFrame(games)
 
 
+def _process_single_game(
+    game: dict,
+    min_games_before: int,
+) -> Optional[GamePrediction]:
+    """Evaluate a single historical game.  Thread-safe — each call only reads
+    from the DB via its own connection and writes to the thread-safe
+    ``_adv_profile_cache``."""
+
+    game_date_raw = game["game_date"]
+    if isinstance(game_date_raw, str):
+        from datetime import date as _date
+        game_date = _date.fromisoformat(game_date_raw[:10])
+    else:
+        game_date = game_date_raw
+
+    home_id = int(game["home_team_id"])
+    away_id = int(game["away_team_id"])
+    home_score = float(game["home_score"])
+    away_score = float(game["away_score"])
+
+    # Check both teams have enough prior games
+    home_profile = get_team_profile(home_id, game_date)
+    away_profile = get_team_profile(away_id, game_date)
+    if home_profile["games"] < min_games_before or away_profile["games"] < min_games_before:
+        return None
+
+    # Injury information
+    home_adj, home_injured = calculate_injury_adjustment(home_id, game_date, 0)
+    away_adj, away_injured = calculate_injury_adjustment(away_id, game_date, 0)
+    home_injury_names = [p.get("name", "Unknown") for p in home_injured if p.get("avg_minutes", 0) >= 12]
+    away_injury_names = [p.get("name", "Unknown") for p in away_injured if p.get("avg_minutes", 0) >= 12]
+
+    # Fatigue
+    home_fatigue_info = detect_fatigue(home_id, game_date)
+    away_fatigue_info = detect_fatigue(away_id, game_date)
+
+    # Prediction via the real engine
+    pred_spread, pred_total, pred_home, pred_away = _predict_via_matchup(
+        home_id, away_id, game_date,
+    )
+
+    actual_spread = home_score - away_score
+    actual_total = home_score + away_score
+
+    spread_error = pred_spread - actual_spread
+    total_error = pred_total - actual_total
+    home_score_error = pred_home - home_score
+    away_score_error = pred_away - away_score
+
+    if pred_spread > 0.5:
+        predicted_winner = "HOME"
+    elif pred_spread < -0.5:
+        predicted_winner = "AWAY"
+    else:
+        predicted_winner = "PUSH"
+
+    if actual_spread > 0:
+        actual_winner = "HOME"
+    elif actual_spread < 0:
+        actual_winner = "AWAY"
+    else:
+        actual_winner = "PUSH"
+
+    winner_correct = (predicted_winner == actual_winner) or \
+                    (predicted_winner == "PUSH" and abs(actual_spread) <= 3)
+
+    return GamePrediction(
+        game_date=game_date,
+        home_team_id=home_id,
+        away_team_id=away_id,
+        home_abbr=game["home_abbr"],
+        away_abbr=game["away_abbr"],
+        predicted_spread=pred_spread,
+        predicted_total=pred_total,
+        predicted_home_score=pred_home,
+        predicted_away_score=pred_away,
+        actual_home_score=home_score,
+        actual_away_score=away_score,
+        actual_spread=actual_spread,
+        actual_total=actual_total,
+        spread_error=spread_error,
+        total_error=total_error,
+        home_score_error=home_score_error,
+        away_score_error=away_score_error,
+        predicted_winner=predicted_winner,
+        actual_winner=actual_winner,
+        winner_correct=winner_correct,
+        spread_within_5=abs(spread_error) <= 5,
+        total_within_10=abs(total_error) <= 10,
+        home_injuries=home_injury_names,
+        away_injuries=away_injury_names,
+        home_injury_adj=home_adj,
+        away_injury_adj=away_adj,
+        home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
+        away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
+    )
+
+
 def run_backtest(
     min_games_before: int = 5,
     home_team_filter: Optional[int] = None,
     away_team_filter: Optional[int] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     use_injury_adjustment: bool = True,
+    max_workers: int = 4,
 ) -> BacktestResults:
     """
-    Run backtest on historical games.
+    Run backtest on historical games using parallel workers.
     
     Args:
         min_games_before: Minimum games each team must have before we predict
@@ -705,6 +925,7 @@ def run_backtest(
         away_team_filter: If set, only analyze games where this team is AWAY
         progress_cb: Optional callback for progress updates
         use_injury_adjustment: If True, adjust predictions based on inferred injuries
+        max_workers: Number of threads for parallel game processing (default 4)
     
     Filter combinations:
         - Both None: All games
@@ -733,20 +954,17 @@ def run_backtest(
     
     # Apply filters
     if home_team_filter and away_team_filter:
-        # Specific matchup
         games_df = games_df[
             (games_df["home_team_id"] == home_team_filter) & 
             (games_df["away_team_id"] == away_team_filter)
         ]
         progress(f"Filtered to {len(games_df)} games: home={home_team_filter} vs away={away_team_filter}")
     elif home_team_filter:
-        # Only games where this team is home
         before_filter = len(games_df)
         games_df = games_df[games_df["home_team_id"] == home_team_filter]
         progress(f"Filtered for home_team={home_team_filter}: {before_filter} -> {len(games_df)} games")
         progress(f"Filtered to {len(games_df)} home games for team {home_team_filter}")
     elif away_team_filter:
-        # Only games where this team is away
         before_filter = len(games_df)
         games_df = games_df[games_df["away_team_id"] == away_team_filter]
         progress(f"Filtered for away_team={away_team_filter}: {before_filter} -> {len(games_df)} games")
@@ -765,130 +983,75 @@ def run_backtest(
             team_id=tid, team_abbr=abbr, team_name=name
         )
     
-    predictions = []
-    total_to_process = len(games_df)
-    
-    for idx, (_, game) in enumerate(games_df.iterrows()):
-        if idx % 20 == 0:
-            progress(f"Analyzing game {idx + 1}/{total_to_process}...")
-        
-        game_date_raw = game["game_date"]
-        # Ensure game_date is a proper date object (DB may return str)
-        if isinstance(game_date_raw, str):
-            from datetime import date as _date
-            game_date = _date.fromisoformat(game_date_raw[:10])
-        else:
-            game_date = game_date_raw
-        home_id = int(game["home_team_id"])
-        away_id = int(game["away_team_id"])
-        home_score = float(game["home_score"])
-        away_score = float(game["away_score"])
-        
-        # Check both teams have enough prior games
-        home_profile = get_team_profile(home_id, game_date)
-        away_profile = get_team_profile(away_id, game_date)
-        
-        if home_profile["games"] < min_games_before or away_profile["games"] < min_games_before:
-            continue
-        
-        # Get injury information for this game
-        home_adj, home_injured = calculate_injury_adjustment(home_id, game_date, 0)
-        away_adj, away_injured = calculate_injury_adjustment(away_id, game_date, 0)
-        
-        home_injury_names = [p.get("name", "Unknown") for p in home_injured if p.get("avg_minutes", 0) >= 12]
-        away_injury_names = [p.get("name", "Unknown") for p in away_injured if p.get("avg_minutes", 0) >= 12]
+    # ── Prepare game dicts for parallel processing ──
+    game_dicts: List[dict] = []
+    for _, game in games_df.iterrows():
+        game_dicts.append({
+            "game_date": game["game_date"],
+            "home_team_id": game["home_team_id"],
+            "away_team_id": game["away_team_id"],
+            "home_score": game["home_score"],
+            "away_score": game["away_score"],
+            "home_abbr": game["home_abbr"],
+            "away_abbr": game["away_abbr"],
+        })
 
-        # Fatigue detection
-        home_fatigue_info = detect_fatigue(home_id, game_date)
-        away_fatigue_info = detect_fatigue(away_id, game_date)
-        
-        # Make prediction using the REAL prediction engine (predict_matchup)
-        # Reconstruct the roster that actually played this game
-        pred_spread, pred_total, pred_home, pred_away = _predict_via_matchup(
-            home_id, away_id, game_date,
-        )
-        
-        actual_spread = home_score - away_score
-        actual_total = home_score + away_score
-        
-        # Calculate errors
-        spread_error = pred_spread - actual_spread
-        total_error = pred_total - actual_total
-        home_score_error = pred_home - home_score
-        away_score_error = pred_away - away_score
-        
-        # Determine predicted and actual winners
-        if pred_spread > 0.5:
-            predicted_winner = "HOME"
-        elif pred_spread < -0.5:
-            predicted_winner = "AWAY"
-        else:
-            predicted_winner = "PUSH"
-        
-        if actual_spread > 0:
-            actual_winner = "HOME"
-        elif actual_spread < 0:
-            actual_winner = "AWAY"
-        else:
-            actual_winner = "PUSH"
-        
-        winner_correct = (predicted_winner == actual_winner) or \
-                        (predicted_winner == "PUSH" and abs(actual_spread) <= 3)
-        
-        pred = GamePrediction(
-            game_date=game_date,
-            home_team_id=home_id,
-            away_team_id=away_id,
-            home_abbr=game["home_abbr"],
-            away_abbr=game["away_abbr"],
-            predicted_spread=pred_spread,
-            predicted_total=pred_total,
-            predicted_home_score=pred_home,
-            predicted_away_score=pred_away,
-            actual_home_score=home_score,
-            actual_away_score=away_score,
-            actual_spread=actual_spread,
-            actual_total=actual_total,
-            spread_error=spread_error,
-            total_error=total_error,
-            home_score_error=home_score_error,
-            away_score_error=away_score_error,
-            predicted_winner=predicted_winner,
-            actual_winner=actual_winner,
-            winner_correct=winner_correct,
-            spread_within_5=abs(spread_error) <= 5,
-            total_within_10=abs(total_error) <= 10,
-            home_injuries=home_injury_names,
-            away_injuries=away_injury_names,
-            home_injury_adj=home_adj,
-            away_injury_adj=away_adj,
-            home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
-            away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
-        )
-        predictions.append(pred)
-        
-        # Update team accuracy
+    total_to_process = len(game_dicts)
+    # Clamp workers: no point having more threads than games
+    n_workers = max(1, min(max_workers, total_to_process))
+    progress(f"Processing {total_to_process} games with {n_workers} workers...")
+
+    # ── Parallel execution ──
+    completed = 0
+    _progress_lock = threading.Lock()
+    predictions: List[GamePrediction] = []
+
+    def _process_and_track(game_dict: dict) -> Optional[GamePrediction]:
+        nonlocal completed
+        result = _process_single_game(game_dict, min_games_before)
+        with _progress_lock:
+            completed += 1
+            if completed % 20 == 0 or completed == total_to_process:
+                progress(f"Analyzing game {completed}/{total_to_process}...")
+        return result
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = [pool.submit(_process_and_track, gd) for gd in game_dicts]
+        for future in as_completed(futures):
+            try:
+                pred = future.result()
+                if pred is not None:
+                    predictions.append(pred)
+            except Exception:
+                pass  # skip individual game failures
+
+    # Sort predictions chronologically (threads may finish out of order)
+    predictions.sort(key=lambda p: (p.game_date, p.home_team_id))
+
+    # ── Aggregate results ──
+    for pred in predictions:
+        home_id = pred.home_team_id
+        away_id = pred.away_team_id
         for tid in [home_id, away_id]:
             if tid in results.team_accuracy:
                 ta = results.team_accuracy[tid]
                 ta.games_analyzed += 1
-                if winner_correct:
+                if pred.winner_correct:
                     ta.spread_correct += 1
                 if pred.total_within_10:
                     ta.total_correct += 1
-        
-        # Track wins/losses
-        if home_score > away_score:
+
+        if pred.actual_home_score > pred.actual_away_score:
             if home_id in results.team_accuracy:
                 results.team_accuracy[home_id].wins += 1
             if away_id in results.team_accuracy:
                 results.team_accuracy[away_id].losses += 1
-        elif away_score > home_score:
+        elif pred.actual_away_score > pred.actual_home_score:
             if away_id in results.team_accuracy:
                 results.team_accuracy[away_id].wins += 1
             if home_id in results.team_accuracy:
                 results.team_accuracy[home_id].losses += 1
-    
+
     results.predictions = predictions
     results.total_games = len(predictions)
     
@@ -912,5 +1075,12 @@ def run_backtest(
                           if p.home_team_id == ta.team_id or p.away_team_id == ta.team_id]
             ta.avg_total_error = sum(total_errors) / len(total_errors) if total_errors else 0
     
+    # Save to cache
+    try:
+        save_backtest_cache(results, home_team_filter, away_team_filter, use_injury_adjustment)
+        progress("Results cached for quick re-use")
+    except Exception:
+        pass  # caching is best-effort
+
     progress(f"Backtest complete: {results.total_games} games analyzed")
     return results

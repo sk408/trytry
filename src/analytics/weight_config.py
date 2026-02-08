@@ -149,3 +149,84 @@ def set_weight_config(cfg: WeightConfig) -> None:
     """Override the cached config (used during optimisation runs)."""
     global _cached_config
     _cached_config = cfg
+
+
+# -----------------------------------------------------------------------
+# Per-team weight overrides
+# -----------------------------------------------------------------------
+
+_TEAM_WEIGHTS_TABLE = "team_weight_overrides"
+
+
+def _ensure_team_weights_table() -> None:
+    with get_conn() as conn:
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_TEAM_WEIGHTS_TABLE} (
+                team_id  INTEGER NOT NULL,
+                key      TEXT NOT NULL,
+                value    REAL NOT NULL,
+                PRIMARY KEY (team_id, key)
+            )
+        """)
+        conn.commit()
+
+
+def save_team_weights(team_id: int, cfg: WeightConfig) -> None:
+    """Persist per-team weight overrides."""
+    _ensure_team_weights_table()
+    with get_conn() as conn:
+        # Clear old overrides for this team
+        conn.execute(f"DELETE FROM {_TEAM_WEIGHTS_TABLE} WHERE team_id = ?", (team_id,))
+        for k, v in cfg.to_dict().items():
+            conn.execute(
+                f"INSERT INTO {_TEAM_WEIGHTS_TABLE} (team_id, key, value) VALUES (?, ?, ?)",
+                (team_id, k, float(v)),
+            )
+        conn.commit()
+
+
+def load_team_weights(team_id: int) -> Optional[WeightConfig]:
+    """Load per-team weight overrides.  Returns None if none exist."""
+    _ensure_team_weights_table()
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT key, value FROM {_TEAM_WEIGHTS_TABLE} WHERE team_id = ?",
+            (team_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    d = {k: v for k, v in rows}
+    return WeightConfig.from_dict(d)
+
+
+def clear_team_weights(team_id: Optional[int] = None) -> None:
+    """Clear per-team overrides.  If team_id is None, clear ALL teams."""
+    _ensure_team_weights_table()
+    with get_conn() as conn:
+        if team_id is not None:
+            conn.execute(f"DELETE FROM {_TEAM_WEIGHTS_TABLE} WHERE team_id = ?", (team_id,))
+        else:
+            conn.execute(f"DELETE FROM {_TEAM_WEIGHTS_TABLE}")
+        conn.commit()
+
+
+def get_team_weight_config(team_id: int) -> WeightConfig:
+    """Return team-specific weights if they exist, else global weights."""
+    team_cfg = load_team_weights(team_id)
+    if team_cfg is not None:
+        return team_cfg
+    return get_weight_config()
+
+
+def get_team_refinement_summary() -> list[dict]:
+    """Return a summary of which teams have overrides."""
+    _ensure_team_weights_table()
+    with get_conn() as conn:
+        rows = conn.execute(f"""
+            SELECT tw.team_id, t.abbreviation, COUNT(*) as n_overrides
+            FROM {_TEAM_WEIGHTS_TABLE} tw
+            JOIN teams t ON t.team_id = tw.team_id
+            GROUP BY tw.team_id
+            ORDER BY t.abbreviation
+        """).fetchall()
+    return [{"team_id": r[0], "abbr": r[1], "n_overrides": r[2]} for r in rows]

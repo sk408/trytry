@@ -37,6 +37,22 @@
         <option value="false" {% if not use_injuries %}selected{% endif %}>Off</option>
       </select>
     </div>
+
+    <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
+        <input type="checkbox" id="use-cache" name="use_cache" value="1" checked
+               style="width: 16px; height: 16px;">
+        Use cached results
+      </label>
+      <span id="cache-age" style="color: #94a3b8; font-size: 12px;"></span>
+    </div>
+
+    <div class="form-group">
+      <label for="workers">Workers</label>
+      <input type="number" id="workers" name="max_workers" value="4" min="1" max="16" step="1"
+             title="Number of parallel threads. More = faster but more CPU. 4 is a good default."
+             style="width: 60px;">
+    </div>
     
     <button type="submit">Run Backtest</button>
   </form>
@@ -188,11 +204,17 @@
     Improve prediction accuracy by optimising model weights, building spread calibration,
     or analysing which features help the most.
   </p>
-  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
     <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
+    <label for="opt-trials" style="margin-left: 2px; font-size: 13px; color: #94a3b8;">Trials:</label>
+    <input type="number" id="opt-trials" value="200" min="50" max="2000" step="50"
+           title="Number of weight combinations to evaluate. More = better but slower. 200 default, 500+ for thorough."
+           style="width: 72px; padding: 6px 8px; border: 1px solid #334155; border-radius: 6px;
+                  background: #1e293b; color: #e2e8f0; font-size: 13px;">
     <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
     <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
     <button id="btn-ml-features" onclick="startMLFeatureImportance()">ML Feature Importance</button>
+    <button id="btn-team-refine" onclick="startTeamRefinement()">Per-Team Refinement</button>
     <button id="btn-fft" onclick="startFFTAnalysis()">Error Patterns (FFT)</button>
     <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
   </div>
@@ -202,7 +224,7 @@
 
 <script>
 function _disableOptButtons(disabled) {
-  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-fft','btn-clear-weights'].forEach(id => {
+  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights'].forEach(id => {
     document.getElementById(id).disabled = disabled;
   });
 }
@@ -224,7 +246,8 @@ function startOptimize() {
   document.getElementById('opt-results').style.display = 'none';
   _appendLog('Starting weight optimisation...');
 
-  const es = new EventSource('/api/optimize');
+  const trials = parseInt(document.getElementById('opt-trials').value) || 200;
+  const es = new EventSource('/api/optimize?trials=' + trials);
   es.onmessage = function(e) {
     const msg = e.data;
     if (msg.startsWith('[DONE]')) {
@@ -430,6 +453,54 @@ function startFFTAnalysis() {
   es.onerror = function() { es.close(); _disableOptButtons(false); };
 }
 
+function startTeamRefinement() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting per-team weight refinement...');
+
+  const trials = parseInt(document.getElementById('opt-trials').value) || 100;
+  const results = [];
+  const es = new EventSource('/api/team-refinement?trials=' + trials);
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showTeamRefinementResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showTeamRefinementResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Per-Team Weight Refinement</h3>';
+  html += '<div class="scroll-x"><table><thead><tr><th>Team</th><th>Decision</th><th>Global (holdout)</th><th>Per-Team (holdout)</th><th>Reason</th></tr></thead><tbody>';
+  results.forEach(r => {
+    const parts = {};
+    r.split(',').forEach(p => { const [k,...v] = p.split('='); parts[k.trim()] = v.join('='); });
+    const decision = parts.used_team === 'true' ? 'Per-Team' : 'Global';
+    const cls = parts.used_team === 'true' ? 'text-success' : '';
+    html += '<tr><td>' + (parts.abbr||'') + '</td><td class="' + cls + '">' + decision + '</td><td>' + (parts.global_holdout||'') + '</td><td>' + (parts.team_holdout||'') + '</td><td style="font-size:12px;">' + (parts.reason||'') + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
 function showFFTResults(results) {
   const container = document.getElementById('opt-results');
   container.style.display = 'block';
@@ -449,5 +520,37 @@ function showFFTResults(results) {
   }
   container.innerHTML = html;
 }
+
+// ── Backtest cache age indicator ──
+function updateCacheAge() {
+  const home = document.getElementById('home').value || '';
+  const away = document.getElementById('away').value || '';
+  const inj = document.getElementById('injuries').value;
+  const span = document.getElementById('cache-age');
+  fetch('/api/backtest-cache-age?home_team_id=' + encodeURIComponent(home) +
+        '&away_team_id=' + encodeURIComponent(away) +
+        '&use_injuries=' + encodeURIComponent(inj))
+    .then(r => r.json())
+    .then(data => {
+      const age = data.age_minutes;
+      if (age == null) {
+        span.textContent = '(no cache)';
+      } else if (age < 1) {
+        span.textContent = '(cached <1 min ago)';
+      } else if (age < 60) {
+        span.textContent = '(cached ' + Math.round(age) + ' min ago)';
+      } else {
+        span.textContent = '(cached ' + (age / 60).toFixed(1) + ' hr ago)';
+      }
+    })
+    .catch(() => { span.textContent = ''; });
+}
+// Update on page load and whenever filters change
+document.addEventListener('DOMContentLoaded', function() {
+  updateCacheAge();
+  document.getElementById('home').addEventListener('change', updateCacheAge);
+  document.getElementById('away').addEventListener('change', updateCacheAge);
+  document.getElementById('injuries').addEventListener('change', updateCacheAge);
+});
 </script>
 {% endblock %}

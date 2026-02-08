@@ -76,8 +76,12 @@ def sync_reference_data(
     with get_conn() as conn:
         conn.executemany(
             """
-            INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
+            INSERT INTO teams (team_id, name, abbreviation, conference)
             VALUES (?, ?, ?, ?)
+            ON CONFLICT(team_id) DO UPDATE SET
+                name = excluded.name,
+                abbreviation = excluded.abbreviation,
+                conference = excluded.conference
             """,
             teams_df[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
         )
@@ -147,6 +151,18 @@ def sync_player_logs(
         if skip_cached:
             cached_players = _get_cached_players(conn, max_age_hours=cache_max_age_hours)
             recent_game_players = _get_players_with_recent_games(conn, days=force_recent_days)
+
+            # Safety check: if the cache says players are synced but player_stats
+            # is empty, the cache is stale (likely from a CASCADE delete).
+            # Clear it so all players get re-fetched.
+            if cached_players:
+                stats_count = conn.execute("SELECT COUNT(*) FROM player_stats").fetchone()[0]
+                if stats_count == 0:
+                    progress("Cache is stale (player_stats is empty) — clearing cache and re-syncing all players")
+                    conn.execute("DELETE FROM player_sync_cache")
+                    conn.commit()
+                    cached_players = set()
+
             # Skip cached players UNLESS they have recent games
             players_to_skip = cached_players - recent_game_players
             
@@ -740,8 +756,12 @@ def _ensure_teams_exist(team_ids: set[int]) -> None:
     with get_conn() as conn:
         conn.executemany(
             """
-            INSERT OR REPLACE INTO teams (team_id, name, abbreviation, conference)
+            INSERT INTO teams (team_id, name, abbreviation, conference)
             VALUES (?, ?, ?, ?)
+            ON CONFLICT(team_id) DO UPDATE SET
+                name = excluded.name,
+                abbreviation = excluded.abbreviation,
+                conference = excluded.conference
             """,
             subset[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
         )

@@ -23,6 +23,7 @@ from src.analytics.autotune import (
 from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
 from src.analytics.weight_optimizer import (
     run_weight_optimiser,
+    run_per_team_refinement,
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
@@ -32,6 +33,7 @@ from src.analytics.weight_optimizer import (
 from src.analytics.weight_config import (
     get_weight_config,
     clear_weights,
+    clear_team_weights,
     load_weights,
 )
 from src.analytics.live_prediction import LivePrediction, live_predict
@@ -316,6 +318,7 @@ async def stream_backtest(
     home_team_id: str | None = None,
     away_team_id: str | None = None,
     use_injuries: str | None = None,
+    max_workers: int = 4,
 ) -> StreamingResponse:
     """Stream backtest progress via SSE."""
     # Convert empty strings to None
@@ -345,7 +348,8 @@ async def stream_backtest(
         def run_bt() -> None:
             try:
                 results = run_backtest(
-                    5, home_team_id_int, away_team_id_int, progress_cb, use_injuries_flag
+                    5, home_team_id_int, away_team_id_int, progress_cb, use_injuries_flag,
+                    max(1, min(16, max_workers)),
                 )
                 # Send results summary
                 msg_queue.put(f"[RESULT] games={results.total_games}")
@@ -816,6 +820,35 @@ def _format_predictions(results: BacktestResults) -> List[dict]:
     return preds
 
 
+@app.get("/api/backtest-cache-age")
+async def backtest_cache_age(
+    home_team_id: str | None = None,
+    away_team_id: str | None = None,
+    use_injuries: str | None = None,
+) -> dict:
+    """Return the age (in minutes) of the cached backtest, or null."""
+    from src.analytics.backtester import get_backtest_cache_age
+
+    home_tid: int | None = None
+    away_tid: int | None = None
+    if home_team_id and home_team_id.strip():
+        try:
+            home_tid = int(home_team_id)
+        except ValueError:
+            pass
+    if away_team_id and away_team_id.strip():
+        try:
+            away_tid = int(away_team_id)
+        except ValueError:
+            pass
+    inj_flag = True
+    if use_injuries is not None:
+        inj_flag = str(use_injuries).lower() not in {"0", "false", "off"}
+
+    age = get_backtest_cache_age(home_tid, away_tid, inj_flag)
+    return {"age_minutes": age}
+
+
 @app.get("/accuracy", response_class=HTMLResponse)
 async def accuracy(
     request: Request,
@@ -823,6 +856,8 @@ async def accuracy(
     home_team_id: str | None = None,
     away_team_id: str | None = None,
     use_injuries: str | None = None,
+    use_cache: str | None = None,
+    max_workers: int = 4,
 ) -> HTMLResponse:
     teams = _team_list()
     progress: List[str] = []
@@ -845,6 +880,11 @@ async def accuracy(
     if use_injuries is not None:
         use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
 
+    n_workers = max(1, min(16, max_workers))
+
+    # Determine if cache should be used (checkbox present = "1")
+    want_cache = use_cache == "1"
+
     results: BacktestResults | None = None
     predictions: List[dict] = []
     avg_spread_err = 0.0
@@ -853,24 +893,40 @@ async def accuracy(
 
     # Only run backtest if explicitly requested via the run parameter
     if run == "1":
-        def _cb(msg: str) -> None:
-            progress.append(msg)
-
-        try:
+        # Try cache first
+        if want_cache:
+            from src.analytics.backtester import load_backtest_cache
             results = await asyncio.to_thread(
-                run_backtest,
-                5,
+                load_backtest_cache,
                 home_tid,
                 away_tid,
-                _cb,
                 use_injuries_flag,
+                1440,  # 24-hour max age
             )
-            if results and results.predictions:
-                predictions = _format_predictions(results)
-                avg_spread_err = sum(abs(p.spread_error) for p in results.predictions) / len(results.predictions)
-                avg_total_err = sum(abs(p.total_error) for p in results.predictions) / len(results.predictions)
-        except Exception as exc:  # pragma: no cover - heavy computation
-            error = str(exc)
+            if results is not None:
+                progress.append("Loaded results from cache (instant)")
+
+        if results is None:
+            def _cb(msg: str) -> None:
+                progress.append(msg)
+
+            try:
+                results = await asyncio.to_thread(
+                    run_backtest,
+                    5,
+                    home_tid,
+                    away_tid,
+                    _cb,
+                    use_injuries_flag,
+                    n_workers,
+                )
+            except Exception as exc:  # pragma: no cover - heavy computation
+                error = str(exc)
+
+        if results and results.predictions:
+            predictions = _format_predictions(results)
+            avg_spread_err = sum(abs(p.spread_error) for p in results.predictions) / len(results.predictions)
+            avg_total_err = sum(abs(p.total_error) for p in results.predictions) / len(results.predictions)
 
     return templates.TemplateResponse(
         "accuracy.html",
@@ -894,8 +950,10 @@ async def accuracy(
 
 
 @app.get("/api/optimize")
-async def stream_optimize() -> StreamingResponse:
+async def stream_optimize(trials: int = 200) -> StreamingResponse:
     """Stream weight optimisation progress via SSE."""
+    n_trials = max(50, min(2000, trials))
+
     async def generate() -> AsyncGenerator[str, None]:
         msg_queue: queue.Queue[str | None] = queue.Queue()
 
@@ -904,7 +962,7 @@ async def stream_optimize() -> StreamingResponse:
 
         def run_opt() -> None:
             try:
-                result = run_weight_optimiser(n_trials=200, progress_cb=progress_cb)
+                result = run_weight_optimiser(n_trials=n_trials, progress_cb=progress_cb)
                 msg_queue.put(
                     f"[RESULT] baseline_loss={result.baseline_loss:.2f},"
                     f"best_loss={result.best_loss:.2f},"
@@ -1119,11 +1177,67 @@ async def stream_fft_analysis() -> StreamingResponse:
     )
 
 
+@app.get("/api/team-refinement")
+async def stream_team_refinement(trials: int = 100) -> StreamingResponse:
+    """Stream per-team weight refinement progress via SSE."""
+    n_trials = max(20, min(1000, trials))
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_refine() -> None:
+            try:
+                results = run_per_team_refinement(
+                    n_trials=n_trials,
+                    progress_cb=progress_cb,
+                )
+                for r in results:
+                    msg_queue.put(
+                        f"[RESULT] abbr={r.team_abbr},"
+                        f"used_team={str(r.used_team_weights).lower()},"
+                        f"global_holdout={r.global_loss_recent:.2f},"
+                        f"team_holdout={r.team_loss_recent:.2f},"
+                        f"reason={r.reason}"
+                    )
+                adopted = sum(1 for r in results if r.used_team_weights)
+                msg_queue.put(
+                    f"[DONE] Per-team refinement complete: "
+                    f"{adopted}/{len(results)} teams got custom weights"
+                )
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_refine, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/weights/clear")
 async def api_clear_weights() -> dict:
-    """Clear optimised weights and revert to defaults."""
+    """Clear optimised weights (global + per-team) and revert to defaults."""
     await asyncio.to_thread(clear_weights)
-    return {"status": "ok", "message": "Weights reset to defaults"}
+    await asyncio.to_thread(clear_team_weights)
+    return {"status": "ok", "message": "Weights reset to defaults (global + per-team)"}
 
 
 @app.get("/api/weights")

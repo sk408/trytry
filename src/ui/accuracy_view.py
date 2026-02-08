@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -18,20 +19,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.analytics.backtester import run_backtest, BacktestResults
+from src.analytics.backtester import (
+    run_backtest,
+    BacktestResults,
+    load_backtest_cache,
+    get_backtest_cache_age,
+)
 from src.analytics.weight_optimizer import (
     run_weight_optimiser,
+    run_per_team_refinement,
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
     run_ml_feature_importance,
     run_fft_error_analysis,
     OptimiserResult,
+    TeamRefinementResult,
     FeatureImportance,
     MLFeatureImportance,
     FFTPattern,
 )
-from src.analytics.weight_config import get_weight_config, clear_weights
+from src.analytics.weight_config import get_weight_config, clear_weights, clear_team_weights
 from src.database.db import get_conn
 
 
@@ -45,11 +53,13 @@ class BacktestWorker(QObject):
         home_team_filter: int | None = None,
         away_team_filter: int | None = None,
         use_injury_adjustment: bool = True,
+        max_workers: int = 4,
     ):
         super().__init__()
         self.home_team_filter = home_team_filter
         self.away_team_filter = away_team_filter
         self.use_injury_adjustment = use_injury_adjustment
+        self.max_workers = max_workers
     
     def run(self) -> None:
         try:
@@ -59,6 +69,7 @@ class BacktestWorker(QObject):
                 away_team_filter=self.away_team_filter,
                 progress_cb=self.progress.emit,
                 use_injury_adjustment=self.use_injury_adjustment,
+                max_workers=self.max_workers,
             )
             self.finished.emit(results)
         except Exception as exc:
@@ -143,6 +154,27 @@ class FFTAnalysisWorker(QObject):
             self.error.emit(f"{exc}\n{traceback.format_exc()}")
 
 
+class TeamRefineWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # List[TeamRefinementResult]
+    error = Signal(str)
+
+    def __init__(self, n_trials: int = 100):
+        super().__init__()
+        self.n_trials = n_trials
+
+    def run(self) -> None:
+        try:
+            result = run_per_team_refinement(
+                n_trials=self.n_trials,
+                progress_cb=self.progress.emit,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
 def _teams_df() -> pd.DataFrame:
     with get_conn() as conn:
         return pd.read_sql("SELECT team_id, abbreviation, name FROM teams ORDER BY abbreviation", conn)
@@ -204,6 +236,31 @@ class AccuracyView(QWidget):
             "Adjust predictions based on which players were out for each game.\n"
             "Requires 'Build Injury History' to be run first from Dashboard."
         )
+
+        # Workers spinner
+        self.workers_spin = QSpinBox()
+        self.workers_spin.setRange(1, 16)
+        self.workers_spin.setValue(4)
+        self.workers_spin.setSuffix(" threads")
+        self.workers_spin.setToolTip(
+            "Number of parallel threads for backtesting.\n"
+            "More threads = faster, but uses more CPU.\n"
+            "4 is a good default for most machines."
+        )
+
+        # Cache checkbox
+        self.use_cache_checkbox = QCheckBox("Use cached results")
+        self.use_cache_checkbox.setChecked(False)
+        self.use_cache_checkbox.setToolTip(
+            "If recent backtest results exist for these settings,\n"
+            "load them instantly instead of re-running."
+        )
+        self.cache_age_label = QLabel("")
+        self.cache_age_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        # Update cache age when filters change
+        self.home_team_combo.currentIndexChanged.connect(self._update_cache_age_label)  # type: ignore
+        self.away_team_combo.currentIndexChanged.connect(self._update_cache_age_label)  # type: ignore
+        self.use_injuries_checkbox.stateChanged.connect(self._update_cache_age_label)  # type: ignore
         
         # ──── Model optimisation buttons ────
         self.optimise_btn = QPushButton("  Optimize Weights")
@@ -231,12 +288,32 @@ class AccuracyView(QWidget):
         self.clear_weights_btn.setToolTip("Clear optimised weights and revert to defaults.")
         self.clear_weights_btn.clicked.connect(self._clear_weights)  # type: ignore[arg-type]
 
+        # Trials spinner for Optuna optimisation
+        self.trials_spin = QSpinBox()
+        self.trials_spin.setRange(50, 2000)
+        self.trials_spin.setValue(200)
+        self.trials_spin.setSingleStep(50)
+        self.trials_spin.setSuffix(" trials")
+        self.trials_spin.setToolTip(
+            "Number of weight combinations to evaluate.\n"
+            "More trials = better results but takes longer.\n"
+            "200 is a good default; 500+ for thorough optimisation."
+        )
+
         self.ml_feature_btn = QPushButton("  ML Feature Importance")
         self.ml_feature_btn.setToolTip(
             "XGBoost + SHAP analysis of feature contributions.\n"
             "Trains a model on the raw feature matrix and computes SHAP values."
         )
         self.ml_feature_btn.clicked.connect(self._run_ml_feature_importance)  # type: ignore[arg-type]
+
+        self.team_refine_btn = QPushButton("  Per-Team Refinement")
+        self.team_refine_btn.setToolTip(
+            "Refine weights for each team individually.\n"
+            "Validates against most recent 5 games to pick\n"
+            "whichever (global or per-team) predicts better."
+        )
+        self.team_refine_btn.clicked.connect(self._run_team_refinement)  # type: ignore[arg-type]
 
         self.fft_btn = QPushButton("  Error Patterns (FFT)")
         self.fft_btn.setToolTip(
@@ -260,10 +337,15 @@ class AccuracyView(QWidget):
         filter_layout.addWidget(self.away_team_combo)
         filter_layout.addWidget(self.refresh_teams_btn)
         filter_layout.addWidget(self.use_injuries_checkbox)
+        filter_layout.addWidget(self.use_cache_checkbox)
+        filter_layout.addWidget(self.cache_age_label)
         filter_layout.addStretch()
+        filter_layout.addWidget(QLabel("Workers:"))
+        filter_layout.addWidget(self.workers_spin)
         filter_layout.addWidget(self.run_button)
         
         self._load_teams()
+        self._update_cache_age_label()
         
         # Summary box with metric cards
         summary_box = QGroupBox("Overall Accuracy")
@@ -298,15 +380,18 @@ class AccuracyView(QWidget):
 
         # ──── Model optimisation section ────
         opt_box = QGroupBox("Model Optimisation")
-        opt_layout = QHBoxLayout()
-        opt_layout.addWidget(self.optimise_btn)
-        opt_layout.addWidget(self.calibrate_btn)
-        opt_layout.addWidget(self.feature_btn)
-        opt_layout.addWidget(self.clear_weights_btn)
-        opt_layout.addWidget(self.ml_feature_btn)
-        opt_layout.addWidget(self.fft_btn)
-        opt_layout.addStretch()
-        opt_box.setLayout(opt_layout)
+        opt_top = QHBoxLayout()
+        opt_top.addWidget(self.optimise_btn)
+        opt_top.addWidget(QLabel("Trials:"))
+        opt_top.addWidget(self.trials_spin)
+        opt_top.addWidget(self.calibrate_btn)
+        opt_top.addWidget(self.feature_btn)
+        opt_top.addWidget(self.ml_feature_btn)
+        opt_top.addWidget(self.team_refine_btn)
+        opt_top.addWidget(self.fft_btn)
+        opt_top.addWidget(self.clear_weights_btn)
+        opt_top.addStretch()
+        opt_box.setLayout(opt_top)
         
         # Team accuracy box
         team_box = QGroupBox("Accuracy by Team")
@@ -352,6 +437,22 @@ class AccuracyView(QWidget):
         except Exception:
             pass
 
+    def _update_cache_age_label(self) -> None:
+        """Show how old the cached results are for the current filter settings."""
+        home_filter = self.home_team_combo.currentData()
+        away_filter = self.away_team_combo.currentData()
+        use_injuries = self.use_injuries_checkbox.isChecked()
+        age = get_backtest_cache_age(home_filter, away_filter, use_injuries)
+        if age is None:
+            self.cache_age_label.setText("(no cache)")
+        elif age < 1:
+            self.cache_age_label.setText("(cached <1 min ago)")
+        elif age < 60:
+            self.cache_age_label.setText(f"(cached {int(age)} min ago)")
+        else:
+            hours = age / 60
+            self.cache_age_label.setText(f"(cached {hours:.1f} hr ago)")
+
     def run_backtest(self) -> None:
         if self._thread is not None and self._thread.isRunning():
             return
@@ -364,6 +465,19 @@ class AccuracyView(QWidget):
         home_filter = self.home_team_combo.currentData()
         away_filter = self.away_team_combo.currentData()
         use_injuries = self.use_injuries_checkbox.isChecked()
+        
+        # ── Check cache first ──
+        if self.use_cache_checkbox.isChecked():
+            cached = load_backtest_cache(
+                home_filter, away_filter, use_injuries, max_age_minutes=1440
+            )
+            if cached is not None:
+                self.log.append("Loaded results from cache (instant)")
+                self._on_finished(cached)
+                self._update_cache_age_label()
+                return
+            else:
+                self.log.append("No valid cache found — running fresh backtest")
         
         # Log what we're filtering
         if home_filter and away_filter:
@@ -382,6 +496,7 @@ class AccuracyView(QWidget):
             home_team_filter=home_filter,
             away_team_filter=away_filter,
             use_injury_adjustment=use_injuries,
+            max_workers=self.workers_spin.value(),
         )
         self._worker.moveToThread(self._thread)
         
@@ -410,6 +525,7 @@ class AccuracyView(QWidget):
         self._display_results(results)
         self.status.setText(f"Backtest complete: {results.total_games} games analyzed")
         self._set_buttons_enabled(True)
+        self._update_cache_age_label()
         if self._thread:
             self._thread.quit()
             self._thread.wait()
@@ -433,7 +549,7 @@ class AccuracyView(QWidget):
         self.status.setText("Optimising weights...")
 
         self._thread = QThread()
-        self._worker = OptimiserWorker(n_trials=200)
+        self._worker = OptimiserWorker(n_trials=self.trials_spin.value())
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -621,10 +737,57 @@ class AccuracyView(QWidget):
             self._thread.quit()
             self._thread.wait()
 
+    # ──── Per-team refinement ────
+
+    def _run_team_refinement(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Running per-team weight refinement with regressive validation...")
+        self.status.setText("Per-team refinement...")
+
+        self._thread = QThread()
+        self._worker = TeamRefineWorker(n_trials=self.trials_spin.value())
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_team_refine_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_team_refine_done(self, results: list) -> None:
+        adopted = sum(1 for r in results if r.used_team_weights)
+        self.log.append(
+            f"\nPer-team refinement complete: {adopted}/{len(results)} teams "
+            f"got custom weights"
+        )
+        self.status.setText(f"Per-team refinement done: {adopted} teams refined")
+        self._set_buttons_enabled(True)
+
+        headers = ["Team", "Decision", "Global (holdout)", "Per-Team (holdout)", "Reason"]
+        rows = []
+        for r in sorted(results, key=lambda x: x.team_abbr):
+            decision = "Per-Team" if r.used_team_weights else "Global"
+            rows.append([
+                r.team_abbr,
+                decision,
+                f"{r.global_loss_recent:.2f}",
+                f"{r.team_loss_recent:.2f}",
+                r.reason,
+            ])
+        self._show_list_table(headers, rows)
+
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
     # ──── Clear weights ────
 
     def _clear_weights(self) -> None:
         clear_weights()
+        clear_team_weights()
         self.log.append("Optimised weights cleared — defaults will be used.")
         self.status.setText("Weights reset to defaults")
 
@@ -637,6 +800,7 @@ class AccuracyView(QWidget):
         self.feature_btn.setEnabled(enabled)
         self.clear_weights_btn.setEnabled(enabled)
         self.ml_feature_btn.setEnabled(enabled)
+        self.team_refine_btn.setEnabled(enabled)
         self.fft_btn.setEnabled(enabled)
 
     def _show_dict_table(self, key_header: str, val_header: str, data: dict) -> None:

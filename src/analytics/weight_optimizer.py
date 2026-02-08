@@ -17,10 +17,17 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from src.analytics.backtester import run_backtest, BacktestResults
+from src.analytics.prediction import (
+    PrecomputedGame,
+    precompute_game_data,
+    predict_from_precomputed,
+)
 from src.analytics.weight_config import (
     WeightConfig,
     get_weight_config,
     save_weights,
+    save_team_weights,
+    clear_team_weights,
     set_weight_config,
 )
 from src.database.db import get_conn
@@ -64,6 +71,50 @@ def _loss(results: BacktestResults) -> float:
 
     # Weighted loss: spread accuracy matters most
     # winner_pct is 0-100; invert so 60% accuracy → 40 penalty
+    return spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1
+
+
+def _fast_loss(games: List[PrecomputedGame], w: WeightConfig) -> float:
+    """Evaluate a weight config against precomputed games — pure arithmetic,
+    zero DB I/O.  Returns the same loss metric as ``_loss``."""
+    if not games:
+        return 999.0
+
+    n = len(games)
+    spread_ae_sum = 0.0
+    total_ae_sum = 0.0
+    winner_correct = 0
+
+    for g in games:
+        pred_spread, pred_total = predict_from_precomputed(g, w)
+        actual_spread = g.actual_home_score - g.actual_away_score
+        actual_total = g.actual_home_score + g.actual_away_score
+
+        spread_ae_sum += abs(pred_spread - actual_spread)
+        total_ae_sum += abs(pred_total - actual_total)
+
+        # Winner check
+        if pred_spread > 0.5:
+            pred_winner = "HOME"
+        elif pred_spread < -0.5:
+            pred_winner = "AWAY"
+        else:
+            pred_winner = "PUSH"
+
+        if actual_spread > 0:
+            actual_winner = "HOME"
+        elif actual_spread < 0:
+            actual_winner = "AWAY"
+        else:
+            actual_winner = "PUSH"
+
+        if pred_winner == actual_winner or (pred_winner == "PUSH" and abs(actual_spread) <= 3):
+            winner_correct += 1
+
+    spread_mae = spread_ae_sum / n
+    total_mae = total_ae_sum / n
+    winner_pct = winner_correct / n * 100
+
     return spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1
 
 
@@ -117,6 +168,10 @@ def run_weight_optimiser(
 ) -> OptimiserResult:
     """Optimise prediction weights.
 
+    Phase 1: Precompute all game data from the DB once.
+    Phase 2: Evaluate weight combinations as pure in-memory arithmetic
+             (no DB I/O per trial).
+
     Uses Optuna Bayesian optimisation (TPE sampler) when available,
     falling back to random search otherwise.
 
@@ -129,24 +184,35 @@ def run_weight_optimiser(
     """
     progress = progress_cb or (lambda _: None)
 
-    # ---- baseline ----
-    progress("Establishing baseline with current weights...")
+    # ── Phase 1: Precompute all game data (one-time DB cost) ──
+    progress("Phase 1/2: Precomputing game data (one-time DB read)...")
+    games = precompute_game_data(progress_cb=progress)
+    if not games:
+        progress("No games found for optimisation")
+        return OptimiserResult(
+            best_config=WeightConfig(),
+            best_loss=999.0,
+            baseline_loss=999.0,
+            trials_run=0,
+            improvement_pct=0.0,
+        )
+
+    # ── Baseline ──
     baseline_cfg = WeightConfig()  # defaults
-    set_weight_config(baseline_cfg)
-    baseline_results = run_backtest(min_games_before=5)
-    baseline_loss = _loss(baseline_results)
+    baseline_loss = _fast_loss(games, baseline_cfg)
     progress(
         f"Baseline: loss={baseline_loss:.2f}, "
-        f"winner={baseline_results.overall_spread_accuracy:.1f}%, "
-        f"games={baseline_results.total_games}"
+        f"games={len(games)}"
     )
 
+    # ── Phase 2: Fast optimisation (pure arithmetic) ──
+    progress(f"Phase 2/2: Optimising over {n_trials} trials (in-memory, no DB)...")
     if _HAS_OPTUNA:
         progress("Using Optuna TPE sampler for Bayesian optimisation...")
-        return _run_optuna_optimiser(baseline_cfg, baseline_loss, n_trials, progress)
+        return _run_optuna_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games)
     else:
         progress("Optuna not installed — using random search fallback...")
-        return _run_random_optimiser(baseline_cfg, baseline_loss, n_trials, progress)
+        return _run_random_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games)
 
 
 def _run_optuna_optimiser(
@@ -154,9 +220,16 @@ def _run_optuna_optimiser(
     baseline_loss: float,
     n_trials: int,
     progress: Callable[[str], None],
+    games: List[PrecomputedGame] | None = None,
 ) -> OptimiserResult:
-    """Bayesian optimisation via Optuna TPE sampler."""
+    """Bayesian optimisation via Optuna TPE sampler.
+
+    When *games* is provided, each trial uses ``_fast_loss`` (pure
+    arithmetic).  Falls back to full backtests only if precomputed data
+    is unavailable.
+    """
     history: List[Tuple[int, float]] = [(0, baseline_loss)]
+    use_fast = games is not None and len(games) > 0
 
     def objective(trial: "optuna.Trial") -> float:
         d = baseline_cfg.to_dict()
@@ -164,6 +237,11 @@ def _run_optuna_optimiser(
             d[name] = trial.suggest_float(name, lo, hi)
         d["espn_weight"] = round(1.0 - d["espn_model_weight"], 4)
         cfg = WeightConfig.from_dict(d)
+
+        if use_fast:
+            return _fast_loss(games, cfg)
+
+        # Fallback: full backtest (slow)
         set_weight_config(cfg)
         try:
             results = run_backtest(min_games_before=5)
@@ -223,30 +301,34 @@ def _run_random_optimiser(
     baseline_loss: float,
     n_trials: int,
     progress: Callable[[str], None],
+    games: List[PrecomputedGame] | None = None,
 ) -> OptimiserResult:
     """Random-search fallback when Optuna is not installed."""
     best_cfg = baseline_cfg
     best_loss = baseline_loss
     history: List[Tuple[int, float]] = [(0, baseline_loss)]
+    use_fast = games is not None and len(games) > 0
 
     t0 = time.time()
     for trial in range(1, n_trials + 1):
         candidate = _random_config(baseline_cfg)
-        set_weight_config(candidate)
 
-        try:
-            results = run_backtest(min_games_before=5)
-            trial_loss = _loss(results)
-        except Exception as exc:
-            progress(f"  Trial {trial} error: {exc}")
-            continue
+        if use_fast:
+            trial_loss = _fast_loss(games, candidate)
+        else:
+            set_weight_config(candidate)
+            try:
+                results = run_backtest(min_games_before=5)
+                trial_loss = _loss(results)
+            except Exception as exc:
+                progress(f"  Trial {trial} error: {exc}")
+                continue
 
         if trial_loss < best_loss:
             best_loss = trial_loss
             best_cfg = candidate
             progress(
-                f"  Trial {trial}/{n_trials}: NEW BEST loss={trial_loss:.2f} "
-                f"(winner={results.overall_spread_accuracy:.1f}%)"
+                f"  Trial {trial}/{n_trials}: NEW BEST loss={trial_loss:.2f}"
             )
         elif trial % 25 == 0:
             progress(
@@ -274,6 +356,241 @@ def _run_random_optimiser(
         improvement_pct=improvement,
         history=history,
     )
+
+
+# -----------------------------------------------------------------------
+# Per-team weight refinement with regressive validation
+# -----------------------------------------------------------------------
+
+# Subset of weights to refine per-team (most impactful, fewest params)
+_TEAM_REFINE_WEIGHTS: List[Tuple[str, float, float]] = [
+    ("def_factor_dampening",   0.25,  0.75),
+    ("turnover_margin_mult",   0.15,  0.65),
+    ("four_factors_scale",     0.10,  0.60),
+    ("pace_mult",              0.08,  0.35),
+]
+
+
+@dataclass
+class TeamRefinementResult:
+    team_id: int
+    team_abbr: str
+    used_team_weights: bool   # True = per-team won, False = global won
+    global_loss_recent: float  # loss on last 5 games with global weights
+    team_loss_recent: float    # loss on last 5 games with per-team weights
+    global_loss_train: float
+    team_loss_train: float
+    reason: str               # why this choice was made
+
+
+def run_per_team_refinement(
+    n_trials: int = 100,
+    holdout_games: int = 5,
+    max_worse_pct: float = 30.0,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> List[TeamRefinementResult]:
+    """Optimise weights per-team with regressive validation.
+
+    For each team:
+    1. Split that team's games into **training** (older) and **holdout**
+       (most recent ``holdout_games``).
+    2. Optimise 4 key weights on the training set (±20% from global).
+    3. Evaluate both global and per-team weights on the holdout set.
+    4. Keep per-team weights ONLY if they beat global on the holdout
+       AND aren't wildly wrong (> ``max_worse_pct`` worse on any metric).
+
+    Args:
+        n_trials: Trials per team for the refinement search.
+        holdout_games: Number of most recent games to hold out for validation.
+        max_worse_pct: If per-team holdout loss is this % worse than global
+                       on the holdout, discard per-team weights.
+        progress_cb: Optional progress callback.
+
+    Returns:
+        List of ``TeamRefinementResult`` (one per team with enough data).
+    """
+    progress = progress_cb or (lambda _: None)
+
+    # ── Phase 1: Precompute all game data ──
+    progress("Phase 1/3: Precomputing game data...")
+    all_games = precompute_game_data(progress_cb=progress)
+    if not all_games:
+        progress("No games found")
+        return []
+
+    global_cfg = get_weight_config(force_reload=True)
+
+    # Group games by team (each game appears for both home & away team)
+    from collections import defaultdict
+    team_games: Dict[int, List[PrecomputedGame]] = defaultdict(list)
+    for g in all_games:
+        team_games[g.home_team_id].append(g)
+        team_games[g.away_team_id].append(g)
+
+    # Get team abbreviations
+    with get_conn() as conn:
+        team_abbrs = {
+            r[0]: r[1]
+            for r in conn.execute("SELECT team_id, abbreviation FROM teams").fetchall()
+        }
+
+    results: List[TeamRefinementResult] = []
+    teams_sorted = sorted(team_games.keys(), key=lambda t: team_abbrs.get(t, "???"))
+    total_teams = len(teams_sorted)
+
+    progress(f"Phase 2/3: Refining weights for {total_teams} teams...")
+    clear_team_weights()  # start fresh
+
+    for idx, team_id in enumerate(teams_sorted):
+        abbr = team_abbrs.get(team_id, "???")
+        games = team_games[team_id]
+
+        # Sort chronologically by game date
+        games.sort(key=lambda g: g.game_date)
+
+        if len(games) < holdout_games + 5:
+            progress(f"  [{idx+1}/{total_teams}] {abbr}: skipped (only {len(games)} games)")
+            continue
+
+        # Split: train on older games, validate on most recent
+        train = games[:-holdout_games]
+        holdout = games[-holdout_games:]
+
+        # Global loss on both sets
+        global_loss_train = _fast_loss_team(train, team_id, global_cfg)
+        global_loss_holdout = _fast_loss_team(holdout, team_id, global_cfg)
+
+        # ── Per-team optimisation on training set ──
+        best_team_cfg = global_cfg
+        best_team_loss_train = global_loss_train
+
+        base_dict = global_cfg.to_dict()
+        for trial in range(n_trials):
+            d = dict(base_dict)
+            for name, lo, hi in _TEAM_REFINE_WEIGHTS:
+                global_val = base_dict[name]
+                # ±20% from global value, clamped to allowed range
+                delta = global_val * 0.20
+                trial_lo = max(lo, global_val - delta)
+                trial_hi = min(hi, global_val + delta)
+                d[name] = random.uniform(trial_lo, trial_hi)
+            d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
+            candidate = WeightConfig.from_dict(d)
+
+            trial_loss = _fast_loss_team(train, team_id, candidate)
+            if trial_loss < best_team_loss_train:
+                best_team_loss_train = trial_loss
+                best_team_cfg = candidate
+
+        # ── Regressive validation on holdout ──
+        team_loss_holdout = _fast_loss_team(holdout, team_id, best_team_cfg)
+
+        # Decision logic
+        team_better = team_loss_holdout < global_loss_holdout
+        wildly_wrong = (
+            global_loss_holdout > 0
+            and team_loss_holdout > global_loss_holdout * (1 + max_worse_pct / 100)
+        )
+
+        if team_better and not wildly_wrong:
+            save_team_weights(team_id, best_team_cfg)
+            reason = (
+                f"Per-team wins: holdout {team_loss_holdout:.2f} vs "
+                f"global {global_loss_holdout:.2f}"
+            )
+            used_team = True
+        elif wildly_wrong:
+            reason = (
+                f"Per-team discarded (wildly wrong): holdout {team_loss_holdout:.2f} vs "
+                f"global {global_loss_holdout:.2f} (>{max_worse_pct:.0f}% worse)"
+            )
+            used_team = False
+        else:
+            reason = (
+                f"Global wins: holdout {global_loss_holdout:.2f} vs "
+                f"per-team {team_loss_holdout:.2f}"
+            )
+            used_team = False
+
+        results.append(TeamRefinementResult(
+            team_id=team_id,
+            team_abbr=abbr,
+            used_team_weights=used_team,
+            global_loss_recent=global_loss_holdout,
+            team_loss_recent=team_loss_holdout,
+            global_loss_train=global_loss_train,
+            team_loss_train=best_team_loss_train,
+            reason=reason,
+        ))
+
+        symbol = "+" if used_team else "-"
+        progress(
+            f"  [{idx+1}/{total_teams}] {abbr}: {symbol} "
+            f"train {global_loss_train:.1f}→{best_team_loss_train:.1f}, "
+            f"holdout {global_loss_holdout:.1f}→{team_loss_holdout:.1f} "
+            f"{'(SAVED)' if used_team else '(global kept)'}"
+        )
+
+    adopted = sum(1 for r in results if r.used_team_weights)
+    progress(
+        f"Phase 3/3: Done — {adopted}/{len(results)} teams got per-team weights, "
+        f"rest use global"
+    )
+    return results
+
+
+def _fast_loss_team(
+    games: List[PrecomputedGame],
+    team_id: int,
+    w: WeightConfig,
+) -> float:
+    """Evaluate loss for games involving a specific team."""
+    if not games:
+        return 999.0
+
+    n = 0
+    spread_ae_sum = 0.0
+    total_ae_sum = 0.0
+    winner_correct = 0
+
+    for g in games:
+        # Only count this game for the team in question
+        if g.home_team_id != team_id and g.away_team_id != team_id:
+            continue
+
+        pred_spread, pred_total = predict_from_precomputed(g, w)
+        actual_spread = g.actual_home_score - g.actual_away_score
+        actual_total = g.actual_home_score + g.actual_away_score
+
+        spread_ae_sum += abs(pred_spread - actual_spread)
+        total_ae_sum += abs(pred_total - actual_total)
+
+        if pred_spread > 0.5:
+            pw = "HOME"
+        elif pred_spread < -0.5:
+            pw = "AWAY"
+        else:
+            pw = "PUSH"
+
+        if actual_spread > 0:
+            aw = "HOME"
+        elif actual_spread < 0:
+            aw = "AWAY"
+        else:
+            aw = "PUSH"
+
+        if pw == aw or (pw == "PUSH" and abs(actual_spread) <= 3):
+            winner_correct += 1
+        n += 1
+
+    if n == 0:
+        return 999.0
+
+    spread_mae = spread_ae_sum / n
+    total_mae = total_ae_sum / n
+    winner_pct = winner_correct / n * 100
+
+    return spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1
 
 
 # -----------------------------------------------------------------------
