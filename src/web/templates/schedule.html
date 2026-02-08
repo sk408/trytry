@@ -15,18 +15,32 @@
     <table class="clickable-table">
       <thead>
         <tr>
+          <th>Day</th>
           <th>Date</th>
+          <th>Away</th>
+          <th></th>
+          <th>Home</th>
           <th>Time</th>
-          <th>Matchup</th>
           <th>Arena</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
-        <tr onclick="window.location='/matchups?home_team_id={{ r.home_team_id }}&away_team_id={{ r.away_team_id }}'" style="cursor: pointer;">
-          <td>{{ r.game_date }}</td>
+        <tr onclick="window.location='/matchups?home_team_id={{ r.home_team_id }}&away_team_id={{ r.away_team_id }}'"
+            style="cursor: pointer;"
+            class="{{ 'highlight-today' if r.is_today else 'highlight-tomorrow' if r.is_tomorrow else '' }}">
+          <td>{{ r.date_label }}</td>
+          <td>{{ r.game_date_fmt }}</td>
+          <td>
+            <img src="{{ team_logo_url(r.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ r.away_abbr }}</strong>
+          </td>
+          <td class="text-muted">@</td>
+          <td>
+            <img src="{{ team_logo_url(r.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ r.home_abbr }}</strong>
+          </td>
           <td>{{ r.game_time or 'TBD' }}</td>
-          <td><strong>{{ r.away_team }}</strong> @ <strong>{{ r.home_team }}</strong></td>
           <td class="text-muted">{{ r.venue }}</td>
         </tr>
         {% endfor %}

@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
+<meta http-equiv="refresh" content="30">
+
 <h1 class="page-title">Live Games</h1>
 
 <div class="card">
   <h2>Live Games & Recommendations</h2>
-  <p class="text-muted">Refreshes every visit by syncing live scores.</p>
+  <p class="last-update">Auto-refreshes every 30s &middot; Last updated {{ updated_at }}</p>
   
   {% if error %}
   <div class="error-box">{{ error }}</div>
@@ -27,14 +29,24 @@
       </thead>
       <tbody>
         {% for rec in recs %}
-        <tr>
+        {% set is_live = rec.status.lower() in ('in_progress', 'live', 'in progress') %}
+        {% set is_final = rec.status.lower() in ('final', 'post') %}
+        <tr class="{{ 'status-live' if is_live else 'status-final' if is_final else 'status-scheduled' }}">
           <td>{{ rec.status }}</td>
-          <td>{{ rec.home_team }}</td>
-          <td>{{ rec.away_team }}</td>
-          <td>{{ rec.home_score }} - {{ rec.away_score }}</td>
+          <td>
+            <img src="{{ team_logo_url(rec.home_team) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            {{ rec.home_team }}
+          </td>
+          <td>
+            <img src="{{ team_logo_url(rec.away_team) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            {{ rec.away_team }}
+          </td>
+          <td><strong>{{ rec.home_score }} - {{ rec.away_score }}</strong></td>
           <td>{{ rec.period }}</td>
           <td>{{ rec.clock }}</td>
-          <td>{{ "%.1f"|format(rec.projected_spread) }}</td>
+          <td class="{{ 'spread-home' if rec.projected_spread < -3 else 'spread-away' if rec.projected_spread > 3 else '' }}">
+            {{ "%+.1f"|format(rec.projected_spread) }}
+          </td>
           <td>{{ "%.1f"|format(rec.projected_total) }}</td>
         </tr>
         {% endfor %}

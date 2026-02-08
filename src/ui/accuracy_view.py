@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import pandas as pd
 from PySide6.QtCore import Qt, QThread, QObject, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -80,9 +82,17 @@ class AccuracyView(QWidget):
         
         # Team accuracy table
         self.team_table = QTableWidget()
+        self.team_table.setAlternatingRowColors(True)
+        self.team_table.verticalHeader().setVisible(False)
+        self.team_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.team_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         # Recent predictions table
         self.predictions_table = QTableWidget()
+        self.predictions_table.setAlternatingRowColors(True)
+        self.predictions_table.verticalHeader().setVisible(False)
+        self.predictions_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.predictions_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         # Status log
         self.status = QLabel("Select home/away teams (or Any) and click 'Run Backtest'")
@@ -91,7 +101,8 @@ class AccuracyView(QWidget):
         self.log.setFixedHeight(80)
         
         # Buttons
-        self.run_button = QPushButton("Run Backtest")
+        self.run_button = QPushButton("  Run Backtest")
+        self.run_button.setProperty("cssClass", "primary")
         self.run_button.clicked.connect(self.run_backtest)  # type: ignore[arg-type]
         self.refresh_teams_btn = QPushButton("Refresh Teams")
         self.refresh_teams_btn.clicked.connect(self._load_teams)  # type: ignore[arg-type]
@@ -117,35 +128,35 @@ class AccuracyView(QWidget):
         
         self._load_teams()
         
-        # Summary box
+        # Summary box with metric cards
         summary_box = QGroupBox("Overall Accuracy")
         summary_layout = QHBoxLayout()
-        
-        games_col = QVBoxLayout()
-        games_col.addWidget(QLabel("Games Analyzed"))
-        games_col.addWidget(self.total_games_label)
-        
-        spread_col = QVBoxLayout()
-        spread_col.addWidget(QLabel("Winner Correct %"))
-        spread_col.addWidget(self.spread_accuracy_label)
-        
-        total_col = QVBoxLayout()
-        total_col.addWidget(QLabel("Total Within 10 %"))
-        total_col.addWidget(self.total_accuracy_label)
-        
-        spread_err_col = QVBoxLayout()
-        spread_err_col.addWidget(QLabel("Avg Spread Error"))
-        spread_err_col.addWidget(self.avg_spread_err_label)
-        
-        total_err_col = QVBoxLayout()
-        total_err_col.addWidget(QLabel("Avg Total Error"))
-        total_err_col.addWidget(self.avg_total_err_label)
-        
-        summary_layout.addLayout(games_col)
-        summary_layout.addLayout(spread_col)
-        summary_layout.addLayout(spread_err_col)
-        summary_layout.addLayout(total_col)
-        summary_layout.addLayout(total_err_col)
+        summary_layout.setSpacing(12)
+
+        def _metric_card(title_text: str, value_lbl: QLabel, accent: str) -> QFrame:
+            card = QFrame()
+            card.setStyleSheet(
+                f"QFrame {{ background: #1c2e42; border: 1px solid #2a3f55;"
+                f"  border-radius: 8px; border-top: 3px solid {accent}; }}"
+            )
+            lay = QVBoxLayout()
+            lay.setContentsMargins(12, 8, 12, 8)
+            t = QLabel(title_text)
+            t.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 600;"
+                            " text-transform: uppercase;")
+            value_lbl.setStyleSheet(
+                f"color: {accent}; font-size: 22px; font-weight: 700;"
+            )
+            lay.addWidget(t)
+            lay.addWidget(value_lbl)
+            card.setLayout(lay)
+            return card
+
+        summary_layout.addWidget(_metric_card("Games", self.total_games_label, "#3b82f6"))
+        summary_layout.addWidget(_metric_card("Winner %", self.spread_accuracy_label, "#10b981"))
+        summary_layout.addWidget(_metric_card("Avg Spread Err", self.avg_spread_err_label, "#f59e0b"))
+        summary_layout.addWidget(_metric_card("Total in 10 %", self.total_accuracy_label, "#8b5cf6"))
+        summary_layout.addWidget(_metric_card("Avg Total Err", self.avg_total_err_label, "#ef4444"))
         summary_box.setLayout(summary_layout)
         
         # Team accuracy box
@@ -270,16 +281,16 @@ class AccuracyView(QWidget):
             self.avg_total_err_label.setText(f"{avg_total_err:.1f}")
         
         # Color code accuracy
-        spread_color = "green" if results.overall_spread_accuracy >= 55 else \
-                      "orange" if results.overall_spread_accuracy >= 50 else "red"
+        spread_color = "#10b981" if results.overall_spread_accuracy >= 55 else \
+                       "#f59e0b" if results.overall_spread_accuracy >= 50 else "#ef4444"
         self.spread_accuracy_label.setStyleSheet(
-            f"font-size: 24px; font-weight: bold; color: {spread_color};"
+            f"font-size: 22px; font-weight: 700; color: {spread_color};"
         )
         
-        total_color = "green" if results.overall_total_accuracy >= 55 else \
-                     "orange" if results.overall_total_accuracy >= 50 else "red"
+        total_color = "#8b5cf6" if results.overall_total_accuracy >= 55 else \
+                      "#f59e0b" if results.overall_total_accuracy >= 50 else "#ef4444"
         self.total_accuracy_label.setStyleSheet(
-            f"font-size: 24px; font-weight: bold; color: {total_color};"
+            f"font-size: 22px; font-weight: 700; color: {total_color};"
         )
         
         self.log.append(f"Total games: {results.total_games}")
@@ -326,9 +337,9 @@ class AccuracyView(QWidget):
                 # Color code spread accuracy
                 if col_idx == 3:  # Spread %
                     if ta.spread_accuracy >= 60:
-                        item.setForeground(Qt.GlobalColor.darkGreen)
+                        item.setForeground(QColor("#10b981"))
                     elif ta.spread_accuracy < 45:
-                        item.setForeground(Qt.GlobalColor.red)
+                        item.setForeground(QColor("#ef4444"))
                 self.team_table.setItem(row_idx, col_idx, item)
         
         self.team_table.resizeColumnsToContents()
@@ -408,18 +419,18 @@ class AccuracyView(QWidget):
                 item = QTableWidgetItem(val)
                 # Color winner correct column
                 if col_idx == 5:
-                    item.setForeground(Qt.GlobalColor.darkGreen if p.winner_correct else Qt.GlobalColor.red)
+                    item.setForeground(QColor("#10b981") if p.winner_correct else QColor("#ef4444"))
                 # Color total diff - green if within 10
                 if col_idx == 10:
                     if abs(p.total_error) <= 10:
-                        item.setForeground(Qt.GlobalColor.darkGreen)
+                        item.setForeground(QColor("#10b981"))
                     elif abs(p.total_error) <= 20:
-                        item.setForeground(Qt.GlobalColor.darkYellow)
+                        item.setForeground(QColor("#f59e0b"))
                     else:
-                        item.setForeground(Qt.GlobalColor.red)
+                        item.setForeground(QColor("#ef4444"))
                 # Color injuries column if there are injuries
                 if col_idx == 11 and injury_text != "-":
-                    item.setForeground(Qt.GlobalColor.red)
+                    item.setForeground(QColor("#ef4444"))
                 self.predictions_table.setItem(row_idx, col_idx, item)
         
         self.predictions_table.resizeColumnsToContents()

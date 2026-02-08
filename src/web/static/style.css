@@ -587,6 +587,129 @@ select:focus, input:focus {
   margin-top: 4px;
 }
 
+/* Team Logos */
+.team-logo {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 4px;
+  border-radius: 2px;
+}
+
+.team-logo-lg {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
+/* Player Headshots */
+.player-photo-col {
+  display: none;  /* hidden on mobile */
+}
+
+.player-photo {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-dark);
+}
+
+/* Schedule: Today / Tomorrow Highlighting */
+.highlight-today {
+  background: rgba(59, 130, 246, 0.15) !important;
+  font-weight: 700;
+}
+
+.highlight-today td {
+  border-bottom-color: rgba(59, 130, 246, 0.3);
+}
+
+.highlight-tomorrow {
+  background: rgba(59, 130, 246, 0.06) !important;
+}
+
+/* Live: Status Row Colors */
+.status-live {
+  background: rgba(16, 185, 129, 0.1) !important;
+}
+
+.status-live td:first-child {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.status-final {
+  background: rgba(148, 163, 184, 0.06) !important;
+}
+
+.status-final td:first-child {
+  color: var(--text-muted);
+}
+
+.status-scheduled {
+  /* default */
+}
+
+/* Spread Coloring */
+.spread-home { color: var(--success); font-weight: 600; }
+.spread-away { color: var(--danger); font-weight: 600; }
+
+/* Stat Card Accent Borders */
+.stat-item[data-accent="blue"]  { border-top: 3px solid var(--accent); }
+.stat-item[data-accent="green"] { border-top: 3px solid var(--success); }
+.stat-item[data-accent="red"]   { border-top: 3px solid var(--danger); }
+.stat-item[data-accent="amber"] { border-top: 3px solid var(--warning); }
+
+/* Impact-based Injury Colors */
+.impact-high td { color: var(--danger); }
+.impact-moderate td:nth-child(-n+3) { color: var(--warning); }
+
+/* DB Info */
+.db-info {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.db-info code {
+  background: var(--bg-dark);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+
+/* Quarter Scores */
+.quarter-scores {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 4px 0 8px;
+}
+
+/* Last Updated Timestamp */
+.last-update {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* Game Selector Dropdown */
+.game-selector {
+  margin-bottom: 16px;
+}
+
+.game-selector select {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  font-size: 1rem;
+}
+
 /* Desktop Styles */
 @media (min-width: 768px) {
   .menu-toggle {
@@ -639,5 +762,24 @@ select:focus, input:focus {
     margin: 0;
     padding: 0;
     overflow-x: visible;
+  }
+
+  .team-logo {
+    width: 28px;
+    height: 28px;
+  }
+
+  .team-logo-lg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .player-photo-col {
+    display: table-cell;
+  }
+
+  .player-photo {
+    width: 32px;
+    height: 32px;
   }
 }

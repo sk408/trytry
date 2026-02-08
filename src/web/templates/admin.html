@@ -4,6 +4,12 @@
 
 <div class="card">
   <h2>Database</h2>
+  
+  <div class="db-info">
+    <p>Path: <code>{{ db_path }}</code></p>
+    <p>Size: <strong>{{ db_size }}</strong></p>
+  </div>
+  
   <p class="text-muted">Reset the SQLite database and re-initialize all tables. This will delete all synced data.</p>
   
   {% if status %}
@@ -12,7 +18,7 @@
   </div>
   {% endif %}
   
-  <form method="post" action="/admin/reset" class="mt-4">
+  <form method="post" action="/admin/reset" class="mt-4" onsubmit="return confirm('Are you sure you want to delete the database? All synced data will be lost.');">
     <button type="submit" class="danger">Reset Database</button>
   </form>
 </div>

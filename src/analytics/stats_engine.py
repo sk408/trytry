@@ -1082,6 +1082,10 @@ def get_team_schedule_dates(team_id: int, around_date: Optional[date] = None) ->
     Get a team's game dates from player_stats (past games) ordered ascending.
     Optionally filter to a window around a given date.
     """
+    # Ensure around_date is a date object, not a string
+    if isinstance(around_date, str):
+        around_date = date.fromisoformat(around_date[:10])
+
     with get_conn() as conn:
         if around_date:
             window_start = around_date - timedelta(days=7)
@@ -1129,11 +1133,11 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
     - rest_days: int (days since last game, 0 = B2B)
     - fatigue_penalty: float (total points penalty to apply)
     """
-    game_dates = get_team_schedule_dates(team_id, around_date=game_date)
-
-    # Convert game_date to date if needed
+    # Convert game_date to date if needed (must happen before any date arithmetic)
     if isinstance(game_date, str):
-        game_date = date.fromisoformat(game_date)
+        game_date = date.fromisoformat(game_date[:10])
+
+    game_dates = get_team_schedule_dates(team_id, around_date=game_date)
 
     # Filter to games before this date
     prior = [d for d in game_dates if d < game_date]

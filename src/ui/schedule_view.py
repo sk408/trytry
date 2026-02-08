@@ -4,7 +4,8 @@ from datetime import date
 
 import pandas as pd
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.data.nba_fetcher import get_current_season
+from src.data.image_cache import get_team_logo_pixmap
 from src.data.sync_service import sync_schedule
 from src.database.db import get_conn
 
@@ -129,6 +131,7 @@ class ScheduleView(QWidget):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self._games_data))
+        self.table.setIconSize(QSize(22, 22))
 
         bold_font = QFont()
         bold_font.setBold(True)
@@ -138,9 +141,21 @@ class ScheduleView(QWidget):
         for row_idx, g in enumerate(self._games_data):
             day_item = QTableWidgetItem(g["date_label"])
             date_item = QTableWidgetItem(g["game_date_str"])
+
+            # Away team with logo
             away_item = QTableWidgetItem(g["away_abbr"])
+            away_tid = g.get("away_team_id", 0)
+            if away_tid:
+                away_item.setIcon(QIcon(get_team_logo_pixmap(away_tid, 22)))
+
             at_item = QTableWidgetItem("@")
+
+            # Home team with logo
             home_item = QTableWidgetItem(g["home_abbr"])
+            home_tid = g.get("home_team_id", 0)
+            if home_tid:
+                home_item.setIcon(QIcon(get_team_logo_pixmap(home_tid, 22)))
+
             time_item = QTableWidgetItem(g["game_time"])
             arena_item = QTableWidgetItem(g["arena"])
 

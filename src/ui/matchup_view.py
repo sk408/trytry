@@ -4,9 +4,11 @@ from typing import Dict
 
 import pandas as pd
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from src.analytics.stats_engine import get_team_matchup_stats, get_scheduled_games, TeamMatchupStats
 from src.analytics.prediction import predict_matchup
+from src.data.image_cache import get_team_logo_pixmap, get_player_photo_pixmap
 from src.database.db import get_conn
 
 
@@ -97,6 +100,27 @@ def _teams_df() -> pd.DataFrame:
         return pd.read_sql("SELECT team_id, abbreviation, name FROM teams ORDER BY abbreviation", conn)
 
 
+def _pred_card(title: str, value: str = "--", accent: str = "#3b82f6") -> QFrame:
+    """Small prediction metric card."""
+    card = QFrame()
+    card.setStyleSheet(
+        f"QFrame {{ background: #1c2e42; border: 1px solid #2a3f55;"
+        f"  border-radius: 8px; border-left: 3px solid {accent}; }}"
+    )
+    lay = QVBoxLayout()
+    lay.setContentsMargins(12, 8, 12, 8)
+    t = QLabel(title)
+    t.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 600;"
+                     " text-transform: uppercase; letter-spacing: 0.5px;")
+    v = QLabel(value)
+    v.setObjectName("card_value")
+    v.setStyleSheet(f"color: {accent}; font-size: 24px; font-weight: 700;")
+    lay.addWidget(t)
+    lay.addWidget(v)
+    card.setLayout(lay)
+    return card
+
+
 class MatchupView(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -108,32 +132,45 @@ class MatchupView(QWidget):
         self.home_combo = QComboBox()
         self.away_combo = QComboBox()
         
-        # Prediction summary
-        self.spread_label = QLabel("--")
-        self.spread_label.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.total_label = QLabel("--")
-        self.total_label.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.home_proj_label = QLabel("--")
-        self.away_proj_label = QLabel("--")
+        # Prediction summary cards
+        self.spread_card = _pred_card("Spread (Home)", "--", "#3b82f6")
+        self.total_card = _pred_card("Over / Under", "--", "#f59e0b")
+        self.home_proj_card = _pred_card("Home Projected", "--", "#10b981")
+        self.away_proj_card = _pred_card("Away Projected", "--", "#ef4444")
+
+        # Convenience refs to the value labels inside cards
+        self.spread_label = self.spread_card.findChild(QLabel, "card_value")
+        self.total_label = self.total_card.findChild(QLabel, "card_value")
+        self.home_proj_label = self.home_proj_card.findChild(QLabel, "card_value")
+        self.away_proj_label = self.away_proj_card.findChild(QLabel, "card_value")
         
         # Injury impact labels
         self.home_injury_label = QLabel("No injuries")
+        self.home_injury_label.setStyleSheet("color: #10b981; font-size: 12px;")
         self.away_injury_label = QLabel("No injuries")
+        self.away_injury_label.setStyleSheet("color: #10b981; font-size: 12px;")
         
         # Backtest accuracy labels
         self.home_record_label = QLabel("--")
         self.away_record_label = QLabel("--")
         self.h2h_label = QLabel("--")
         self.h2h_table = QTableWidget()
-        self.h2h_table.setMaximumHeight(100)
+        self.h2h_table.setMaximumHeight(120)
+        self.h2h_table.setAlternatingRowColors(True)
+        self.h2h_table.verticalHeader().setVisible(False)
         
         # Player tables
         self.home_table = QTableWidget()
+        self.home_table.setAlternatingRowColors(True)
+        self.home_table.verticalHeader().setVisible(False)
         self.away_table = QTableWidget()
+        self.away_table.setAlternatingRowColors(True)
+        self.away_table.verticalHeader().setVisible(False)
 
         self.refresh_button = QPushButton("Load Games")
         self.refresh_button.clicked.connect(self.refresh)  # type: ignore[arg-type]
-        self.predict_button = QPushButton("Analyze Matchup")
+        self.predict_button = QPushButton("  Analyze Matchup")
+        self.predict_button.setProperty("cssClass", "primary")
         self.predict_button.clicked.connect(self.predict)  # type: ignore[arg-type]
 
         # Game selection from schedule
@@ -151,32 +188,41 @@ class MatchupView(QWidget):
         btn_row.addWidget(self.predict_button)
         btn_row.addStretch()
 
-        # Prediction summary box
+        # Team logo labels (shown next to projected scores)
+        self.home_logo_lbl = QLabel()
+        self.home_logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.home_logo_lbl.setFixedSize(48, 48)
+        self.away_logo_lbl = QLabel()
+        self.away_logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.away_logo_lbl.setFixedSize(48, 48)
+
+        # Prediction summary – cards in a row
         pred_box = QGroupBox("Prediction Summary")
         pred_layout = QHBoxLayout()
-        
-        spread_col = QVBoxLayout()
-        spread_col.addWidget(QLabel("Spread (home)"))
-        spread_col.addWidget(self.spread_label)
-        
-        total_col = QVBoxLayout()
-        total_col.addWidget(QLabel("Over/Under"))
-        total_col.addWidget(self.total_label)
-        
+        pred_layout.setSpacing(12)
+
+        # Spread + Total cards
+        pred_layout.addWidget(self.spread_card)
+        pred_layout.addWidget(self.total_card)
+
+        # Home projected: logo + card + injury
         home_col = QVBoxLayout()
-        home_col.addWidget(QLabel("Home Projected"))
-        home_col.addWidget(self.home_proj_label)
+        home_top = QHBoxLayout()
+        home_top.addWidget(self.home_logo_lbl)
+        home_top.addWidget(self.home_proj_card, stretch=1)
+        home_col.addLayout(home_top)
         home_col.addWidget(self.home_injury_label)
-        
-        away_col = QVBoxLayout()
-        away_col.addWidget(QLabel("Away Projected"))
-        away_col.addWidget(self.away_proj_label)
-        away_col.addWidget(self.away_injury_label)
-        
-        pred_layout.addLayout(spread_col)
-        pred_layout.addLayout(total_col)
         pred_layout.addLayout(home_col)
+
+        # Away projected: logo + card + injury
+        away_col = QVBoxLayout()
+        away_top = QHBoxLayout()
+        away_top.addWidget(self.away_logo_lbl)
+        away_top.addWidget(self.away_proj_card, stretch=1)
+        away_col.addLayout(away_top)
+        away_col.addWidget(self.away_injury_label)
         pred_layout.addLayout(away_col)
+
         pred_box.setLayout(pred_layout)
         
         # Historical accuracy box
@@ -338,6 +384,18 @@ class MatchupView(QWidget):
         self.total_label.setText(f"{total:.1f}")
         self.home_proj_label.setText(f"{home_proj:.1f}")
         self.away_proj_label.setText(f"{away_proj:.1f}")
+
+        # Team logos
+        self.home_logo_lbl.setPixmap(get_team_logo_pixmap(home_id, 44))
+        self.away_logo_lbl.setPixmap(get_team_logo_pixmap(away_id, 44))
+
+        # Color the spread: green if home favored, red if away favored
+        if spread < -2:
+            self.spread_label.setStyleSheet("color: #10b981; font-size: 24px; font-weight: 700;")
+        elif spread > 2:
+            self.spread_label.setStyleSheet("color: #ef4444; font-size: 24px; font-weight: 700;")
+        else:
+            self.spread_label.setStyleSheet("color: #f59e0b; font-size: 24px; font-weight: 700;")
         
         # Update injury impact labels
         self._update_injury_labels(home_stats, self.home_injury_label)
@@ -371,11 +429,11 @@ class MatchupView(QWidget):
             f"{home_abbr}: {hw}-{hl} ({home_pct:.0f}%) | Avg {data['home_avg_home']:.1f} pts"
         )
         if home_pct >= 60:
-            self.home_record_label.setStyleSheet("color: green; font-weight: bold;")
+            self.home_record_label.setStyleSheet("color: #10b981; font-weight: bold;")
         elif home_pct <= 40:
-            self.home_record_label.setStyleSheet("color: red; font-weight: bold;")
+            self.home_record_label.setStyleSheet("color: #ef4444; font-weight: bold;")
         else:
-            self.home_record_label.setStyleSheet("")
+            self.home_record_label.setStyleSheet("color: #e2e8f0;")
         
         # Away team on road record
         aw = data["away_record_on_road"]["wins"]
@@ -385,11 +443,11 @@ class MatchupView(QWidget):
             f"{away_abbr}: {aw}-{al} ({away_pct:.0f}%) | Avg {data['away_avg_road']:.1f} pts"
         )
         if away_pct >= 60:
-            self.away_record_label.setStyleSheet("color: green; font-weight: bold;")
+            self.away_record_label.setStyleSheet("color: #10b981; font-weight: bold;")
         elif away_pct <= 40:
-            self.away_record_label.setStyleSheet("color: red; font-weight: bold;")
+            self.away_record_label.setStyleSheet("color: #ef4444; font-weight: bold;")
         else:
-            self.away_record_label.setStyleSheet("")
+            self.away_record_label.setStyleSheet("color: #e2e8f0;")
         
         # Head-to-head
         h2h = data["h2h_games"]
@@ -424,7 +482,7 @@ class MatchupView(QWidget):
         
         if not injured:
             label.setText("No injuries")
-            label.setStyleSheet("color: green;")
+            label.setStyleSheet("color: #10b981; font-size: 12px;")
             return
         
         # Calculate total lost points
@@ -452,7 +510,7 @@ class MatchupView(QWidget):
                 parts.append(f"{last_name}({pos})")
             names = ", ".join(parts)
             label.setText(f"KEY OUT: {names} (-{lost_points:.0f} PPG)")
-            label.setStyleSheet("color: darkred; font-weight: bold;")
+            label.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 12px;")
         elif rotation_injuries:
             parts = []
             for p in rotation_injuries[:2]:
@@ -461,13 +519,13 @@ class MatchupView(QWidget):
                 parts.append(f"{last_name}({pos})")
             names = ", ".join(parts)
             label.setText(f"OUT: {names} (-{lost_points:.0f} PPG)")
-            label.setStyleSheet("color: red;")
+            label.setStyleSheet("color: #f59e0b; font-size: 12px;")
         else:
             label.setText(f"{len(injured)} minor injuries")
-            label.setStyleSheet("color: orange;")
+            label.setStyleSheet("color: #94a3b8; font-size: 12px;")
 
     def _populate_table(self, table: QTableWidget, stats: TeamMatchupStats, opp_id: int, is_home: bool) -> None:
-        headers = ["Player", "Pos", "PPG", "RPG", "APG", "MPG", "Home", "Away", "vs Opp", "Proj", "Status"]
+        headers = ["", "Player", "Pos", "PPG", "RPG", "APG", "MPG", "Home", "Away", "vs Opp", "Proj", "Status"]
         table.clear()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
@@ -475,8 +533,11 @@ class MatchupView(QWidget):
         # Only show top 12 by minutes
         players = [p for p in stats.players if p.mpg > 0][:12]
         table.setRowCount(len(players))
+        table.setIconSize(self._player_icon_size())
         
         for row_idx, p in enumerate(players):
+            table.setRowHeight(row_idx, 36)
+
             # Calculate this player's projected contribution
             base = p.ppg * 0.4
             loc = (p.ppg_home if is_home else p.ppg_away) * 0.3
@@ -484,6 +545,12 @@ class MatchupView(QWidget):
             proj = base + loc + vs
             
             status = "INJ" if p.is_injured else "OK"
+
+            # Player headshot in column 0
+            photo_pm = get_player_photo_pixmap(p.player_id, 30)
+            photo_item = QTableWidgetItem()
+            photo_item.setIcon(QIcon(photo_pm))
+            table.setItem(row_idx, 0, photo_item)
             
             items = [
                 p.name,
@@ -502,7 +569,13 @@ class MatchupView(QWidget):
             for col_idx, val in enumerate(items):
                 item = QTableWidgetItem(val)
                 if p.is_injured:
-                    item.setForeground(Qt.GlobalColor.red)
-                table.setItem(row_idx, col_idx, item)
+                    item.setForeground(QColor("#ef4444"))
+                table.setItem(row_idx, col_idx + 1, item)  # +1 for photo column
         
+        table.setColumnWidth(0, 40)  # photo column
         table.resizeColumnsToContents()
+
+    @staticmethod
+    def _player_icon_size():
+        from PySide6.QtCore import QSize
+        return QSize(30, 30)

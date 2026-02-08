@@ -2,6 +2,26 @@
 {% block content %}
 <h1 class="page-title">Dashboard</h1>
 
+<!-- Stat Cards -->
+<div class="stats-grid">
+  <div class="stat-item" data-accent="blue">
+    <div class="stat-value">{{ stats.teams }}</div>
+    <div class="stat-label">Teams</div>
+  </div>
+  <div class="stat-item" data-accent="green">
+    <div class="stat-value">{{ stats.players }}</div>
+    <div class="stat-label">Players</div>
+  </div>
+  <div class="stat-item" data-accent="amber">
+    <div class="stat-value">{{ "{:,}".format(stats.game_logs) }}</div>
+    <div class="stat-label">Game Logs</div>
+  </div>
+  <div class="stat-item" data-accent="red">
+    <div class="stat-value">{{ stats.injured }}</div>
+    <div class="stat-label">Injured</div>
+  </div>
+</div>
+
 <div class="card">
   <div class="status" id="status">{{ status }}</div>
   
@@ -14,6 +34,9 @@
     </button>
     <button type="button" onclick="runSync('/api/sync/injury-history', 'Building history...')" id="btn-history">
       Build Injury History
+    </button>
+    <button type="button" onclick="runSync('/api/sync/images', 'Syncing images...')" id="btn-images" class="secondary">
+      Sync Images
     </button>
   </div>
   

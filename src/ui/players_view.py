@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.data.image_cache import get_player_photo_pixmap
 from src.database.db import get_conn
 
 
@@ -81,19 +83,30 @@ class PlayersView(QWidget):
         
         # All players table (left side)
         self.all_table = QTableWidget()
+        self.all_table.setAlternatingRowColors(True)
+        self.all_table.verticalHeader().setVisible(False)
+        self.all_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.all_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         # Injured players table (right side)
         self.injured_table = QTableWidget()
+        self.injured_table.setAlternatingRowColors(True)
+        self.injured_table.verticalHeader().setVisible(False)
+        self.injured_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.injured_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)  # type: ignore[arg-type]
         
         self.injured_count_label = QLabel("Injured: 0")
-        self.injured_count_label.setStyleSheet("font-weight: bold; color: red;")
+        self.injured_count_label.setStyleSheet("font-weight: bold; color: #ef4444;")
+
+        title = QLabel("Players")
+        title.setStyleSheet("font-size: 16px; font-weight: 600;")
 
         # Header
         header = QHBoxLayout()
-        header.addWidget(QLabel("Players"))
+        header.addWidget(title)
         header.addWidget(self.injured_count_label)
         header.addStretch()
         header.addWidget(self.refresh_button)
@@ -150,8 +163,8 @@ class PlayersView(QWidget):
             status_item = QTableWidgetItem(status)
             
             if row.is_injured:
-                name_item.setForeground(Qt.GlobalColor.red)
-                status_item.setForeground(Qt.GlobalColor.red)
+                name_item.setForeground(QColor("#ef4444"))
+                status_item.setForeground(QColor("#ef4444"))
             
             self.all_table.setItem(row_idx, 0, name_item)
             self.all_table.setItem(row_idx, 1, pos_item)
@@ -162,16 +175,24 @@ class PlayersView(QWidget):
 
     def _populate_injured_table(self, df: pd.DataFrame) -> None:
         self.injured_table.clear()
-        headers = ["Name", "Pos", "Team", "PPG", "MPG", "Injury"]
+        headers = ["", "Name", "Pos", "Team", "PPG", "MPG", "Injury"]
         self.injured_table.setColumnCount(len(headers))
         self.injured_table.setHorizontalHeaderLabels(headers)
         self.injured_table.setRowCount(len(df))
+        self.injured_table.setIconSize(QSize(30, 30))
 
         for row_idx, row in enumerate(df.itertuples(index=False)):
+            self.injured_table.setRowHeight(row_idx, 34)
             ppg = float(row.ppg) if row.ppg else 0.0
             mpg = float(row.mpg) if row.mpg else 0.0
             pos = _get_position_display(row.position)
-            
+
+            # Player headshot
+            photo_item = QTableWidgetItem()
+            photo_pm = get_player_photo_pixmap(int(row.player_id), 28)
+            photo_item.setIcon(QIcon(photo_pm))
+            self.injured_table.setItem(row_idx, 0, photo_item)
+
             name_item = QTableWidgetItem(str(row.name))
             pos_item = QTableWidgetItem(pos)
             team_item = QTableWidgetItem(str(row.team or ""))
@@ -181,21 +202,20 @@ class PlayersView(QWidget):
             
             # Highlight high-impact injuries (players with >15 MPG)
             if mpg >= 25:
-                name_item.setForeground(Qt.GlobalColor.darkRed)
+                for it in (name_item, pos_item, ppg_item, mpg_item, injury_item):
+                    it.setForeground(QColor("#ef4444"))
                 name_item.setToolTip("HIGH IMPACT - Key player")
-                pos_item.setForeground(Qt.GlobalColor.darkRed)
-                ppg_item.setForeground(Qt.GlobalColor.darkRed)
-                mpg_item.setForeground(Qt.GlobalColor.darkRed)
             elif mpg >= 15:
-                name_item.setForeground(Qt.GlobalColor.red)
+                for it in (name_item, pos_item):
+                    it.setForeground(QColor("#f59e0b"))
                 name_item.setToolTip("MODERATE IMPACT - Rotation player")
-                pos_item.setForeground(Qt.GlobalColor.red)
             
-            self.injured_table.setItem(row_idx, 0, name_item)
-            self.injured_table.setItem(row_idx, 1, pos_item)
-            self.injured_table.setItem(row_idx, 2, team_item)
-            self.injured_table.setItem(row_idx, 3, ppg_item)
-            self.injured_table.setItem(row_idx, 4, mpg_item)
-            self.injured_table.setItem(row_idx, 5, injury_item)
+            self.injured_table.setItem(row_idx, 1, name_item)
+            self.injured_table.setItem(row_idx, 2, pos_item)
+            self.injured_table.setItem(row_idx, 3, team_item)
+            self.injured_table.setItem(row_idx, 4, ppg_item)
+            self.injured_table.setItem(row_idx, 5, mpg_item)
+            self.injured_table.setItem(row_idx, 6, injury_item)
 
+        self.injured_table.setColumnWidth(0, 36)
         self.injured_table.resizeColumnsToContents()

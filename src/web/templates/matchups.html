@@ -10,6 +10,24 @@
   {% endif %}
 </div>
 
+<!-- Game Selector Dropdown -->
+{% if games %}
+<div class="card">
+  <h2>Quick Select Game</h2>
+  <div class="game-selector">
+    <select onchange="if(this.value) window.location=this.value;">
+      <option value="">-- Select a game --</option>
+      {% for g in games[:60] %}
+      <option value="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}"
+        {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}selected{% endif %}>
+        {{ g.game_date }}: {{ g.away_abbr }} @ {{ g.home_abbr }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Analyze Matchup</h2>
   <form method="get" action="/matchups">
@@ -48,20 +66,30 @@
 <div class="card">
   <h2>Prediction Summary</h2>
   <div class="stats-grid">
-    <div class="stat-item">
+    <div class="stat-item" data-accent="blue">
       <div class="stat-value">{{ "%+.1f"|format(prediction.predicted_spread) }}</div>
       <div class="stat-label">Spread (Home)</div>
     </div>
-    <div class="stat-item">
+    <div class="stat-item" data-accent="amber">
       <div class="stat-value">{{ "%.1f"|format(prediction.predicted_total) }}</div>
       <div class="stat-label">Over/Under</div>
     </div>
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(prediction.home_projected) }}</div>
+    <div class="stat-item" data-accent="green">
+      <div class="stat-value">
+        {% if home_stats %}
+        <img src="{{ team_logo_url(home_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        {% endif %}
+        {{ "%.1f"|format(prediction.home_projected) }}
+      </div>
       <div class="stat-label">Home Projected</div>
     </div>
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(prediction.away_projected) }}</div>
+    <div class="stat-item" data-accent="red">
+      <div class="stat-value">
+        {% if away_stats %}
+        <img src="{{ team_logo_url(away_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        {% endif %}
+        {{ "%.1f"|format(prediction.away_projected) }}
+      </div>
       <div class="stat-label">Away Projected</div>
     </div>
   </div>
@@ -94,12 +122,18 @@
   <h2>Historical Performance</h2>
   <div class="stats-grid">
     <div class="stat-item">
-      <div class="stat-value">{{ backtest.home_record.wins }}-{{ backtest.home_record.losses }}</div>
+      <div class="stat-value">
+        <img src="{{ team_logo_url(backtest.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        {{ backtest.home_record.wins }}-{{ backtest.home_record.losses }}
+      </div>
       <div class="stat-label">{{ backtest.home_abbr }} at Home</div>
       <div class="stat-sub">Avg {{ "%.1f"|format(backtest.home_record.avg_pts) }} pts</div>
     </div>
     <div class="stat-item">
-      <div class="stat-value">{{ backtest.away_record.wins }}-{{ backtest.away_record.losses }}</div>
+      <div class="stat-value">
+        <img src="{{ team_logo_url(backtest.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        {{ backtest.away_record.wins }}-{{ backtest.away_record.losses }}
+      </div>
       <div class="stat-label">{{ backtest.away_abbr }} on Road</div>
       <div class="stat-sub">Avg {{ "%.1f"|format(backtest.away_record.avg_pts) }} pts</div>
     </div>
@@ -138,11 +172,15 @@
 <!-- Home Team Players -->
 {% if home_players %}
 <div class="card">
-  <h2>{{ home_stats.team_abbr }} Players (Home)</h2>
+  <h2>
+    <img src="{{ team_logo_url(home_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+    {{ home_stats.team_abbr }} Players (Home)
+  </h2>
   <div class="scroll-x">
     <table>
       <thead>
         <tr>
+          <th class="player-photo-col"></th>
           <th>Player</th>
           <th>Pos</th>
           <th>PPG</th>
@@ -159,6 +197,9 @@
       <tbody>
         {% for p in home_players %}
         <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+          <td class="player-photo-col">
+            <img src="{{ player_photo_url(p.player_id) }}" class="player-photo" alt="" onerror="this.style.display='none'">
+          </td>
           <td>{{ p.name }}</td>
           <td>{{ p.position }}</td>
           <td>{{ "%.1f"|format(p.ppg) }}</td>
@@ -181,11 +222,15 @@
 <!-- Away Team Players -->
 {% if away_players %}
 <div class="card">
-  <h2>{{ away_stats.team_abbr }} Players (Away)</h2>
+  <h2>
+    <img src="{{ team_logo_url(away_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+    {{ away_stats.team_abbr }} Players (Away)
+  </h2>
   <div class="scroll-x">
     <table>
       <thead>
         <tr>
+          <th class="player-photo-col"></th>
           <th>Player</th>
           <th>Pos</th>
           <th>PPG</th>
@@ -202,6 +247,9 @@
       <tbody>
         {% for p in away_players %}
         <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+          <td class="player-photo-col">
+            <img src="{{ player_photo_url(p.player_id) }}" class="player-photo" alt="" onerror="this.style.display='none'">
+          </td>
           <td>{{ p.name }}</td>
           <td>{{ p.position }}</td>
           <td>{{ "%.1f"|format(p.ppg) }}</td>
@@ -222,7 +270,7 @@
 {% endif %}
 {% endif %}
 
-<!-- Upcoming Games -->
+<!-- Upcoming Games List -->
 <div class="card">
   <h2>Upcoming Games</h2>
   <p class="text-muted">Tap a game to analyze</p>
@@ -233,8 +281,10 @@
        class="game-row {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active{% endif %}">
       <span class="game-date">{{ g.game_date }}</span>
       <span class="game-teams">
+        <img src="{{ team_logo_url(g.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
         <span class="away">{{ g.away_abbr }}</span>
         <span class="at">@</span>
+        <img src="{{ team_logo_url(g.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
         <span class="home">{{ g.home_abbr }}</span>
       </span>
     </a>

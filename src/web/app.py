@@ -63,6 +63,28 @@ app.mount(
 )
 
 
+# ── Jinja2 globals: image URL builders ──────────────────────────────
+_NBA_TO_ESPN_ABBR_LOGO = {
+    "GSW": "gs", "SAS": "sa", "NYK": "ny",
+    "NOP": "no", "UTA": "utah", "WAS": "wsh",
+}
+
+
+def _team_logo_url(abbr: str) -> str:
+    """Return ESPN CDN URL for a team logo given an NBA abbreviation."""
+    espn = _NBA_TO_ESPN_ABBR_LOGO.get(abbr, abbr).lower()
+    return f"https://a.espncdn.com/i/teamlogos/nba/500/{espn}.png"
+
+
+def _player_photo_url(player_id) -> str:
+    """Return NBA CDN URL for a player headshot."""
+    return f"https://cdn.nba.com/headshots/nba/latest/260x190/{player_id}.png"
+
+
+templates.env.globals["team_logo_url"] = _team_logo_url
+templates.env.globals["player_photo_url"] = _player_photo_url
+
+
 @app.on_event("startup")
 def startup() -> None:
     migrations.init_db()
@@ -121,11 +143,27 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/dashboard", status_code=307)
 
 
+def _dashboard_stats() -> dict:
+    """Get DB counts for dashboard stat cards."""
+    try:
+        with get_conn() as conn:
+            teams = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+            players = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+            logs_count = conn.execute("SELECT COUNT(*) FROM player_stats").fetchone()[0]
+            injured = conn.execute(
+                "SELECT COUNT(*) FROM players WHERE is_injured = 1"
+            ).fetchone()[0]
+        return {"teams": teams, "players": players, "game_logs": logs_count, "injured": injured}
+    except Exception:
+        return {"teams": 0, "players": 0, "game_logs": 0, "injured": 0}
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, status: str | None = None, logs: List[str] | None = None) -> HTMLResponse:
+    stats = _dashboard_stats()
     return templates.TemplateResponse(
         "dashboard.html",
-        {"request": request, "status": status or "Ready", "logs": logs or []},
+        {"request": request, "status": status or "Ready", "logs": logs or [], "stats": stats},
     )
 
 
@@ -212,6 +250,53 @@ async def stream_sync_injury_history() -> StreamingResponse:
     )
 
 
+@app.get("/api/sync/images")
+async def stream_sync_images() -> StreamingResponse:
+    """Stream image sync progress via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_sync() -> None:
+            try:
+                from src.data.image_cache import preload_team_logos, preload_player_photos
+
+                progress_cb("Downloading team logos…")
+                logos = preload_team_logos(progress_cb=progress_cb)
+                progress_cb(f"Team logos done: {logos} new")
+
+                progress_cb("Downloading player photos…")
+                photos = preload_player_photos(progress_cb=progress_cb)
+                progress_cb(f"Player photos done: {photos} new")
+
+                msg_queue.put(f"[DONE] Image sync complete ({logos} logos, {photos} photos)")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] Image sync failed: {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_sync, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/backtest")
 async def stream_backtest(
     home_team_id: int | None = None,
@@ -266,6 +351,8 @@ async def stream_backtest(
 
 @app.get("/live", response_class=HTMLResponse)
 async def live(request: Request) -> HTMLResponse:
+    from datetime import datetime as _dt
+
     error = None
     await asyncio.to_thread(sync_live_scores)
     try:
@@ -275,7 +362,12 @@ async def live(request: Request) -> HTMLResponse:
         error = str(exc)
     return templates.TemplateResponse(
         "live.html",
-        {"request": request, "recs": recs, "error": error},
+        {
+            "request": request,
+            "recs": recs,
+            "error": error,
+            "updated_at": _dt.now().strftime("%I:%M:%S %p"),
+        },
     )
 
 
@@ -397,23 +489,31 @@ async def schedule(request: Request) -> HTMLResponse:
         # Sort by date ascending (today first), then by time
         df = df.sort_values(["game_date", "game_time"] if "game_time" in df.columns else ["game_date"])
         
-        # Build display rows (one per game, showing "Away @ Home" format)
+        # Build display rows with separate abbr for logos + highlighting flags
         rows = []
         for _, r in df.iterrows():
-            home_name = r.get("home_name") or r.get("home_abbr", "Home")
-            away_name = r.get("away_name") or r.get("away_abbr", "Away")
             game_time = r.get("game_time", "") or ""
             arena = r.get("arena", "") or ""
             game_date = r["game_date"]
+            date_label = _format_relative_date(game_date, today)
+            home_abbr = r.get("home_abbr", "")
+            away_abbr = r.get("away_abbr", "")
+            
+            delta = (game_date - today).days
             
             rows.append({
-                "game_date": _format_relative_date(game_date, today),
-                "away_team": away_name,
-                "home_team": home_name,
+                "date_label": date_label,
+                "game_date_fmt": game_date.strftime("%a %m/%d") if hasattr(game_date, "strftime") else str(game_date),
+                "away_abbr": away_abbr,
+                "home_abbr": home_abbr,
+                "away_team": r.get("away_name") or away_abbr,
+                "home_team": r.get("home_name") or home_abbr,
                 "game_time": _format_time_short(game_time),
                 "venue": arena[:30] + "..." if len(arena) > 30 else arena,
                 "home_team_id": int(r["home_team_id"]),
                 "away_team_id": int(r["away_team_id"]),
+                "is_today": delta == 0,
+                "is_tomorrow": delta == 1,
             })
     
     season = get_current_season()
@@ -513,6 +613,7 @@ def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> Li
         vs = (p.ppg_vs_opp if p.games_vs_opp > 0 else p.ppg) * 0.3
         proj = base + loc + vs
         result.append({
+            "player_id": p.player_id,
             "name": p.name,
             "position": p.position,
             "ppg": p.ppg,
@@ -811,9 +912,20 @@ async def autotune_clear(
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request, status: str | None = None) -> HTMLResponse:
+    db_path = str(DB_PATH)
+    try:
+        size_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        if size_bytes >= 1_048_576:
+            db_size = f"{size_bytes / 1_048_576:.1f} MB"
+        elif size_bytes >= 1024:
+            db_size = f"{size_bytes / 1024:.1f} KB"
+        else:
+            db_size = f"{size_bytes} bytes"
+    except Exception:
+        db_size = "unknown"
     return templates.TemplateResponse(
         "admin.html",
-        {"request": request, "status": status},
+        {"request": request, "status": status, "db_path": db_path, "db_size": db_size},
     )
 
 

@@ -701,7 +701,13 @@ def run_backtest(
         if idx % 20 == 0:
             progress(f"Analyzing game {idx + 1}/{total_to_process}...")
         
-        game_date = game["game_date"]
+        game_date_raw = game["game_date"]
+        # Ensure game_date is a proper date object (DB may return str)
+        if isinstance(game_date_raw, str):
+            from datetime import date as _date
+            game_date = _date.fromisoformat(game_date_raw[:10])
+        else:
+            game_date = game_date_raw
         home_id = int(game["home_team_id"])
         away_id = int(game["away_team_id"])
         home_score = float(game["home_score"])

@@ -34,6 +34,7 @@ from src.data.gamecast import (
     get_live_games,
     get_play_by_play,
 )
+from src.data.image_cache import get_team_logo_pixmap
 from src.analytics.live_prediction import LivePrediction, live_predict
 from src.database.db import get_conn
 
@@ -98,6 +99,10 @@ class GamecastView(QWidget):
         selector_row.addWidget(self.refresh_btn)
 
         # ── score header ──
+        self.away_logo_lbl = QLabel()
+        self.away_logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.away_logo_lbl.setFixedSize(56, 56)
+
         self.away_name_lbl = QLabel("")
         self.away_name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.away_score_lbl = QLabel("0")
@@ -113,15 +118,21 @@ class GamecastView(QWidget):
         self.home_score_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.home_score_lbl.setStyleSheet("font-size: 36px; font-weight: 800;")
 
+        self.home_logo_lbl = QLabel()
+        self.home_logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.home_logo_lbl.setFixedSize(56, 56)
+
         self.quarter_scores_lbl = QLabel("")
         self.quarter_scores_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.quarter_scores_lbl.setStyleSheet("color: gray; font-size: 11px;")
 
         score_layout = QHBoxLayout()
+        score_layout.addWidget(self.away_logo_lbl)
         for w in (self.away_name_lbl, self.away_score_lbl,
                   self.status_lbl,
                   self.home_score_lbl, self.home_name_lbl):
             score_layout.addWidget(w, stretch=1)
+        score_layout.addWidget(self.home_logo_lbl)
 
         score_box = QGroupBox("Score")
         score_inner = QVBoxLayout()
@@ -294,6 +305,14 @@ class GamecastView(QWidget):
     def _update_score(self, game: GameInfo) -> None:
         self.away_name_lbl.setText(f"{game.away_abbr}\n{game.away_team}")
         self.home_name_lbl.setText(f"{game.home_abbr}\n{game.home_team}")
+
+        # Team logos
+        away_tid = _abbr_to_team_id(game.away_abbr)
+        home_tid = _abbr_to_team_id(game.home_abbr)
+        if away_tid:
+            self.away_logo_lbl.setPixmap(get_team_logo_pixmap(away_tid, 52))
+        if home_tid:
+            self.home_logo_lbl.setPixmap(get_team_logo_pixmap(home_tid, 52))
         self.away_score_lbl.setText(str(game.away_score))
         self.home_score_lbl.setText(str(game.home_score))
 

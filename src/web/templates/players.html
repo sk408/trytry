@@ -70,13 +70,14 @@
 
 <div class="card">
   <h2>Injured Players</h2>
-  <div class="status">{{ injured_count }} injured</div>
+  <div class="status" style="color: var(--danger);">{{ injured_count }} injured</div>
   
   {% if injured %}
   <div class="scroll-x">
     <table>
       <thead>
         <tr>
+          <th class="player-photo-col"></th>
           <th>Name</th>
           <th>Pos</th>
           <th>Team</th>
@@ -87,8 +88,19 @@
       </thead>
       <tbody>
         {% for p in injured %}
-        <tr>
-          <td>{{ p.name }}</td>
+        {% set mpg = p.mpg|float %}
+        <tr class="{{ 'impact-high' if mpg >= 25 else 'impact-moderate' if mpg >= 15 else '' }}">
+          <td class="player-photo-col">
+            <img src="{{ player_photo_url(p.player_id) }}" class="player-photo" alt="" onerror="this.style.display='none'">
+          </td>
+          <td>
+            {{ p.name }}
+            {% if mpg >= 25 %}
+            <span class="text-danger" style="font-size: 0.7rem; font-weight: 700;"> HIGH IMPACT</span>
+            {% elif mpg >= 15 %}
+            <span class="text-warning" style="font-size: 0.7rem; font-weight: 700;"> ROTATION</span>
+            {% endif %}
+          </td>
           <td>{{ p.position }}</td>
           <td>{{ p.team }}</td>
           <td>{{ "%.1f"|format(p.ppg) }}</td>

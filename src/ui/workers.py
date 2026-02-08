@@ -60,6 +60,36 @@ class InjuryHistoryWorker(QObject):
             self.error.emit(f"{exc}\n{tb}")
 
 
+class ImageSyncWorker(QObject):
+    """Download team logos and player headshots into the disk cache."""
+
+    progress = Signal(str)
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def run(self) -> None:
+        try:
+            from src.data.image_cache import preload_team_logos, preload_player_photos
+
+            self.progress.emit("Downloading team logos…")
+            logos = preload_team_logos(progress_cb=self.progress.emit)
+            self.progress.emit(f"Team logos: {logos} new downloads")
+
+            self.progress.emit("Downloading player photos…")
+            photos = preload_player_photos(progress_cb=self.progress.emit)
+            self.progress.emit(f"Player photos: {photos} new downloads")
+
+            self.finished.emit(
+                f"Image sync complete — {logos} logos, {photos} photos downloaded"
+            )
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.error.emit(f"{exc}\n{tb}")
+
+
 def start_sync_worker(on_progress, on_finished, on_error):
     thread = QThread()
     worker = SyncWorker()
@@ -93,6 +123,21 @@ def start_injury_sync_worker(on_progress, on_finished, on_error):
 def start_injury_history_worker(on_progress, on_finished, on_error):
     thread = QThread()
     worker = InjuryHistoryWorker()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)  # type: ignore[arg-type]
+    worker.progress.connect(on_progress)  # type: ignore[arg-type]
+    worker.finished.connect(on_finished)  # type: ignore[arg-type]
+    worker.error.connect(on_error)  # type: ignore[arg-type]
+    worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.error.connect(thread.quit)  # type: ignore[arg-type]
+    thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
+    thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
+    return thread, worker
+
+
+def start_image_sync_worker(on_progress, on_finished, on_error):
+    thread = QThread()
+    worker = ImageSyncWorker()
     worker.moveToThread(thread)
     thread.started.connect(worker.run)  # type: ignore[arg-type]
     worker.progress.connect(on_progress)  # type: ignore[arg-type]

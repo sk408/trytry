@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -64,10 +65,12 @@ class AutotuneView(QWidget):
         self.strength_spin.setSingleStep(0.05)
         self.strength_spin.setValue(0.75)
 
-        self.run_btn = QPushButton("Run Autotune")
+        self.run_btn = QPushButton("  Run Autotune")
+        self.run_btn.setProperty("cssClass", "primary")
         self.run_btn.clicked.connect(self._run_autotune)  # type: ignore[arg-type]
 
-        self.clear_btn = QPushButton("Clear All Tuning")
+        self.clear_btn = QPushButton("  Clear All Tuning")
+        self.clear_btn.setProperty("cssClass", "danger")
         self.clear_btn.clicked.connect(self._clear_tuning)  # type: ignore[arg-type]
 
         self.refresh_btn = QPushButton("Refresh Table")
@@ -80,6 +83,10 @@ class AutotuneView(QWidget):
 
         # Results table
         self.table = QTableWidget()
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
 
         # Layout
         controls = QGroupBox("Autotune Controls")
@@ -170,8 +177,20 @@ class AutotuneView(QWidget):
 
         for idx, t in enumerate(active):
             self.table.setItem(idx, 0, QTableWidgetItem(f"{t['abbr']} - {t['name']}"))
-            self.table.setItem(idx, 1, QTableWidgetItem(f"{t['home_pts_correction']:+.2f}"))
-            self.table.setItem(idx, 2, QTableWidgetItem(f"{t['away_pts_correction']:+.2f}"))
+
+            home_adj = t['home_pts_correction']
+            away_adj = t['away_pts_correction']
+            home_item = QTableWidgetItem(f"{home_adj:+.2f}")
+            away_item = QTableWidgetItem(f"{away_adj:+.2f}")
+            # Color: green for positive corrections (model was underpredicting),
+            #        red for negative (overpredicting)
+            for val, item in ((home_adj, home_item), (away_adj, away_item)):
+                if val > 0:
+                    item.setForeground(QColor("#10b981"))
+                elif val < 0:
+                    item.setForeground(QColor("#ef4444"))
+            self.table.setItem(idx, 1, home_item)
+            self.table.setItem(idx, 2, away_item)
             self.table.setItem(idx, 3, QTableWidgetItem(str(t["games_analyzed"])))
             self.table.setItem(idx, 4, QTableWidgetItem(f"{t['avg_spread_error_before']:.1f}"))
             self.table.setItem(idx, 5, QTableWidgetItem(f"{t['avg_total_error_before']:.1f}"))
