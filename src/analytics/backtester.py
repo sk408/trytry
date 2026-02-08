@@ -362,6 +362,74 @@ def calculate_injury_adjustment(
     return final_adjustment, injured_players
 
 
+def _get_roster_for_game(team_id: int, game_date: date) -> List[int]:
+    """Get the player IDs who actually played for *team_id* on *game_date*.
+
+    Falls back to players on the team roster if no game-day stats exist.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT ps.player_id
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.game_date = ?
+            """,
+            (team_id, str(game_date)),
+        ).fetchall()
+
+    if rows:
+        return [r[0] for r in rows]
+
+    # Fallback: all non-injured players on the current roster
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT player_id FROM players
+            WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)
+            """,
+            (team_id,),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _predict_via_matchup(
+    home_team_id: int,
+    away_team_id: int,
+    game_date: date,
+) -> Tuple[float, float, float, float]:
+    """Call the real ``predict_matchup`` engine for a historical game.
+
+    Reconstructs the rosters from ``player_stats`` and returns
+    ``(spread, total, home_score, away_score)``.
+    """
+    home_pids = _get_roster_for_game(home_team_id, game_date)
+    away_pids = _get_roster_for_game(away_team_id, game_date)
+
+    if not home_pids or not away_pids:
+        return 0.0, 210.0, 105.0, 105.0
+
+    try:
+        # Lazy import to avoid circular dependency
+        # (backtester -> prediction -> autotune -> backtester)
+        from src.analytics.prediction import predict_matchup
+        pred = predict_matchup(
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_players=home_pids,
+            away_players=away_pids,
+            game_date=game_date,
+        )
+        return (
+            pred.predicted_spread,
+            pred.predicted_total,
+            pred.predicted_home_score,
+            pred.predicted_away_score,
+        )
+    except Exception:
+        return 0.0, 210.0, 105.0, 105.0
+
+
 def predict_game_historical(
     home_team_id: int,
     away_team_id: int,
@@ -388,6 +456,9 @@ def predict_game_historical(
     
     if all_games.empty:
         return 0.0, 210.0, 105.0, 105.0
+    
+    # Ensure game_date column is proper date objects for comparison
+    all_games["game_date"] = pd.to_datetime(all_games["game_date"]).dt.date
     
     # Filter to games before this date
     all_games = all_games[all_games["game_date"] < game_date]
@@ -731,9 +802,10 @@ def run_backtest(
         home_fatigue_info = detect_fatigue(home_id, game_date)
         away_fatigue_info = detect_fatigue(away_id, game_date)
         
-        # Make prediction using only data before this game
-        pred_spread, pred_total, pred_home, pred_away = predict_game_historical(
-            home_id, away_id, game_date, use_injury_adjustment=use_injury_adjustment
+        # Make prediction using the REAL prediction engine (predict_matchup)
+        # Reconstruct the roster that actually played this game
+        pred_spread, pred_total, pred_home, pred_away = _predict_via_matchup(
+            home_id, away_id, game_date,
         )
         
         actual_spread = home_score - away_score

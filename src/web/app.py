@@ -21,6 +21,17 @@ from src.analytics.autotune import (
     get_all_tunings,
 )
 from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
+from src.analytics.weight_optimizer import (
+    run_weight_optimiser,
+    build_residual_calibration,
+    load_residual_calibration,
+    run_feature_importance,
+)
+from src.analytics.weight_config import (
+    get_weight_config,
+    clear_weights,
+    load_weights,
+)
 from src.analytics.live_prediction import LivePrediction, live_predict
 from src.analytics.live_recommendations import build_live_recommendations
 from src.analytics.prediction import predict_matchup
@@ -875,6 +886,164 @@ async def accuracy(
             "use_injuries": use_injuries_flag,
         },
     )
+
+
+# --- Model optimisation SSE endpoints ---
+
+
+@app.get("/api/optimize")
+async def stream_optimize() -> StreamingResponse:
+    """Stream weight optimisation progress via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_opt() -> None:
+            try:
+                result = run_weight_optimiser(n_trials=200, progress_cb=progress_cb)
+                msg_queue.put(
+                    f"[RESULT] baseline_loss={result.baseline_loss:.2f},"
+                    f"best_loss={result.best_loss:.2f},"
+                    f"improvement={result.improvement_pct:+.1f}%,"
+                    f"trials={result.trials_run}"
+                )
+                msg_queue.put("[DONE] Weight optimisation complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_opt, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/calibrate")
+async def stream_calibrate() -> StreamingResponse:
+    """Stream residual calibration progress via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_cal() -> None:
+            try:
+                calibration = build_residual_calibration(progress_cb=progress_cb)
+                for label, data in calibration.items():
+                    msg_queue.put(
+                        f"[RESULT] bin={label},"
+                        f"range=[{data['bin_low']:+.0f},{data['bin_high']:+.0f}),"
+                        f"residual={data['avg_residual']:+.3f},"
+                        f"n={data['sample_count']}"
+                    )
+                msg_queue.put("[DONE] Calibration complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_cal, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/feature-importance")
+async def stream_feature_importance() -> StreamingResponse:
+    """Stream feature importance analysis progress via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_fi() -> None:
+            try:
+                results = run_feature_importance(progress_cb=progress_cb)
+                for f in results:
+                    verdict = "HELPS" if f.impact > 0.05 else ("HURTS" if f.impact < -0.05 else "neutral")
+                    msg_queue.put(
+                        f"[RESULT] feature={f.feature_name},"
+                        f"impact={f.impact:+.3f},"
+                        f"impact_pct={f.impact_pct:+.2f}%,"
+                        f"verdict={verdict}"
+                    )
+                msg_queue.put("[DONE] Feature importance complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_fi, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/weights/clear")
+async def api_clear_weights() -> dict:
+    """Clear optimised weights and revert to defaults."""
+    await asyncio.to_thread(clear_weights)
+    return {"status": "ok", "message": "Weights reset to defaults"}
+
+
+@app.get("/api/weights")
+async def api_get_weights() -> dict:
+    """Return current active weights."""
+    cfg = get_weight_config(force_reload=True)
+    return cfg.to_dict()
+
+
+@app.get("/api/calibration")
+async def api_get_calibration() -> List[dict]:
+    """Return saved residual calibration bins."""
+    return await asyncio.to_thread(load_residual_calibration)
 
 
 @app.get("/autotune", response_class=HTMLResponse)

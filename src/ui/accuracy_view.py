@@ -19,6 +19,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.analytics.backtester import run_backtest, BacktestResults
+from src.analytics.weight_optimizer import (
+    run_weight_optimiser,
+    build_residual_calibration,
+    load_residual_calibration,
+    run_feature_importance,
+    OptimiserResult,
+    FeatureImportance,
+)
+from src.analytics.weight_config import get_weight_config, clear_weights
 from src.database.db import get_conn
 
 
@@ -48,6 +57,55 @@ class BacktestWorker(QObject):
                 use_injury_adjustment=self.use_injury_adjustment,
             )
             self.finished.emit(results)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class OptimiserWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # OptimiserResult
+    error = Signal(str)
+
+    def __init__(self, n_trials: int = 200):
+        super().__init__()
+        self.n_trials = n_trials
+
+    def run(self) -> None:
+        try:
+            result = run_weight_optimiser(
+                n_trials=self.n_trials,
+                progress_cb=self.progress.emit,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class CalibrationWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # dict
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            result = build_residual_calibration(progress_cb=self.progress.emit)
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class FeatureImportanceWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # List[FeatureImportance]
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            result = run_feature_importance(progress_cb=self.progress.emit)
+            self.finished.emit(result)
         except Exception as exc:
             import traceback
             self.error.emit(f"{exc}\n{traceback.format_exc()}")
@@ -98,7 +156,7 @@ class AccuracyView(QWidget):
         self.status = QLabel("Select home/away teams (or Any) and click 'Run Backtest'")
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFixedHeight(80)
+        self.log.setFixedHeight(100)
         
         # Buttons
         self.run_button = QPushButton("  Run Backtest")
@@ -115,6 +173,39 @@ class AccuracyView(QWidget):
             "Requires 'Build Injury History' to be run first from Dashboard."
         )
         
+        # ──── Model optimisation buttons ────
+        self.optimise_btn = QPushButton("  Optimize Weights")
+        self.optimise_btn.setToolTip(
+            "Random-search optimisation over the top 10 prediction weights.\n"
+            "Runs ~200 backtest trials to find the best weight combination."
+        )
+        self.optimise_btn.clicked.connect(self._run_optimiser)  # type: ignore[arg-type]
+
+        self.calibrate_btn = QPushButton("  Build Calibration")
+        self.calibrate_btn.setToolTip(
+            "Compute residual calibration table by spread-prediction bin.\n"
+            "Corrects systematic over/under-prediction in each range."
+        )
+        self.calibrate_btn.clicked.connect(self._run_calibration)  # type: ignore[arg-type]
+
+        self.feature_btn = QPushButton("  Feature Importance")
+        self.feature_btn.setToolTip(
+            "Measure each prediction factor's impact on accuracy\n"
+            "by disabling them one at a time."
+        )
+        self.feature_btn.clicked.connect(self._run_feature_importance)  # type: ignore[arg-type]
+
+        self.clear_weights_btn = QPushButton("Reset Weights")
+        self.clear_weights_btn.setToolTip("Clear optimised weights and revert to defaults.")
+        self.clear_weights_btn.clicked.connect(self._clear_weights)  # type: ignore[arg-type]
+
+        # Feature importance / calibration results table
+        self.results_table = QTableWidget()
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
         # Layout - filter row
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("Home Team:"))
@@ -158,6 +249,16 @@ class AccuracyView(QWidget):
         summary_layout.addWidget(_metric_card("Total in 10 %", self.total_accuracy_label, "#8b5cf6"))
         summary_layout.addWidget(_metric_card("Avg Total Err", self.avg_total_err_label, "#ef4444"))
         summary_box.setLayout(summary_layout)
+
+        # ──── Model optimisation section ────
+        opt_box = QGroupBox("Model Optimisation")
+        opt_layout = QHBoxLayout()
+        opt_layout.addWidget(self.optimise_btn)
+        opt_layout.addWidget(self.calibrate_btn)
+        opt_layout.addWidget(self.feature_btn)
+        opt_layout.addWidget(self.clear_weights_btn)
+        opt_layout.addStretch()
+        opt_box.setLayout(opt_layout)
         
         # Team accuracy box
         team_box = QGroupBox("Accuracy by Team")
@@ -170,13 +271,21 @@ class AccuracyView(QWidget):
         pred_box_layout = QVBoxLayout()
         pred_box_layout.addWidget(self.predictions_table)
         pred_box.setLayout(pred_box_layout)
+
+        # Optimisation / importance results
+        results_box = QGroupBox("Optimisation Results")
+        results_box_layout = QVBoxLayout()
+        results_box_layout.addWidget(self.results_table)
+        results_box.setLayout(results_box_layout)
         
         # Main layout
         layout = QVBoxLayout()
         layout.addLayout(filter_layout)
         layout.addWidget(summary_box)
+        layout.addWidget(opt_box)
         layout.addWidget(team_box)
         layout.addWidget(pred_box)
+        layout.addWidget(results_box)
         layout.addWidget(self.status)
         layout.addWidget(self.log)
         self.setLayout(layout)
@@ -199,7 +308,7 @@ class AccuracyView(QWidget):
         if self._thread is not None and self._thread.isRunning():
             return
         
-        self.run_button.setEnabled(False)
+        self._set_buttons_enabled(False)
         self.status.setText("Running backtest...")
         self.log.clear()
         self.log.append("Starting backtest analysis...")
@@ -252,20 +361,175 @@ class AccuracyView(QWidget):
     def _on_finished(self, results: BacktestResults) -> None:
         self._display_results(results)
         self.status.setText(f"Backtest complete: {results.total_games} games analyzed")
-        self.run_button.setEnabled(True)
-        # Signal thread to quit - cleanup happens in _cleanup_thread
+        self._set_buttons_enabled(True)
         if self._thread:
             self._thread.quit()
             self._thread.wait()
     
     def _on_error(self, msg: str) -> None:
-        self.status.setText("Backtest failed")
+        self.status.setText("Operation failed")
         self.log.append(f"ERROR: {msg}")
-        self.run_button.setEnabled(True)
-        # Signal thread to quit - cleanup happens in _cleanup_thread
+        self._set_buttons_enabled(True)
         if self._thread:
             self._thread.quit()
             self._thread.wait()
+
+    # ──── Optimiser ────
+
+    def _run_optimiser(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Starting weight optimisation (this may take a while)...")
+        self.status.setText("Optimising weights...")
+
+        self._thread = QThread()
+        self._worker = OptimiserWorker(n_trials=200)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_optimiser_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_optimiser_done(self, result: OptimiserResult) -> None:
+        self.log.append(
+            f"\nOptimisation complete — loss {result.baseline_loss:.2f} → {result.best_loss:.2f} "
+            f"({result.improvement_pct:+.1f}%)"
+        )
+        self.status.setText("Weight optimisation done!")
+        self._set_buttons_enabled(True)
+        # Show best weights in results table
+        cfg = result.best_config.to_dict()
+        self._show_dict_table("Weight", "Value", {k: f"{v:.4f}" for k, v in cfg.items()})
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── Calibration ────
+
+    def _run_calibration(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Building residual calibration table...")
+        self.status.setText("Building calibration...")
+
+        self._thread = QThread()
+        self._worker = CalibrationWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_calibration_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_calibration_done(self, calibration: dict) -> None:
+        self.log.append(f"\nCalibration complete: {len(calibration)} bins populated")
+        self.status.setText("Calibration done!")
+        self._set_buttons_enabled(True)
+        # Show calibration bins in results table
+        headers = ["Bin", "Range", "Avg Residual", "Samples"]
+        rows = []
+        for label, data in calibration.items():
+            rows.append([
+                label,
+                f"[{data['bin_low']:+.0f}, {data['bin_high']:+.0f})",
+                f"{data['avg_residual']:+.3f}",
+                str(data['sample_count']),
+            ])
+        self._show_list_table(headers, rows)
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── Feature importance ────
+
+    def _run_feature_importance(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Running feature importance analysis...")
+        self.status.setText("Analysing features...")
+
+        self._thread = QThread()
+        self._worker = FeatureImportanceWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_feature_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_feature_done(self, features: list) -> None:
+        self.log.append(f"\nFeature importance complete: {len(features)} features analysed")
+        self.status.setText("Feature importance done!")
+        self._set_buttons_enabled(True)
+        headers = ["Feature", "Baseline Loss", "Disabled Loss", "Impact", "Impact %", "Verdict"]
+        rows = []
+        for f in features:
+            verdict = "HELPS" if f.impact > 0.05 else ("HURTS" if f.impact < -0.05 else "neutral")
+            rows.append([
+                f.feature_name,
+                f"{f.baseline_loss:.2f}",
+                f"{f.disabled_loss:.2f}",
+                f"{f.impact:+.3f}",
+                f"{f.impact_pct:+.2f}%",
+                verdict,
+            ])
+        self._show_list_table(headers, rows)
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── Clear weights ────
+
+    def _clear_weights(self) -> None:
+        clear_weights()
+        self.log.append("Optimised weights cleared — defaults will be used.")
+        self.status.setText("Weights reset to defaults")
+
+    # ──── Table helpers ────
+
+    def _set_buttons_enabled(self, enabled: bool) -> None:
+        self.run_button.setEnabled(enabled)
+        self.optimise_btn.setEnabled(enabled)
+        self.calibrate_btn.setEnabled(enabled)
+        self.feature_btn.setEnabled(enabled)
+        self.clear_weights_btn.setEnabled(enabled)
+
+    def _show_dict_table(self, key_header: str, val_header: str, data: dict) -> None:
+        self.results_table.clear()
+        self.results_table.setColumnCount(2)
+        self.results_table.setHorizontalHeaderLabels([key_header, val_header])
+        self.results_table.setRowCount(len(data))
+        for i, (k, v) in enumerate(data.items()):
+            self.results_table.setItem(i, 0, QTableWidgetItem(str(k)))
+            self.results_table.setItem(i, 1, QTableWidgetItem(str(v)))
+        self.results_table.resizeColumnsToContents()
+
+    def _show_list_table(self, headers: list, rows: list) -> None:
+        self.results_table.clear()
+        self.results_table.setColumnCount(len(headers))
+        self.results_table.setHorizontalHeaderLabels(headers)
+        self.results_table.setRowCount(len(rows))
+        for r, row_data in enumerate(rows):
+            for c, val in enumerate(row_data):
+                item = QTableWidgetItem(str(val))
+                # Color-code verdict column for feature importance
+                if headers[-1] == "Verdict" and c == len(row_data) - 1:
+                    if val == "HELPS":
+                        item.setForeground(QColor("#10b981"))
+                    elif val == "HURTS":
+                        item.setForeground(QColor("#ef4444"))
+                self.results_table.setItem(r, c, item)
+        self.results_table.resizeColumnsToContents()
 
     def _display_results(self, results: BacktestResults) -> None:
         # Update summary

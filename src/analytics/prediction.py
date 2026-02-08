@@ -18,6 +18,7 @@ from src.analytics.stats_engine import (
     get_team_metrics,
 )
 from src.analytics.autotune import get_team_tuning
+from src.analytics.weight_config import WeightConfig, get_weight_config
 from src.database.db import get_conn
 
 
@@ -68,6 +69,7 @@ def predict_matchup(
     - Recent form weighting (last 5 games 60%, older 40%)
     """
     gd = game_date or date.today()
+    w = get_weight_config()
 
     # ============ 1. PLAYER-LEVEL PROJECTIONS ============
     home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
@@ -80,9 +82,8 @@ def predict_matchup(
     # ============ 3. OPPONENT DEFENSIVE ADJUSTMENT ============
     away_def_factor = get_opponent_defensive_factor(away_team_id)
     home_def_factor = get_opponent_defensive_factor(home_team_id)
-    # Dampen: 50% toward 1.0 to avoid overcorrection
-    away_def_factor = 1.0 + (away_def_factor - 1.0) * 0.5
-    home_def_factor = 1.0 + (home_def_factor - 1.0) * 0.5
+    away_def_factor = 1.0 + (away_def_factor - 1.0) * w.def_factor_dampening
+    home_def_factor = 1.0 + (home_def_factor - 1.0) * w.def_factor_dampening
 
     home_base_pts = home_proj["points"] * away_def_factor
     away_base_pts = away_proj["points"] * home_def_factor
@@ -101,114 +102,89 @@ def predict_matchup(
     fatigue_adj = home_fatigue["fatigue_penalty"] - away_fatigue["fatigue_penalty"]
 
     # ============ SPREAD CALCULATION ============
-    #
-    # Player PPG is the base, but matchup-specific DIFFERENTIALS capture
-    # nuances like rebound advantages, turnover forcing, and shooting style
-    # mismatches that raw PPG can't express.  Four Factors covers OREB%,
-    # TOV%, eFG%, and FT rate at a team level; the box-score differentials
-    # below add the player-aggregated perspective at reduced weights to
-    # avoid double-counting.
-
-    # 5a. Base spread from defense-adjusted scoring differential
     spread = (home_base_pts - away_base_pts) + home_court
-
-    # 5b. Fatigue penalty
     spread -= fatigue_adj
 
-    # 5c. Turnover differential – net steals vs turnovers; partially covered
-    #     by Four Factors TOV% so weight is reduced (~0.4 pts per net TO).
+    # Turnover differential
     home_to_margin = home_proj.get("turnover_margin", 0)
     away_to_margin = away_proj.get("turnover_margin", 0)
-    spread += (home_to_margin - away_to_margin) * 0.4
+    spread += (home_to_margin - away_to_margin) * w.turnover_margin_mult
 
-    # 5d. Rebound differential – partially covered by Four Factors OREB%
-    #     so weight is reduced (~0.08 pts per rebound).
+    # Rebound differential
     home_reb = home_proj.get("rebounds", 0)
     away_reb = away_proj.get("rebounds", 0)
-    spread += (home_reb - away_reb) * 0.08
+    spread += (home_reb - away_reb) * w.rebound_diff_mult
 
-    # 5e. Official Off/Def rating matchup comparison
+    # Off/Def rating matchup
     home_off = get_offensive_rating(home_team_id)
     away_off = get_offensive_rating(away_team_id)
     home_def = get_defensive_rating(home_team_id)
     away_def = get_defensive_rating(away_team_id)
     home_matchup_edge = home_off - away_def
     away_matchup_edge = away_off - home_def
-    rating_spread_adj = (home_matchup_edge - away_matchup_edge) * 0.08
-    spread += rating_spread_adj
+    spread += (home_matchup_edge - away_matchup_edge) * w.rating_matchup_mult
 
-    # 5f. FOUR FACTORS COMPARISON (team-level quality signal – covers eFG%,
-    #     TOV%, OREB%, FT rate and their opponent-forcing equivalents)
+    # Four Factors
     home_ff = get_four_factors(home_team_id)
     away_ff = get_four_factors(away_team_id)
-    four_factors_adj = _compute_four_factors_spread(home_ff, away_ff)
+    four_factors_adj = _compute_four_factors_spread(home_ff, away_ff, w)
     spread += four_factors_adj
 
-    # 5g. CLUTCH PERFORMANCE (for projected close games)
+    # Clutch (projected close games only)
     clutch_adj = 0.0
-    if abs(spread) < 6.0:
+    if abs(spread) < w.clutch_threshold:
         home_clutch = get_clutch_stats(home_team_id)
         away_clutch = get_clutch_stats(away_team_id)
-        clutch_adj = _compute_clutch_adjustment(home_clutch, away_clutch)
+        clutch_adj = _compute_clutch_adjustment(home_clutch, away_clutch, w)
         spread += clutch_adj
 
-    # 5h. HUSTLE STATS (defensive effort – not in box scores or Four Factors)
+    # Hustle
     home_hustle = get_hustle_stats(home_team_id)
     away_hustle = get_hustle_stats(away_team_id)
-    hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle)
+    hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle, w)
     spread += hustle_spread_adj
 
     # ============ TOTAL CALCULATION ============
-    #
-    # Base total = summed player PPG (already embeds each team's individual
-    # pace).  Adjustments below capture MATCHUP-SPECIFIC interactions that
-    # differ from each team's season averages.
-
-    # 6a. Base total from defense-adjusted scoring
     total = home_base_pts + away_base_pts
 
-    # 6b. Pace matchup – player PPG embeds their own team's pace, but the
-    #     game pace is the average of both teams.  A fast team vs a slow team
-    #     lands in between.  Apply a moderate correction.
+    # Pace
     home_pace = get_pace(home_team_id)
     away_pace = get_pace(away_team_id)
     expected_pace = (home_pace + away_pace) / 2
-    pace_factor = (expected_pace - 98.0) / 98.0
-    total *= (1 + pace_factor * 0.20)
+    pace_factor = (expected_pace - w.pace_baseline) / w.pace_baseline
+    total *= (1 + pace_factor * w.pace_mult)
 
-    # 6c. Defensive disruption – combined steals + blocks suppress scoring
-    #     beyond what individual PPG captures (forces bad shots / turnovers
-    #     in this specific matchup).  Not covered by Four Factors.
+    # Defensive disruption
     combined_steals = home_proj.get("steals", 0) + away_proj.get("steals", 0)
     combined_blocks = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
-    total -= max(0, combined_steals - 14.0) * 0.15 + max(0, combined_blocks - 10.0) * 0.12
+    total -= (max(0, combined_steals - w.steals_threshold) * w.steals_penalty +
+              max(0, combined_blocks - w.blocks_threshold) * w.blocks_penalty)
 
-    # 6d. Offensive rebound impact – second-chance possessions raise scoring.
-    #     Partially in Four Factors OREB% so weight is halved.
+    # Offensive rebound impact
     combined_oreb = home_proj.get("oreb", 0) + away_proj.get("oreb", 0)
-    total += (combined_oreb - 20.0) * 0.2
+    total += (combined_oreb - w.oreb_baseline) * w.oreb_mult
 
-    # 6e. Hustle impact on total (high hustle = tighter defense = lower scoring)
-    hustle_total_adj = _compute_hustle_total(home_hustle, away_hustle)
+    # Hustle total impact
+    hustle_total_adj = _compute_hustle_total(home_hustle, away_hustle, w)
     total += hustle_total_adj
 
-    # 6f. Fatigue impact on total
+    # Fatigue total impact
     combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
-    total -= combined_fatigue * 0.3
+    total -= combined_fatigue * w.fatigue_total_mult
 
     # ============ 7. ESPN PREDICTOR ENSEMBLE ============
     espn_blend_applied = False
     if espn_home_win_pct > 0 and espn_away_win_pct > 0:
         spread, espn_blend_applied = _blend_with_espn(
-            spread, espn_home_win_pct, espn_away_win_pct
+            spread, espn_home_win_pct, espn_away_win_pct, w
         )
 
     # ============ SANITY CLAMPS ============
-    # Realistic pre-game prediction ranges (regulation, no OT):
-    #   Spread: rarely exceeds ±18 even for lopsided matchups
-    #   Total: very defensive ~195, very fast ~248
-    spread = max(-18.0, min(18.0, spread))
-    total = max(195.0, min(248.0, total))
+    spread = max(-w.spread_clamp, min(w.spread_clamp, spread))
+    total = max(w.total_min, min(w.total_max, total))
+
+    # ============ 8. RESIDUAL CALIBRATION ============
+    spread = _apply_calibration(spread)
 
     # ============ DERIVE INDIVIDUAL SCORES ============
     pred_home_score = (total + spread) / 2
@@ -232,90 +208,104 @@ def predict_matchup(
 
 # ============ HELPER FUNCTIONS ============
 
+# Cache for residual calibration (loaded once, refreshed on demand)
+_calibration_cache: list | None = None
+
+
+def _load_calibration_bins() -> list:
+    """Load residual calibration from DB (cached)."""
+    global _calibration_cache
+    if _calibration_cache is not None:
+        return _calibration_cache
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT bin_low, bin_high, avg_residual, sample_count "
+                "FROM residual_calibration ORDER BY bin_low"
+            ).fetchall()
+        _calibration_cache = [
+            {"bin_low": r[0], "bin_high": r[1], "avg_residual": r[2], "sample_count": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        _calibration_cache = []
+    return _calibration_cache
+
+
+def reload_calibration_cache() -> None:
+    """Force a reload of calibration bins (call after rebuilding)."""
+    global _calibration_cache
+    _calibration_cache = None
+
+
+def _apply_calibration(spread: float) -> float:
+    """Adjust spread using saved residual calibration bins."""
+    bins = _load_calibration_bins()
+    for cal in bins:
+        if cal["bin_low"] <= spread < cal["bin_high"] and cal["sample_count"] >= 5:
+            return spread - cal["avg_residual"]
+    return spread
+
 
 def _compute_four_factors_spread(
-    home_ff: dict, away_ff: dict
+    home_ff: dict, away_ff: dict, w: WeightConfig
 ) -> float:
-    """
-    Compare the Four Factors between two teams.
-    Weights: eFG% 40%, TOV% 25%, OREB% 20%, FT rate 15%
-    (based on Oliver's research on factors that determine winning)
-    """
-    # For each factor, compute the edge:
-    #   team's offensive factor vs opponent's defensive forcing
-    #   home_ff["efg_pct"] vs away_ff["opp_efg_pct"] (what away D forces)
+    """Compare the Four Factors between two teams using configurable weights."""
     edges = []
 
-    # eFG% edge: home shooting vs away defensive forcing
     h_efg = home_ff.get("efg_pct")
     a_opp_efg = away_ff.get("opp_efg_pct")
     a_efg = away_ff.get("efg_pct")
     h_opp_efg = home_ff.get("opp_efg_pct")
     if all(v is not None for v in [h_efg, a_opp_efg, a_efg, h_opp_efg]):
-        # Positive = home advantage
         home_efg_edge = (h_efg - a_opp_efg) - (a_efg - h_opp_efg)
-        edges.append(home_efg_edge * 0.40)
+        edges.append(home_efg_edge * w.ff_efg_weight)
 
-    # TOV% edge (lower is better for offense)
     h_tov = home_ff.get("tm_tov_pct")
     a_opp_tov = away_ff.get("opp_tm_tov_pct")
     a_tov = away_ff.get("tm_tov_pct")
     h_opp_tov = home_ff.get("opp_tm_tov_pct")
     if all(v is not None for v in [h_tov, a_opp_tov, a_tov, h_opp_tov]):
-        # Negative = home advantage (home has lower TOV%)
         home_tov_edge = (a_tov - h_opp_tov) - (h_tov - a_opp_tov)
-        edges.append(home_tov_edge * 0.25)
+        edges.append(home_tov_edge * w.ff_tov_weight)
 
-    # OREB% edge
     h_oreb = home_ff.get("oreb_pct")
     a_opp_oreb = away_ff.get("opp_oreb_pct")
     a_oreb = away_ff.get("oreb_pct")
     h_opp_oreb = home_ff.get("opp_oreb_pct")
     if all(v is not None for v in [h_oreb, a_opp_oreb, a_oreb, h_opp_oreb]):
         home_oreb_edge = (h_oreb - a_opp_oreb) - (a_oreb - h_opp_oreb)
-        edges.append(home_oreb_edge * 0.20)
+        edges.append(home_oreb_edge * w.ff_oreb_weight)
 
-    # FT rate edge
     h_fta = home_ff.get("fta_rate")
     a_opp_fta = away_ff.get("opp_fta_rate")
     a_fta = away_ff.get("fta_rate")
     h_opp_fta = home_ff.get("opp_fta_rate")
     if all(v is not None for v in [h_fta, a_opp_fta, a_fta, h_opp_fta]):
         home_fta_edge = (h_fta - a_opp_fta) - (a_fta - h_opp_fta)
-        edges.append(home_fta_edge * 0.15)
+        edges.append(home_fta_edge * w.ff_fta_weight)
 
     if not edges:
         return 0.0
-
-    # Scale: 1% combined Four Factors edge ≈ 0.3 points
-    return sum(edges) * 0.3
+    return sum(edges) * w.four_factors_scale
 
 
 def _compute_clutch_adjustment(
-    home_clutch: dict, away_clutch: dict
+    home_clutch: dict, away_clutch: dict, w: WeightConfig
 ) -> float:
-    """
-    For projected close games, adjust spread based on clutch performance.
-    Teams that perform well in crunch time outperform in tight games.
-    """
+    """Clutch performance adjustment using configurable weights."""
     home_net = home_clutch.get("clutch_net_rating")
     away_net = away_clutch.get("clutch_net_rating")
     if home_net is None or away_net is None:
         return 0.0
-
-    # Net rating differential in clutch situations, dampened
-    clutch_diff = (home_net - away_net) * 0.05  # ~0.05 pts per 1 net rating point
-    # Cap the clutch adjustment to +-2.0 pts
-    return max(-2.0, min(2.0, clutch_diff))
+    clutch_diff = (home_net - away_net) * w.clutch_scale
+    return max(-w.clutch_cap, min(w.clutch_cap, clutch_diff))
 
 
 def _compute_hustle_spread(
-    home_hustle: dict, away_hustle: dict
+    home_hustle: dict, away_hustle: dict, w: WeightConfig
 ) -> float:
-    """
-    Hustle stats impact on spread: teams with more deflections, contested shots,
-    and charges drawn tend to have stronger defensive effort.
-    """
+    """Hustle stats spread impact using configurable weights."""
     h_defl = home_hustle.get("deflections")
     a_defl = away_hustle.get("deflections")
     h_cont = home_hustle.get("contested_shots")
@@ -324,29 +314,22 @@ def _compute_hustle_spread(
     if h_defl is None or a_defl is None:
         return 0.0
 
-    # Combine deflections and contested shots into an "effort score"
-    h_effort = (h_defl or 0) + (h_cont or 0) * 0.3
-    a_effort = (a_defl or 0) + (a_cont or 0) * 0.3
-    effort_diff = h_effort - a_effort
-
-    # ~0.02 pts per unit of effort differential
-    return effort_diff * 0.02
+    h_effort = (h_defl or 0) + (h_cont or 0) * w.hustle_contested_wt
+    a_effort = (a_defl or 0) + (a_cont or 0) * w.hustle_contested_wt
+    return (h_effort - a_effort) * w.hustle_effort_mult
 
 
 def _compute_hustle_total(
-    home_hustle: dict, away_hustle: dict
+    home_hustle: dict, away_hustle: dict, w: WeightConfig
 ) -> float:
-    """
-    High combined hustle = tighter defense overall = slightly lower totals.
-    """
+    """Hustle impact on game total using configurable weights."""
     h_defl = home_hustle.get("deflections") or 0
     a_defl = away_hustle.get("deflections") or 0
     combined_defl = h_defl + a_defl
 
-    # League avg ~30 combined deflections per game (15 per team)
-    if combined_defl > 30:
-        excess = combined_defl - 30
-        return -excess * 0.1  # ~0.1 pts reduction per excess deflection
+    if combined_defl > w.hustle_defl_baseline:
+        excess = combined_defl - w.hustle_defl_baseline
+        return -excess * w.hustle_defl_penalty
     return 0.0
 
 
@@ -354,28 +337,20 @@ def _blend_with_espn(
     model_spread: float,
     espn_home_pct: float,
     espn_away_pct: float,
+    w: WeightConfig,
 ) -> tuple[float, bool]:
-    """
-    Blend our model's spread with ESPN's predictor.
-    ESPN gives win probabilities; convert to implied spread.
-    """
+    """Blend model spread with ESPN predictor using configurable weights."""
     if espn_home_pct <= 0 and espn_away_pct <= 0:
         return model_spread, False
 
-    # Convert ESPN win probability to implied spread
-    # Rough conversion: each 5% win probability ≈ 1.5 points of spread
-    # Home at 60% → +3.0 pts; Home at 40% → -3.0 pts
-    espn_edge = espn_home_pct - 50.0  # positive = home favored
-    espn_implied_spread = espn_edge * 0.3  # scale factor
+    espn_edge = espn_home_pct - 50.0
+    espn_implied_spread = espn_edge * w.espn_spread_scale
 
-    # Blend: 80% our model, 20% ESPN
-    blended = model_spread * 0.80 + espn_implied_spread * 0.20
+    blended = model_spread * w.espn_model_weight + espn_implied_spread * w.espn_weight
 
-    # Disagreement dampening: if our model and ESPN disagree on direction,
-    # reduce confidence
     if (model_spread > 0.5 and espn_implied_spread < -0.5) or \
        (model_spread < -0.5 and espn_implied_spread > 0.5):
-        blended *= 0.85  # 15% dampening for disagreement
+        blended *= w.espn_disagree_damp
 
     return blended, True
 

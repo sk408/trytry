@@ -1170,14 +1170,16 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
     games_in_6 = sum(1 for d in prior if d >= window_6) + 1
     result["is_4_in_6"] = games_in_6 >= 4
 
-    # Calculate graduated fatigue penalty
+    # Calculate graduated fatigue penalty using configurable weights
+    from src.analytics.weight_config import get_weight_config
+    w = get_weight_config()
     penalty = 0.0
     if result["is_back_to_back"]:
-        penalty += 2.0  # B2B penalty
+        penalty += w.fatigue_b2b  # B2B penalty (default 2.0)
     if result["is_3_in_4"]:
-        penalty += 1.0  # Cumulative fatigue
+        penalty += w.fatigue_3in4  # Cumulative fatigue (default 1.0)
     if result["is_4_in_6"]:
-        penalty += 1.5  # Heavy schedule
+        penalty += w.fatigue_4in6  # Heavy schedule (default 1.5)
     elif rest_days == 0:
         penalty += 3.0  # Same-day (rare, doubleheader scenario)
 

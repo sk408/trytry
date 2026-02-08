@@ -180,4 +180,175 @@
   </div>
 </div>
 {% endif %}
+
+<!-- Model Optimisation -->
+<div class="card">
+  <h2>Model Optimisation</h2>
+  <p class="text-muted" style="margin-bottom: 12px;">
+    Improve prediction accuracy by optimising model weights, building spread calibration,
+    or analysing which features help the most.
+  </p>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+    <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
+    <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
+    <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
+    <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
+  </div>
+  <div id="opt-log" class="log" style="max-height: 200px; overflow-y: auto; display: none;"></div>
+  <div id="opt-results" style="display: none; margin-top: 12px;"></div>
+</div>
+
+<script>
+function _disableOptButtons(disabled) {
+  ['btn-optimize','btn-calibrate','btn-features','btn-clear-weights'].forEach(id => {
+    document.getElementById(id).disabled = disabled;
+  });
+}
+
+function _appendLog(msg) {
+  const log = document.getElementById('opt-log');
+  log.style.display = 'block';
+  const div = document.createElement('div');
+  div.textContent = msg;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startOptimize() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting weight optimisation...');
+
+  const es = new EventSource('/api/optimize');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      loadWeights();
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function startCalibrate() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Building residual calibration...');
+
+  const results = [];
+  const es = new EventSource('/api/calibrate');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showCalibrationResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function startFeatureImportance() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Running feature importance analysis...');
+
+  const results = [];
+  const es = new EventSource('/api/feature-importance');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showFeatureResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function clearWeights() {
+  fetch('/api/weights/clear', {method: 'POST'}).then(r => r.json()).then(d => {
+    _appendLog('Weights reset to defaults');
+  });
+}
+
+function loadWeights() {
+  fetch('/api/weights').then(r => r.json()).then(weights => {
+    const container = document.getElementById('opt-results');
+    container.style.display = 'block';
+    let html = '<h3>Optimised Weights</h3><div class="scroll-x"><table><thead><tr><th>Weight</th><th>Value</th></tr></thead><tbody>';
+    for (const [k, v] of Object.entries(weights)) {
+      html += '<tr><td>' + k + '</td><td>' + Number(v).toFixed(4) + '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+  });
+}
+
+function showCalibrationResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Calibration Bins</h3><div class="scroll-x"><table><thead><tr><th>Bin</th><th>Range</th><th>Avg Residual</th><th>Samples</th></tr></thead><tbody>';
+  results.forEach(r => {
+    const parts = {};
+    r.split(',').forEach(p => { const [k,v] = p.split('='); parts[k.trim()] = v; });
+    const cls = parseFloat(parts.residual) > 0 ? 'text-warning' : 'text-success';
+    html += '<tr><td>' + (parts.bin||'') + '</td><td>' + (parts.range||'') + '</td><td class="' + cls + '">' + (parts.residual||'') + '</td><td>' + (parts.n||'') + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+function showFeatureResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Feature Importance</h3><div class="scroll-x"><table><thead><tr><th>Feature</th><th>Impact</th><th>Impact %</th><th>Verdict</th></tr></thead><tbody>';
+  results.forEach(r => {
+    const parts = {};
+    r.split(',').forEach(p => { const [k,v] = p.split('='); parts[k.trim()] = v; });
+    const verdict = parts.verdict || 'neutral';
+    const cls = verdict === 'HELPS' ? 'text-success' : (verdict === 'HURTS' ? 'text-danger' : '');
+    html += '<tr><td>' + (parts.feature||'') + '</td><td>' + (parts.impact||'') + '</td><td>' + (parts.impact_pct||'') + '</td><td class="' + cls + '">' + verdict + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+</script>
 {% endblock %}
