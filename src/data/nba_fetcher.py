@@ -563,9 +563,9 @@ def fetch_team_clutch_stats(
         resp = leaguedashteamclutch.LeagueDashTeamClutch(
             season=season,
             measure_type_detailed_defense="Advanced",
-            clutch_time_nullable="Last 5 Minutes",
-            ahead_behind_nullable="Ahead or Behind",
-            point_diff_nullable=5,
+            clutch_time="Last 5 Minutes",
+            ahead_behind="Ahead or Behind",
+            point_diff=5,
             per_mode_detailed="PerGame",
             timeout=30,
         )

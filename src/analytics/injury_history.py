@@ -8,6 +8,7 @@ they were likely out.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -173,55 +174,192 @@ def build_injury_history(
 ) -> int:
     """
     Build injury history table by inferring injuries from game logs.
-    
+
+    Uses batch data loading (3 queries total) instead of per-player/per-game
+    queries.  Includes diagnostic progress messages so silent-0 results can
+    be debugged.
+
     Returns number of injury records created.
     """
     progress = progress_cb or (lambda _: None)
-    
+
+    # ------------------------------------------------------------------ #
+    # 1.  Bulk-load everything we need in 3 queries
+    # ------------------------------------------------------------------ #
     with get_conn() as conn:
-        # Get all teams
-        teams = conn.execute("SELECT team_id, abbreviation FROM teams").fetchall()
-        
-        # Clear existing inferred injuries
-        progress("Clearing previous injury history...")
+        teams_df = pd.read_sql(
+            "SELECT team_id, abbreviation FROM teams", conn
+        )
+        roster_df = pd.read_sql(
+            "SELECT player_id, team_id, name, position FROM players", conn
+        )
+        stats_df = pd.read_sql(
+            "SELECT player_id, game_date, minutes FROM player_stats "
+            "ORDER BY game_date",
+            conn,
+        )
+        # Clear old inferred records
         conn.execute("DELETE FROM injury_history WHERE reason = 'inferred'")
         conn.commit()
-    
+
+    progress(
+        f"[Injury History] Loaded: {len(teams_df)} teams, "
+        f"{len(roster_df)} roster players, {len(stats_df)} game-log rows"
+    )
+
+    # -- Early-exit diagnostics --
+    if stats_df.empty:
+        progress(
+            "[Injury History] WARNING: player_stats table is EMPTY. "
+            "Run a full data sync first."
+        )
+        return 0
+    if roster_df.empty:
+        progress("[Injury History] WARNING: players table is EMPTY.")
+        return 0
+
+    # Show sample dates for format verification
+    sample_dates = stats_df["game_date"].dropna().unique()[:5].tolist()
+    progress(f"[Injury History] Sample game_date values in DB: {sample_dates}")
+
+    # ------------------------------------------------------------------ #
+    # 2.  Build in-memory lookup structures
+    # ------------------------------------------------------------------ #
+
+    # player_id -> current team_id
+    player_team: Dict[int, int] = dict(
+        zip(roster_df["player_id"].astype(int), roster_df["team_id"].astype(int))
+    )
+
+    # player_id -> (name, position)
+    player_info: Dict[int, Dict[str, str]] = {}
+    for _, row in roster_df.iterrows():
+        player_info[int(row["player_id"])] = {
+            "name": str(row["name"]),
+            "position": str(row["position"] or ""),
+        }
+
+    # Attach current team_id to every stats row so we can group by team
+    stats_df["team_id"] = stats_df["player_id"].map(player_team)
+    stats_df = stats_df.dropna(subset=["team_id"])
+    stats_df["team_id"] = stats_df["team_id"].astype(int)
+    stats_df["player_id"] = stats_df["player_id"].astype(int)
+    # Ensure game_date is a plain string for consistent comparisons
+    stats_df["game_date"] = stats_df["game_date"].astype(str)
+
+    progress(
+        f"[Injury History] After team mapping: {len(stats_df)} rows "
+        f"({len(stats_df['player_id'].unique())} unique players)"
+    )
+
+    # team_id -> sorted list of unique game-date strings
+    team_game_dates: Dict[int, List[str]] = {}
+    for tid, grp in stats_df.groupby("team_id"):
+        team_game_dates[int(tid)] = sorted(grp["game_date"].unique().tolist())
+
+    # Fast "did this player play on this date?" set
+    played_set: Set[Tuple[int, str]] = set(
+        zip(stats_df["player_id"], stats_df["game_date"])
+    )
+
+    # Per-player cumulative stats for running-average lookups.
+    # For each player we store parallel lists sorted by game_date:
+    #   dates[i]    – the date of their (i+1)-th game
+    #   cum_mins[i] – total minutes through their (i+1)-th game
+    # To find stats *before* a query date gd  we binary-search dates and
+    # use the cumulative value at the insertion point.
+    player_cum: Dict[int, Tuple[List[str], List[float]]] = {}
+    for pid, grp in stats_df.groupby("player_id"):
+        pid = int(pid)
+        sorted_rows = grp.sort_values("game_date")
+        dates: List[str] = sorted_rows["game_date"].tolist()
+        cum: List[float] = []
+        total = 0.0
+        for m in sorted_rows["minutes"].fillna(0).astype(float):
+            total += m
+            cum.append(total)
+        player_cum[pid] = (dates, cum)
+
+    def _stats_before(pid: int, gd: str) -> Tuple[int, float]:
+        """Return (games_played, avg_minutes) for *pid* from games before *gd*."""
+        if pid not in player_cum:
+            return 0, 0.0
+        dates, cum = player_cum[pid]
+        n = bisect_left(dates, gd)  # games played strictly before gd
+        if n == 0:
+            return 0, 0.0
+        return n, cum[n - 1] / n
+
+    # ------------------------------------------------------------------ #
+    # 3.  Scan every team × game-date for missing rotation players
+    # ------------------------------------------------------------------ #
     total_injuries = 0
-    
-    for idx, (team_id, team_abbr) in enumerate(teams, 1):
-        progress(f"Analyzing injuries for {team_abbr} ({idx}/{len(teams)})...")
-        
-        # Get all game dates for this team
-        game_dates = get_team_game_dates(team_id)
-        
-        team_injuries = []
-        for game_date, opp_id, is_home in game_dates:
-            out_players = infer_injuries_for_game(
-                team_id, game_date,
-                min_games_threshold=min_games_threshold,
-                min_minutes_threshold=min_minutes_threshold,
+    total_checked = 0
+    total_below_games = 0
+    total_below_minutes = 0
+    injury_records: List[Tuple[int, int, str, float]] = []
+
+    for t_idx, t_row in teams_df.iterrows():
+        team_id = int(t_row["team_id"])
+        team_abbr = str(t_row["abbreviation"])
+
+        team_roster = [pid for pid, tid in player_team.items() if tid == team_id]
+        game_dates = team_game_dates.get(team_id, [])
+
+        if not game_dates:
+            progress(
+                f"  {team_abbr}: 0 game dates in player_stats – skipping"
             )
-            team_injuries.extend(out_players)
-        
-        # Batch insert
-        if team_injuries:
-            with get_conn() as conn:
-                conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO injury_history 
-                    (player_id, team_id, game_date, was_out, avg_minutes, reason)
-                    VALUES (?, ?, ?, 1, ?, 'inferred')
-                    """,
-                    [
-                        (p.player_id, p.team_id, str(p.game_date), p.avg_minutes)
-                        for p in team_injuries
-                    ],
-                )
-                conn.commit()
-            total_injuries += len(team_injuries)
-    
-    progress(f"Inferred {total_injuries} injury/out records across all teams")
+            continue
+
+        team_out = 0
+        for gd in game_dates:
+            for pid in team_roster:
+                if (pid, gd) in played_set:
+                    continue  # player has stats for this game
+
+                total_checked += 1
+                n_games, avg_min = _stats_before(pid, gd)
+
+                if n_games < min_games_threshold:
+                    total_below_games += 1
+                    continue
+                if avg_min < min_minutes_threshold:
+                    total_below_minutes += 1
+                    continue
+
+                injury_records.append((pid, team_id, gd, avg_min))
+                team_out += 1
+
+        total_injuries += team_out
+        progress(
+            f"  {team_abbr}: {len(game_dates)} games, "
+            f"{len(team_roster)} roster, {team_out} inferred out"
+        )
+
+    # ------------------------------------------------------------------ #
+    # 4.  Single batch insert
+    # ------------------------------------------------------------------ #
+    if injury_records:
+        with get_conn() as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO injury_history
+                (player_id, team_id, game_date, was_out, avg_minutes, reason)
+                VALUES (?, ?, ?, 1, ?, 'inferred')
+                """,
+                injury_records,
+            )
+            conn.commit()
+
+    progress(
+        f"[Injury History] Done – {total_injuries} injury/out records created"
+    )
+    progress(
+        f"  {total_checked} absent player-game combos checked | "
+        f"{total_below_games} below {min_games_threshold}-game threshold | "
+        f"{total_below_minutes} below {min_minutes_threshold}-min threshold"
+    )
     return total_injuries
 
 

@@ -577,105 +577,106 @@ def player_splits(
 ) -> Dict[str, float]:
     """
     Get player stats splits with extended metrics.
-    
+
+    Uses a **blended** approach to avoid small-sample-size inflation:
+    - Base: overall recent games           (50% weight)
+    - Home/away split if available         (25% weight, else folded into base)
+    - Vs-opponent split if available       (25% weight, scaled by sample size)
+
     Returns comprehensive stats including shooting efficiency and defensive stats.
     """
+    empty = {
+        "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
+        "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+        "oreb": 0.0, "dreb": 0.0,
+        "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
+        "ft_made": 0, "ft_attempted": 0,
+        "fga_pg": 0.0, "fta_pg": 0.0,
+        "ts_pct": 0.0, "fg3_rate": 0.0,
+    }
+
     df = _load_player_df(player_id)
     if df.empty:
-        return {
-            "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
-            "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
-            "oreb": 0.0, "dreb": 0.0,
-            "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
-            "ft_made": 0, "ft_attempted": 0,
-            "fga_pg": 0.0, "fta_pg": 0.0,
-            "ts_pct": 0.0, "fg3_rate": 0.0,
-        }
+        return empty
 
-    # Store original df for fallback
-    original_df = df.copy()
-    
-    # Apply filters
-    if opponent_team_id is not None:
-        filtered = df[df["opponent_team_id"] == opponent_team_id]
-        # Only use filtered if we have data, otherwise keep original
-        if not filtered.empty:
-            df = filtered
-    
-    if is_home is not None:
-        filtered = df[df["is_home"] == int(is_home)]
-        # Only use filtered if we have data, otherwise fall back
-        if not filtered.empty:
-            df = filtered
-        elif not original_df.empty:
-            # Fall back to recent games if no home/away split data
-            df = original_df
-    
-    if recent_games:
-        df = df.head(recent_games)
-
-    # Recency weighting: last 5 games get 60% weight, older games get 40%
-    _use_recency = recent_games is not None and len(df) > 5
-
-    def safe_mean(col, default=0.0):
-        if col not in df.columns or df.empty:
+    # ---- helpers ----
+    def _df_mean(subset: pd.DataFrame, col: str, default: float = 0.0) -> float:
+        if col not in subset.columns or subset.empty:
             return default
-        if _use_recency:
-            recent_5 = df.head(5)
-            older = df.iloc[5:]
-            r_val = recent_5[col].mean() if not recent_5.empty else default
-            o_val = older[col].mean() if not older.empty else default
-            r_val = r_val if pd.notna(r_val) else default
-            o_val = o_val if pd.notna(o_val) else default
-            return r_val * 0.6 + o_val * 0.4
-        val = df[col].mean()
-        return val if pd.notna(val) else default
-    
-    def safe_sum(col, default=0):
-        if col not in df.columns or df.empty:
-            return default
-        return int(df[col].sum())
-    
-    # Compute shooting totals for efficiency calculation
-    total_pts = safe_sum("points")
-    total_fga = safe_sum("fg_attempted")
-    total_fg3a = safe_sum("fg3_attempted")
-    total_fta = safe_sum("ft_attempted")
-    
-    # True Shooting %
+        val = subset[col].mean()
+        return float(val) if pd.notna(val) else default
+
+    def _df_sum(subset: pd.DataFrame, col: str) -> int:
+        if col not in subset.columns or subset.empty:
+            return 0
+        return int(subset[col].sum())
+
+    # ---- slices ----
+    base_df = df.head(recent_games) if recent_games else df
+
+    loc_df = pd.DataFrame()
+    if is_home is not None and not base_df.empty:
+        loc_df = base_df[base_df["is_home"] == int(is_home)]
+
+    opp_df = pd.DataFrame()
+    if opponent_team_id is not None and not df.empty:
+        opp_df = df[df["opponent_team_id"] == opponent_team_id]
+
+    # ---- determine blend weights ----
+    #  base  : always 50%
+    #  loc   : 25% if we have >= 3 games, else 0% (folded into base)
+    #  opp   : 25% if >= 3 games, 15% if 2 games, 10% if 1 game, else 0%
+    w_base = 0.50
+    w_loc = 0.25 if len(loc_df) >= 3 else 0.0
+    w_opp = 0.0
+    opp_n = len(opp_df)
+    if opp_n >= 3:
+        w_opp = 0.25
+    elif opp_n == 2:
+        w_opp = 0.15
+    elif opp_n == 1:
+        w_opp = 0.10
+
+    # Redistribute unused weight to base
+    w_base = 1.0 - w_loc - w_opp
+
+    # ---- blend a stat column ----
+    mean_cols = [
+        "points", "rebounds", "assists", "minutes",
+        "steals", "blocks", "turnovers", "oreb", "dreb",
+        "fg_attempted", "ft_attempted",
+    ]
+
+    result: Dict[str, float] = {}
+    for col in mean_cols:
+        base_val = _df_mean(base_df, col)
+        loc_val = _df_mean(loc_df, col) if w_loc > 0 else base_val
+        opp_val = _df_mean(opp_df, col) if w_opp > 0 else base_val
+        result[col] = w_base * base_val + w_loc * loc_val + w_opp * opp_val
+
+    # Copy blended per-game averages for pace/possession estimation
+    result["fga_pg"] = result["fg_attempted"]
+    result["fta_pg"] = result["ft_attempted"]
+
+    # ---- shooting totals from the base slice (used for aggregate efficiency) ----
+    result["fg_made"] = _df_sum(base_df, "fg_made")
+    result["fg_attempted"] = _df_sum(base_df, "fg_attempted")
+    result["fg3_made"] = _df_sum(base_df, "fg3_made")
+    result["fg3_attempted"] = _df_sum(base_df, "fg3_attempted")
+    result["ft_made"] = _df_sum(base_df, "ft_made")
+    result["ft_attempted"] = _df_sum(base_df, "ft_attempted")
+
+    # ---- efficiency metrics (from base slice totals) ----
+    total_pts = _df_sum(base_df, "points")
+    total_fga = result["fg_attempted"]
+    total_fg3a = result["fg3_attempted"]
+    total_fta = result["ft_attempted"]
+
     ts_denom = 2 * (total_fga + 0.44 * total_fta)
-    ts_pct = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
-    
-    # 3PT attempt rate
-    fg3_rate = (total_fg3a / total_fga * 100) if total_fga > 0 else 0.0
+    result["ts_pct"] = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
+    result["fg3_rate"] = (total_fg3a / total_fga * 100) if total_fga > 0 else 0.0
 
-    return {
-        # Basic stats
-        "points": safe_mean("points"),
-        "rebounds": safe_mean("rebounds"),
-        "assists": safe_mean("assists"),
-        "minutes": safe_mean("minutes"),
-        # Defensive stats
-        "steals": safe_mean("steals"),
-        "blocks": safe_mean("blocks"),
-        "turnovers": safe_mean("turnovers"),
-        # Rebound breakdown
-        "oreb": safe_mean("oreb"),
-        "dreb": safe_mean("dreb"),
-        # Shooting totals (for aggregate efficiency)
-        "fg_made": safe_sum("fg_made"),
-        "fg_attempted": safe_sum("fg_attempted"),
-        "fg3_made": safe_sum("fg3_made"),
-        "fg3_attempted": safe_sum("fg3_attempted"),
-        "ft_made": safe_sum("ft_made"),
-        "ft_attempted": safe_sum("ft_attempted"),
-        # Per-game shooting averages (for pace/possession calculation)
-        "fga_pg": safe_mean("fg_attempted"),
-        "fta_pg": safe_mean("ft_attempted"),
-        # Efficiency metrics
-        "ts_pct": ts_pct,
-        "fg3_rate": fg3_rate,
-    }
+    return result
 
 
 def team_strength(team_id: int, opponent_team_id: Optional[int] = None) -> Dict[str, float]:
@@ -1159,7 +1160,12 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
 
 
 def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:
-    """Get games from the schedule, including upcoming games."""
+    """
+    Get games from the schedule, including upcoming games.
+    fetch_schedule() returns per-game rows with:
+      game_date, home_team_id, away_team_id, home_abbr, away_abbr,
+      home_name, away_name, game_time, arena
+    """
     from src.data.sync_service import sync_schedule
 
     try:
@@ -1169,56 +1175,55 @@ def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:
 
     if df.empty:
         return []
-    
-    # Get team lookup
+
+    # Get team name lookup for any rows missing names
     with get_conn() as conn:
         teams = pd.read_sql("SELECT team_id, abbreviation, name FROM teams", conn)
-    team_lookup = {row["abbreviation"]: (int(row["team_id"]), row["name"]) for _, row in teams.iterrows()}
-    
+    id_to_info = {int(row["team_id"]): (row["abbreviation"], row["name"]) for _, row in teams.iterrows()}
+
     games = []
     seen = set()
-    
+
     for _, row in df.iterrows():
         game_date = row.get("game_date")
-        team_id = row.get("team_id")
-        opp_abbr = row.get("opponent_abbr")
-        is_home = row.get("is_home", False)
-        
-        # Look up team info
-        team_info = None
-        for abbr, (tid, name) in team_lookup.items():
-            if tid == team_id:
-                team_info = (abbr, name)
-                break
-        
-        if not team_info or opp_abbr not in team_lookup:
+        home_id = row.get("home_team_id")
+        away_id = row.get("away_team_id")
+
+        if not home_id or not away_id:
             continue
-        
-        opp_id, opp_name = team_lookup[opp_abbr]
-        
-        if is_home:
-            home_id, home_abbr, home_name = team_id, team_info[0], team_info[1]
-            away_id, away_abbr, away_name = opp_id, opp_abbr, opp_name
-        else:
-            away_id, away_abbr, away_name = team_id, team_info[0], team_info[1]
-            home_id, home_abbr, home_name = opp_id, opp_abbr, opp_name
-        
-        # Deduplicate (each game appears twice - once for each team)
-        key = tuple(sorted([home_id, away_id])) + (str(game_date),)
+
+        home_id = int(home_id)
+        away_id = int(away_id)
+
+        # Deduplicate
+        key = (min(home_id, away_id), max(home_id, away_id), str(game_date))
         if key in seen:
             continue
         seen.add(key)
-        
+
+        # Use names from the DataFrame, falling back to DB lookup
+        home_abbr = str(row.get("home_abbr", ""))
+        away_abbr = str(row.get("away_abbr", ""))
+        home_name = str(row.get("home_name", ""))
+        away_name = str(row.get("away_name", ""))
+
+        if not home_abbr and home_id in id_to_info:
+            home_abbr, home_name = id_to_info[home_id]
+        if not away_abbr and away_id in id_to_info:
+            away_abbr, away_name = id_to_info[away_id]
+
         games.append({
             "game_date": game_date,
-            "home_team_id": int(home_id),
+            "home_team_id": home_id,
             "home_abbr": home_abbr,
             "home_name": home_name,
-            "away_team_id": int(away_id),
+            "away_team_id": away_id,
             "away_abbr": away_abbr,
             "away_name": away_name,
+            "game_time": str(row.get("game_time", "")),
+            "arena": str(row.get("arena", "")),
         })
-    
+
     # Sort by date descending (most recent first)
     games.sort(key=lambda g: str(g.get("game_date", "")), reverse=True)
     return games[:100]

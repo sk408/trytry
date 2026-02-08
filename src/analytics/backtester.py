@@ -525,10 +525,15 @@ def predict_game_historical(
     # Final spread and total
     spread = (home_proj - away_proj) + hca + rebound_adj + rating_adj + \
              four_factors_adj + clutch_adj - fatigue_adj
-    total = (home_proj + away_proj) * (1 + pace_factor * 0.5)
+    # Team scores already embed pace; only apply a small matchup-pace correction
+    total = (home_proj + away_proj) * (1 + pace_factor * 0.15)
     # Reduce total slightly for fatigued games
     combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
     total -= combined_fatigue * 0.3
+
+    # Sanity clamps
+    spread = max(-25.0, min(25.0, spread))
+    total = max(185.0, min(260.0, total))
     
     return spread, total, home_proj, away_proj
 

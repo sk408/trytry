@@ -101,100 +101,100 @@ def predict_matchup(
     fatigue_adj = home_fatigue["fatigue_penalty"] - away_fatigue["fatigue_penalty"]
 
     # ============ SPREAD CALCULATION ============
+    #
+    # Player PPG is the base, but matchup-specific DIFFERENTIALS capture
+    # nuances like rebound advantages, turnover forcing, and shooting style
+    # mismatches that raw PPG can't express.  Four Factors covers OREB%,
+    # TOV%, eFG%, and FT rate at a team level; the box-score differentials
+    # below add the player-aggregated perspective at reduced weights to
+    # avoid double-counting.
 
     # 5a. Base spread from defense-adjusted scoring differential
     spread = (home_base_pts - away_base_pts) + home_court
 
-    # 5b. Fatigue penalty (negative fatigue_adj = home has MORE fatigue = worse for home)
+    # 5b. Fatigue penalty
     spread -= fatigue_adj
 
-    # 5c. Turnover differential impact (~0.8 pts per net turnover advantage)
+    # 5c. Turnover differential – net steals vs turnovers; partially covered
+    #     by Four Factors TOV% so weight is reduced (~0.4 pts per net TO).
     home_to_margin = home_proj.get("turnover_margin", 0)
     away_to_margin = away_proj.get("turnover_margin", 0)
-    spread += (home_to_margin - away_to_margin) * 0.8
+    spread += (home_to_margin - away_to_margin) * 0.4
 
-    # 5d. True Shooting % advantage (~0.25 pts per 1% TS advantage)
-    home_ts = home_proj.get("ts_pct", 55.0)
-    away_ts = away_proj.get("ts_pct", 55.0)
-    spread += (home_ts - away_ts) * 0.25
+    # 5d. Rebound differential – partially covered by Four Factors OREB%
+    #     so weight is reduced (~0.08 pts per rebound).
+    home_reb = home_proj.get("rebounds", 0)
+    away_reb = away_proj.get("rebounds", 0)
+    spread += (home_reb - away_reb) * 0.08
 
     # 5e. Official Off/Def rating matchup comparison
     home_off = get_offensive_rating(home_team_id)
     away_off = get_offensive_rating(away_team_id)
     home_def = get_defensive_rating(home_team_id)
     away_def = get_defensive_rating(away_team_id)
-    home_matchup_edge = home_off - away_def   # positive = home offense > away defense
+    home_matchup_edge = home_off - away_def
     away_matchup_edge = away_off - home_def
-    rating_spread_adj = (home_matchup_edge - away_matchup_edge) * 0.12
+    rating_spread_adj = (home_matchup_edge - away_matchup_edge) * 0.08
     spread += rating_spread_adj
 
-    # 5f. Rebound differential (~0.15 pts per rebound advantage)
-    home_reb = home_proj.get("rebounds", 0)
-    away_reb = away_proj.get("rebounds", 0)
-    spread += (home_reb - away_reb) * 0.15
-
-    # 5g. FOUR FACTORS COMPARISON (strongest predictor of winning)
+    # 5f. FOUR FACTORS COMPARISON (team-level quality signal – covers eFG%,
+    #     TOV%, OREB%, FT rate and their opponent-forcing equivalents)
     home_ff = get_four_factors(home_team_id)
     away_ff = get_four_factors(away_team_id)
     four_factors_adj = _compute_four_factors_spread(home_ff, away_ff)
     spread += four_factors_adj
 
-    # 5h. CLUTCH PERFORMANCE (for projected close games)
+    # 5g. CLUTCH PERFORMANCE (for projected close games)
     clutch_adj = 0.0
-    if abs(spread) < 6.0:  # game projects as close
+    if abs(spread) < 6.0:
         home_clutch = get_clutch_stats(home_team_id)
         away_clutch = get_clutch_stats(away_team_id)
         clutch_adj = _compute_clutch_adjustment(home_clutch, away_clutch)
         spread += clutch_adj
 
-    # 5i. HUSTLE STATS (defensive effort)
+    # 5h. HUSTLE STATS (defensive effort – not in box scores or Four Factors)
     home_hustle = get_hustle_stats(home_team_id)
     away_hustle = get_hustle_stats(away_team_id)
     hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle)
     spread += hustle_spread_adj
 
     # ============ TOTAL CALCULATION ============
+    #
+    # Base total = summed player PPG (already embeds each team's individual
+    # pace).  Adjustments below capture MATCHUP-SPECIFIC interactions that
+    # differ from each team's season averages.
 
     # 6a. Base total from defense-adjusted scoring
     total = home_base_pts + away_base_pts
 
-    # 6b. Pacing boost from assists
-    total += 0.08 * (home_proj.get("assists", 0) + away_proj.get("assists", 0))
-
-    # 6c. Three-point volume impact
-    home_fg3_rate = home_proj.get("fg3_rate", 38.0)
-    away_fg3_rate = away_proj.get("fg3_rate", 38.0)
-    combined_fg3_rate = (home_fg3_rate + away_fg3_rate) / 2
-    total += max(0, combined_fg3_rate - 38.0) * 0.15
-
-    # 6d. Defensive strength impact (steals + blocks slow the game)
-    combined_steals = home_proj.get("steals", 0) + away_proj.get("steals", 0)
-    combined_blocks = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
-    total -= max(0, combined_steals - 14.0) * 0.3 + max(0, combined_blocks - 10.0) * 0.25
-
-    # 6e. Free throw rate impact
-    home_ft_rate = home_proj.get("ft_rate", 25.0)
-    away_ft_rate = away_proj.get("ft_rate", 25.0)
-    total += max(0, (home_ft_rate + away_ft_rate) / 2 - 25.0) * 0.1
-
-    # 6f. Offensive rebound impact (second-chance points)
-    combined_oreb = home_proj.get("oreb", 0) + away_proj.get("oreb", 0)
-    total += (combined_oreb - 20.0) * 0.4
-
-    # 6g. Official pace adjustment (use NBA tracking-based pace)
+    # 6b. Pace matchup – player PPG embeds their own team's pace, but the
+    #     game pace is the average of both teams.  A fast team vs a slow team
+    #     lands in between.  Apply a moderate correction.
     home_pace = get_pace(home_team_id)
     away_pace = get_pace(away_team_id)
     expected_pace = (home_pace + away_pace) / 2
-    pace_factor = (expected_pace - 98.0) / 98.0  # % above/below league avg
-    total *= (1 + pace_factor * 0.5)
+    pace_factor = (expected_pace - 98.0) / 98.0
+    total *= (1 + pace_factor * 0.20)
 
-    # 6h. Hustle impact on total (high hustle = tighter defense = lower scoring)
+    # 6c. Defensive disruption – combined steals + blocks suppress scoring
+    #     beyond what individual PPG captures (forces bad shots / turnovers
+    #     in this specific matchup).  Not covered by Four Factors.
+    combined_steals = home_proj.get("steals", 0) + away_proj.get("steals", 0)
+    combined_blocks = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
+    total -= max(0, combined_steals - 14.0) * 0.15 + max(0, combined_blocks - 10.0) * 0.12
+
+    # 6d. Offensive rebound impact – second-chance possessions raise scoring.
+    #     Partially in Four Factors OREB% so weight is halved.
+    combined_oreb = home_proj.get("oreb", 0) + away_proj.get("oreb", 0)
+    total += (combined_oreb - 20.0) * 0.2
+
+    # 6e. Hustle impact on total (high hustle = tighter defense = lower scoring)
     hustle_total_adj = _compute_hustle_total(home_hustle, away_hustle)
     total += hustle_total_adj
 
-    # 6i. Fatigue impact on total (fatigued teams = sloppier play, slightly lower scoring)
+    # 6f. Fatigue impact on total
     combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
-    total -= combined_fatigue * 0.3  # slight reduction in total for fatigued games
+    total -= combined_fatigue * 0.3
 
     # ============ 7. ESPN PREDICTOR ENSEMBLE ============
     espn_blend_applied = False
@@ -202,6 +202,11 @@ def predict_matchup(
         spread, espn_blend_applied = _blend_with_espn(
             spread, espn_home_win_pct, espn_away_win_pct
         )
+
+    # ============ SANITY CLAMPS ============
+    # NBA scores are almost always 85-140 per team; totals 185-260.
+    spread = max(-25.0, min(25.0, spread))
+    total = max(185.0, min(260.0, total))
 
     # ============ DERIVE INDIVIDUAL SCORES ============
     pred_home_score = (total + spread) / 2

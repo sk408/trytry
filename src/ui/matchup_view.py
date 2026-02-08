@@ -268,10 +268,25 @@ class MatchupView(QWidget):
         if not game:
             return
         
-        # Find and select home team
         home_id = game.get("home_team_id")
         away_id = game.get("away_team_id")
-        
+        self._select_teams_and_predict(home_id, away_id)
+
+    def load_game(self, home_team_id: int, away_team_id: int) -> None:
+        """
+        Public method to load a specific matchup (called externally, e.g. from schedule view).
+        Ensures teams are loaded, selects them, and runs prediction.
+        """
+        # Make sure team combos are populated
+        if self.home_combo.count() == 0:
+            self.refresh()
+        self._select_teams_and_predict(home_team_id, away_team_id)
+
+    def _select_teams_and_predict(self, home_id: int, away_id: int) -> None:
+        """Select the given teams in the combos and auto-analyze."""
+        if not home_id or not away_id:
+            return
+
         for i in range(self.home_combo.count()):
             if self.home_combo.itemData(i) == home_id:
                 self.home_combo.setCurrentIndex(i)
