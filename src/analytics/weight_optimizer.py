@@ -25,6 +25,22 @@ from src.analytics.weight_config import (
 )
 from src.database.db import get_conn
 
+# Optional ML libraries (graceful degradation)
+try:
+    import optuna
+    from optuna.samplers import TPESampler
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    _HAS_OPTUNA = True
+except ImportError:
+    _HAS_OPTUNA = False
+
+try:
+    import xgboost as xgb
+    import shap as _shap
+    _HAS_ML = True
+except ImportError:
+    _HAS_ML = False
+
 
 # -----------------------------------------------------------------------
 # Loss function
@@ -99,15 +115,13 @@ def run_weight_optimiser(
     n_trials: int = 200,
     progress_cb: Optional[Callable[[str], None]] = None,
 ) -> OptimiserResult:
-    """Run random-search weight optimisation.
+    """Optimise prediction weights.
 
-    1. Establish baseline loss with current (default) weights.
-    2. For *n_trials*, sample random weights, run a fast backtest,
-       and track the best score.
-    3. Save the best weights to the DB.
+    Uses Optuna Bayesian optimisation (TPE sampler) when available,
+    falling back to random search otherwise.
 
     Args:
-        n_trials: Number of random configurations to try.
+        n_trials: Number of configurations to evaluate.
         progress_cb: Optional progress callback.
 
     Returns:
@@ -127,11 +141,94 @@ def run_weight_optimiser(
         f"games={baseline_results.total_games}"
     )
 
+    if _HAS_OPTUNA:
+        progress("Using Optuna TPE sampler for Bayesian optimisation...")
+        return _run_optuna_optimiser(baseline_cfg, baseline_loss, n_trials, progress)
+    else:
+        progress("Optuna not installed — using random search fallback...")
+        return _run_random_optimiser(baseline_cfg, baseline_loss, n_trials, progress)
+
+
+def _run_optuna_optimiser(
+    baseline_cfg: WeightConfig,
+    baseline_loss: float,
+    n_trials: int,
+    progress: Callable[[str], None],
+) -> OptimiserResult:
+    """Bayesian optimisation via Optuna TPE sampler."""
+    history: List[Tuple[int, float]] = [(0, baseline_loss)]
+
+    def objective(trial: "optuna.Trial") -> float:
+        d = baseline_cfg.to_dict()
+        for name, lo, hi in TOP_WEIGHTS:
+            d[name] = trial.suggest_float(name, lo, hi)
+        d["espn_weight"] = round(1.0 - d["espn_model_weight"], 4)
+        cfg = WeightConfig.from_dict(d)
+        set_weight_config(cfg)
+        try:
+            results = run_backtest(min_games_before=5)
+            return _loss(results)
+        except Exception as exc:
+            progress(f"  Trial {trial.number + 1} error: {exc}")
+            return 999.0
+
+    def _callback(study: "optuna.Study", trial: "optuna.trial.FrozenTrial") -> None:
+        history.append((trial.number + 1, trial.value))
+        if trial.value <= study.best_value:
+            progress(
+                f"  Trial {trial.number + 1}/{n_trials}: NEW BEST loss={trial.value:.2f}"
+            )
+        elif (trial.number + 1) % 25 == 0:
+            progress(
+                f"  Trial {trial.number + 1}/{n_trials}: loss={trial.value:.2f} "
+                f"(best so far={study.best_value:.2f})"
+            )
+
+    t0 = time.time()
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=TPESampler(seed=42),
+    )
+    study.optimize(objective, n_trials=n_trials, callbacks=[_callback])
+    elapsed = time.time() - t0
+
+    best_loss = study.best_value
+    improvement = ((baseline_loss - best_loss) / baseline_loss * 100) if baseline_loss else 0
+
+    # Build and persist best config
+    d = baseline_cfg.to_dict()
+    d.update(study.best_params)
+    d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
+    best_cfg = WeightConfig.from_dict(d)
+    save_weights(best_cfg)
+    set_weight_config(best_cfg)
+
+    progress(
+        f"Optuna optimisation complete: {n_trials} trials in {elapsed:.0f}s, "
+        f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%)"
+    )
+
+    return OptimiserResult(
+        best_config=best_cfg,
+        best_loss=best_loss,
+        baseline_loss=baseline_loss,
+        trials_run=n_trials,
+        improvement_pct=improvement,
+        history=history,
+    )
+
+
+def _run_random_optimiser(
+    baseline_cfg: WeightConfig,
+    baseline_loss: float,
+    n_trials: int,
+    progress: Callable[[str], None],
+) -> OptimiserResult:
+    """Random-search fallback when Optuna is not installed."""
     best_cfg = baseline_cfg
     best_loss = baseline_loss
     history: List[Tuple[int, float]] = [(0, baseline_loss)]
 
-    # ---- random search ----
     t0 = time.time()
     for trial in range(1, n_trials + 1):
         candidate = _random_config(baseline_cfg)
@@ -162,13 +259,11 @@ def run_weight_optimiser(
     elapsed = time.time() - t0
     improvement = ((baseline_loss - best_loss) / baseline_loss * 100) if baseline_loss else 0
 
-    # ---- persist best ----
     save_weights(best_cfg)
     set_weight_config(best_cfg)
     progress(
-        f"Optimisation complete: {n_trials} trials in {elapsed:.0f}s, "
-        f"loss {baseline_loss:.2f} → {best_loss:.2f} "
-        f"({improvement:+.1f}% improvement)"
+        f"Random-search complete: {n_trials} trials in {elapsed:.0f}s, "
+        f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%)"
     )
 
     return OptimiserResult(
@@ -406,3 +501,256 @@ def run_feature_importance(
     results.sort(key=lambda x: x.impact, reverse=True)
     progress(f"Feature importance complete: {len(results)} features analysed")
     return results
+
+
+# -----------------------------------------------------------------------
+# ML-based feature importance (XGBoost + SHAP)
+# -----------------------------------------------------------------------
+
+@dataclass
+class MLFeatureImportance:
+    feature_name: str
+    shap_importance: float  # mean |SHAP value|
+    direction: str  # "positive", "negative", or "mixed"
+
+
+def run_ml_feature_importance(
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> List[MLFeatureImportance]:
+    """Train XGBoost on the raw feature matrix and use SHAP to quantify
+    each feature's contribution to predicting spread.
+
+    Requires ``xgboost`` and ``shap`` (``pip install xgboost shap``).
+    """
+    if not _HAS_ML:
+        raise ImportError(
+            "XGBoost and SHAP are required for ML feature importance. "
+            "Install with: pip install xgboost shap"
+        )
+
+    import numpy as np
+    import pandas as pd
+
+    progress = progress_cb or (lambda _: None)
+
+    # Step 1 – collect feature matrix from historical games
+    progress("Collecting feature matrix from historical games...")
+    from src.analytics.backtester import (
+        get_actual_game_results,
+        get_team_profile,
+        _get_roster_for_game,
+    )
+    from src.analytics.prediction import predict_matchup_detailed
+
+    games_df = get_actual_game_results()
+    if games_df.empty:
+        progress("No game data available")
+        return []
+
+    games_df = games_df.sort_values("game_date")
+    feature_rows: list[dict] = []
+    targets: list[float] = []
+
+    total = len(games_df)
+    for idx, (_, game) in enumerate(games_df.iterrows()):
+        if idx % 50 == 0:
+            progress(f"  Processing game {idx + 1}/{total}...")
+
+        game_date_raw = game["game_date"]
+        if isinstance(game_date_raw, str):
+            from datetime import date as _date
+            gd = _date.fromisoformat(game_date_raw[:10])
+        else:
+            gd = game_date_raw
+
+        home_id = int(game["home_team_id"])
+        away_id = int(game["away_team_id"])
+
+        # Skip if teams don't have enough history
+        home_profile = get_team_profile(home_id, gd)
+        away_profile = get_team_profile(away_id, gd)
+        if home_profile["games"] < 5 or away_profile["games"] < 5:
+            continue
+
+        home_pids = _get_roster_for_game(home_id, gd)
+        away_pids = _get_roster_for_game(away_id, gd)
+        if not home_pids or not away_pids:
+            continue
+
+        try:
+            detailed = predict_matchup_detailed(
+                home_team_id=home_id,
+                away_team_id=away_id,
+                home_players=home_pids,
+                away_players=away_pids,
+                game_date=gd,
+            )
+            if detailed.features:
+                feature_rows.append(detailed.features)
+                actual_spread = float(game["home_score"]) - float(game["away_score"])
+                targets.append(actual_spread)
+        except Exception:
+            continue
+
+    if len(feature_rows) < 30:
+        progress(f"Not enough games with features ({len(feature_rows)}), need at least 30")
+        return []
+
+    # Step 2 – build DataFrame
+    X = pd.DataFrame(feature_rows).fillna(0.0)
+    y = np.array(targets, dtype=float)
+    progress(f"Feature matrix: {X.shape[0]} games x {X.shape[1]} features")
+
+    # Step 3 – train XGBoost
+    progress("Training XGBoost regressor...")
+    model = xgb.XGBRegressor(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.1,
+        random_state=42,
+        verbosity=0,
+    )
+    model.fit(X, y)
+
+    # Step 4 – SHAP values
+    progress("Computing SHAP values...")
+    explainer = _shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X)
+
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
+    mean_signed_shap = shap_values.mean(axis=0)
+
+    # Step 5 – build result list
+    ml_results: List[MLFeatureImportance] = []
+    for i, col in enumerate(X.columns):
+        signed = float(mean_signed_shap[i])
+        direction = "positive" if signed > 0.01 else ("negative" if signed < -0.01 else "mixed")
+        ml_results.append(MLFeatureImportance(
+            feature_name=col,
+            shap_importance=round(float(mean_abs_shap[i]), 4),
+            direction=direction,
+        ))
+
+    ml_results.sort(key=lambda x: x.shap_importance, reverse=True)
+    progress(f"ML feature importance complete: {len(ml_results)} features analysed")
+    for r in ml_results[:5]:
+        progress(f"  {r.feature_name}: SHAP={r.shap_importance:.4f} ({r.direction})")
+
+    return ml_results
+
+
+# -----------------------------------------------------------------------
+# League-wide FFT error pattern analysis
+# -----------------------------------------------------------------------
+
+@dataclass
+class FFTPattern:
+    period_games: float      # every N games
+    period_days: float       # approximate calendar days
+    magnitude: float         # strength of pattern (0-1 normalised)
+    phase: float             # phase angle
+    description: str         # human-readable summary
+
+
+def run_fft_error_analysis(
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> List[FFTPattern]:
+    """Detect periodic patterns in league-wide prediction errors.
+
+    Runs a full backtest, orders errors chronologically, and applies
+    FFT to find dominant periodic components.  Only patterns affecting
+    the **whole league** (not individual teams) and exceeding 2x the
+    average spectral magnitude are reported.
+
+    Requires ``numpy`` (already installed with pandas).
+    """
+    import numpy as np
+
+    progress = progress_cb or (lambda _: None)
+
+    # Step 1 – run backtest
+    progress("Running backtest for error analysis...")
+    results = run_backtest(min_games_before=5)
+
+    if results.total_games < 50:
+        progress(f"Not enough games ({results.total_games}), need at least 50 for FFT")
+        return []
+
+    # Sort predictions chronologically
+    preds = sorted(results.predictions, key=lambda p: str(p.game_date))
+    errors = np.array([p.spread_error for p in preds], dtype=float)
+    N = len(errors)
+
+    # Compute average days between games
+    dates = [p.game_date for p in preds]
+    if len(dates) > 1:
+        total_span_days = (dates[-1] - dates[0]).days
+        avg_days_per_game = total_span_days / (N - 1) if N > 1 else 1.0
+    else:
+        total_span_days = 0
+        avg_days_per_game = 1.0
+
+    progress(f"Analysing {N} game errors over {total_span_days} days...")
+
+    # Step 2 – FFT
+    fft_vals = np.fft.rfft(errors)
+    magnitudes = np.abs(fft_vals)
+    phases = np.angle(fft_vals)
+
+    # Skip DC component (index 0 = mean error)
+    if len(magnitudes) <= 1:
+        progress("Not enough frequency bins for analysis")
+        return []
+
+    mag_no_dc = magnitudes[1:]
+    mean_mag = float(mag_no_dc.mean())
+    max_mag = float(mag_no_dc.max())
+    threshold = mean_mag * 2.0
+
+    # Step 3 – find significant peaks
+    patterns: List[FFTPattern] = []
+    for k in range(1, len(magnitudes)):
+        if magnitudes[k] < threshold:
+            continue
+
+        period_games = N / k
+        period_days = period_games * avg_days_per_game
+
+        # Skip noise (very short) and unreliable (very long)
+        if period_games < 3 or period_games > N / 2:
+            continue
+
+        norm_mag = float(magnitudes[k] / max_mag) if max_mag > 0 else 0.0
+
+        # Human-readable label
+        if period_days <= 4:
+            desc = f"~{period_days:.0f}-day micro-cycle"
+        elif period_days <= 10:
+            desc = f"~weekly cycle ({period_days:.0f} days)"
+        elif period_days <= 20:
+            desc = f"~biweekly cycle ({period_days:.0f} days)"
+        elif period_days <= 40:
+            desc = f"~monthly cycle ({period_days:.0f} days)"
+        else:
+            desc = f"~{period_days:.0f}-day long-term cycle"
+
+        patterns.append(FFTPattern(
+            period_games=round(period_games, 1),
+            period_days=round(period_days, 1),
+            magnitude=round(norm_mag, 4),
+            phase=round(float(phases[k]), 4),
+            description=desc,
+        ))
+
+    # Sort by strength and keep top 5
+    patterns.sort(key=lambda p: p.magnitude, reverse=True)
+    patterns = patterns[:5]
+
+    if patterns:
+        progress(f"Found {len(patterns)} significant periodic error pattern(s):")
+        for p in patterns:
+            progress(f"  {p.description}: strength={p.magnitude:.2f}")
+    else:
+        progress("No significant periodic error patterns detected (good — errors are random)")
+
+    return patterns

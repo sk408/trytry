@@ -39,6 +39,13 @@ class MatchupPrediction:
     espn_blend_applied: bool = False
 
 
+@dataclass
+class DetailedPrediction:
+    """Prediction bundled with the raw feature vector for ML analysis."""
+    prediction: MatchupPrediction
+    features: dict  # {feature_name: float_value}
+
+
 def predict_matchup(
     home_team_id: int,
     away_team_id: int,
@@ -49,6 +56,7 @@ def predict_matchup(
     # ESPN predictor data (if available from gamecast)
     espn_home_win_pct: float = 0.0,
     espn_away_win_pct: float = 0.0,
+    _collect_features: dict | None = None,
 ) -> MatchupPrediction:
     """
     Predict game spread and total using comprehensive multi-factor model.
@@ -190,6 +198,32 @@ def predict_matchup(
     pred_home_score = (total + spread) / 2
     pred_away_score = (total - spread) / 2
 
+    # ============ FEATURE CAPTURE (for ML analysis) ============
+    if _collect_features is not None:
+        _collect_features["scoring_diff"] = home_base_pts - away_base_pts
+        _collect_features["home_court_adv"] = home_court
+        _collect_features["turnover_margin_diff"] = (
+            home_proj.get("turnover_margin", 0) - away_proj.get("turnover_margin", 0)
+        )
+        _collect_features["rebound_diff"] = (
+            home_proj.get("rebounds", 0) - away_proj.get("rebounds", 0)
+        )
+        _collect_features["rating_matchup_diff"] = home_matchup_edge - away_matchup_edge
+        _collect_features["four_factors_adj"] = four_factors_adj
+        _collect_features["clutch_adj"] = clutch_adj
+        _collect_features["hustle_spread_adj"] = hustle_spread_adj
+        _collect_features["pace_factor"] = pace_factor
+        _s = home_proj.get("steals", 0) + away_proj.get("steals", 0)
+        _b = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
+        _collect_features["combined_steals_excess"] = max(0, _s - w.steals_threshold)
+        _collect_features["combined_blocks_excess"] = max(0, _b - w.blocks_threshold)
+        _collect_features["oreb_excess"] = (
+            home_proj.get("oreb", 0) + away_proj.get("oreb", 0) - w.oreb_baseline
+        )
+        _collect_features["fatigue_diff"] = fatigue_adj
+        _collect_features["home_fatigue_penalty"] = home_fatigue["fatigue_penalty"]
+        _collect_features["away_fatigue_penalty"] = away_fatigue["fatigue_penalty"]
+
     return MatchupPrediction(
         home_team_id=home_team_id,
         away_team_id=away_team_id,
@@ -204,6 +238,36 @@ def predict_matchup(
         fatigue_adj=fatigue_adj,
         espn_blend_applied=espn_blend_applied,
     )
+
+
+def predict_matchup_detailed(
+    home_team_id: int,
+    away_team_id: int,
+    home_players: Iterable[int],
+    away_players: Iterable[int],
+    game_date: Optional[date] = None,
+    home_court: Optional[float] = None,
+    espn_home_win_pct: float = 0.0,
+    espn_away_win_pct: float = 0.0,
+) -> DetailedPrediction:
+    """Predict game with raw feature vector for ML analysis.
+
+    Calls the same engine as ``predict_matchup`` but also returns
+    a ``features`` dict with the raw (pre-weight) factor values.
+    """
+    features: dict[str, float] = {}
+    pred = predict_matchup(
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
+        home_players=home_players,
+        away_players=away_players,
+        game_date=game_date,
+        home_court=home_court,
+        espn_home_win_pct=espn_home_win_pct,
+        espn_away_win_pct=espn_away_win_pct,
+        _collect_features=features,
+    )
+    return DetailedPrediction(prediction=pred, features=features)
 
 
 # ============ HELPER FUNCTIONS ============

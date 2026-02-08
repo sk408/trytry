@@ -26,6 +26,8 @@ from src.analytics.weight_optimizer import (
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
+    run_ml_feature_importance,
+    run_fft_error_analysis,
 )
 from src.analytics.weight_config import (
     get_weight_config,
@@ -1007,6 +1009,97 @@ async def stream_feature_importance() -> StreamingResponse:
                 msg_queue.put(None)
 
         thread = threading.Thread(target=run_fi, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/ml-feature-importance")
+async def stream_ml_feature_importance() -> StreamingResponse:
+    """Stream ML (XGBoost + SHAP) feature importance analysis via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_ml() -> None:
+            try:
+                results = run_ml_feature_importance(progress_cb=progress_cb)
+                for f in results:
+                    msg_queue.put(
+                        f"[RESULT] feature={f.feature_name},"
+                        f"shap={f.shap_importance:.4f},"
+                        f"direction={f.direction}"
+                    )
+                msg_queue.put("[DONE] ML feature importance complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_ml, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/fft-analysis")
+async def stream_fft_analysis() -> StreamingResponse:
+    """Stream FFT error pattern analysis via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_fft() -> None:
+            try:
+                patterns = run_fft_error_analysis(progress_cb=progress_cb)
+                for p in patterns:
+                    msg_queue.put(
+                        f"[RESULT] description={p.description},"
+                        f"period_games={p.period_games},"
+                        f"period_days={p.period_days},"
+                        f"magnitude={p.magnitude}"
+                    )
+                if not patterns:
+                    msg_queue.put("[RESULT] description=No significant patterns detected (good),magnitude=0")
+                msg_queue.put("[DONE] FFT analysis complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_fft, daemon=True)
         thread.start()
 
         while True:

@@ -27,3 +27,8 @@ pydantic>=1.10,<2.0
 # ESPN Gamecast (real-time game updates)
 linedrive
 websocket-client
+
+# Model optimisation & ML feature importance
+optuna
+xgboost
+shap

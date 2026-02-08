@@ -9,3 +9,7 @@ beautifulsoup4==4.14.3
 linedrive
 websocket-client
 tzdata  # Timezone data for Windows
+# Model optimisation & ML feature importance
+optuna
+xgboost
+shap

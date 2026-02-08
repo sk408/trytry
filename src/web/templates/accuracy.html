@@ -192,6 +192,8 @@
     <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
     <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
     <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
+    <button id="btn-ml-features" onclick="startMLFeatureImportance()">ML Feature Importance</button>
+    <button id="btn-fft" onclick="startFFTAnalysis()">Error Patterns (FFT)</button>
     <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
   </div>
   <div id="opt-log" class="log" style="max-height: 200px; overflow-y: auto; display: none;"></div>
@@ -200,7 +202,7 @@
 
 <script>
 function _disableOptButtons(disabled) {
-  ['btn-optimize','btn-calibrate','btn-features','btn-clear-weights'].forEach(id => {
+  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-fft','btn-clear-weights'].forEach(id => {
     document.getElementById(id).disabled = disabled;
   });
 }
@@ -348,6 +350,103 @@ function showFeatureResults(results) {
     html += '<tr><td>' + (parts.feature||'') + '</td><td>' + (parts.impact||'') + '</td><td>' + (parts.impact_pct||'') + '</td><td class="' + cls + '">' + verdict + '</td></tr>';
   });
   html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+function startMLFeatureImportance() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting ML feature importance (XGBoost + SHAP)...');
+
+  const results = [];
+  const es = new EventSource('/api/ml-feature-importance');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showMLFeatureResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showMLFeatureResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>ML Feature Importance (SHAP)</h3><div class="scroll-x"><table><thead><tr><th>Feature</th><th>SHAP Importance</th><th>Direction</th></tr></thead><tbody>';
+  results.forEach(r => {
+    const parts = {};
+    r.split(',').forEach(p => { const [k,v] = p.split('='); parts[k.trim()] = v; });
+    const dir = parts.direction || 'mixed';
+    const cls = dir === 'positive' ? 'text-success' : (dir === 'negative' ? 'text-danger' : '');
+    html += '<tr><td>' + (parts.feature||'') + '</td><td>' + (parts.shap||'') + '</td><td class="' + cls + '">' + dir + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
+function startFFTAnalysis() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting FFT error pattern analysis...');
+
+  const results = [];
+  const es = new EventSource('/api/fft-analysis');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showFFTResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showFFTResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Error Pattern Analysis (FFT)</h3>';
+  if (results.length === 0 || (results.length === 1 && results[0].includes('No significant'))) {
+    html += '<p class="text-success" style="font-weight:600;">No significant periodic error patterns detected — prediction errors are random (good!)</p>';
+  } else {
+    html += '<div class="scroll-x"><table><thead><tr><th>Pattern</th><th>Period (games)</th><th>Period (days)</th><th>Strength</th></tr></thead><tbody>';
+    results.forEach(r => {
+      const parts = {};
+      r.split(',').forEach(p => { const [k,v] = p.split('='); parts[k.trim()] = v; });
+      const mag = parseFloat(parts.magnitude || 0);
+      const cls = mag > 0.7 ? 'text-danger' : (mag > 0.4 ? 'text-warning' : '');
+      html += '<tr><td>' + (parts.description||'') + '</td><td>' + (parts.period_games||'') + '</td><td>' + (parts.period_days||'') + '</td><td class="' + cls + '">' + (parts.magnitude||'') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
   container.innerHTML = html;
 }
 </script>

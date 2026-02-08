@@ -24,8 +24,12 @@ from src.analytics.weight_optimizer import (
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
+    run_ml_feature_importance,
+    run_fft_error_analysis,
     OptimiserResult,
     FeatureImportance,
+    MLFeatureImportance,
+    FFTPattern,
 )
 from src.analytics.weight_config import get_weight_config, clear_weights
 from src.database.db import get_conn
@@ -105,6 +109,34 @@ class FeatureImportanceWorker(QObject):
     def run(self) -> None:
         try:
             result = run_feature_importance(progress_cb=self.progress.emit)
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class MLFeatureImportanceWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # List[MLFeatureImportance]
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            result = run_ml_feature_importance(progress_cb=self.progress.emit)
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class FFTAnalysisWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # List[FFTPattern]
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            result = run_fft_error_analysis(progress_cb=self.progress.emit)
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -199,6 +231,20 @@ class AccuracyView(QWidget):
         self.clear_weights_btn.setToolTip("Clear optimised weights and revert to defaults.")
         self.clear_weights_btn.clicked.connect(self._clear_weights)  # type: ignore[arg-type]
 
+        self.ml_feature_btn = QPushButton("  ML Feature Importance")
+        self.ml_feature_btn.setToolTip(
+            "XGBoost + SHAP analysis of feature contributions.\n"
+            "Trains a model on the raw feature matrix and computes SHAP values."
+        )
+        self.ml_feature_btn.clicked.connect(self._run_ml_feature_importance)  # type: ignore[arg-type]
+
+        self.fft_btn = QPushButton("  Error Patterns (FFT)")
+        self.fft_btn.setToolTip(
+            "Detect periodic patterns in prediction errors\n"
+            "using Fourier analysis on league-wide data."
+        )
+        self.fft_btn.clicked.connect(self._run_fft_analysis)  # type: ignore[arg-type]
+
         # Feature importance / calibration results table
         self.results_table = QTableWidget()
         self.results_table.setAlternatingRowColors(True)
@@ -257,6 +303,8 @@ class AccuracyView(QWidget):
         opt_layout.addWidget(self.calibrate_btn)
         opt_layout.addWidget(self.feature_btn)
         opt_layout.addWidget(self.clear_weights_btn)
+        opt_layout.addWidget(self.ml_feature_btn)
+        opt_layout.addWidget(self.fft_btn)
         opt_layout.addStretch()
         opt_box.setLayout(opt_layout)
         
@@ -488,6 +536,91 @@ class AccuracyView(QWidget):
             self._thread.quit()
             self._thread.wait()
 
+    # ──── ML Feature Importance ────
+
+    def _run_ml_feature_importance(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Running ML feature importance (XGBoost + SHAP)...")
+        self.status.setText("Analysing ML features...")
+
+        self._thread = QThread()
+        self._worker = MLFeatureImportanceWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_ml_feature_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_ml_feature_done(self, features: list) -> None:
+        self.log.append(f"\nML feature importance complete: {len(features)} features analysed")
+        self.status.setText("ML feature importance done!")
+        self._set_buttons_enabled(True)
+        headers = ["Feature", "SHAP Importance", "Direction"]
+        rows = []
+        for f in features:
+            rows.append([
+                f.feature_name,
+                f"{f.shap_importance:.4f}",
+                f.direction,
+            ])
+        self._show_list_table(headers, rows)
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── FFT Error Analysis ────
+
+    def _run_fft_analysis(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Running FFT error pattern analysis...")
+        self.status.setText("Analysing error patterns...")
+
+        self._thread = QThread()
+        self._worker = FFTAnalysisWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_fft_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_fft_done(self, patterns: list) -> None:
+        count = len(patterns)
+        self.log.append(
+            f"\nFFT analysis complete: {count} pattern(s) detected"
+            if count else "\nFFT analysis complete: no significant patterns (good)"
+        )
+        self.status.setText("FFT analysis done!")
+        self._set_buttons_enabled(True)
+        if patterns:
+            headers = ["Description", "Period (games)", "Period (days)", "Strength"]
+            rows = []
+            for p in patterns:
+                rows.append([
+                    p.description,
+                    f"{p.period_games:.1f}",
+                    f"{p.period_days:.1f}",
+                    f"{p.magnitude:.2f}",
+                ])
+            self._show_list_table(headers, rows)
+        else:
+            self._show_dict_table(
+                "Result", "Value",
+                {"Status": "No significant periodic error patterns detected (good)"},
+            )
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
     # ──── Clear weights ────
 
     def _clear_weights(self) -> None:
@@ -503,6 +636,8 @@ class AccuracyView(QWidget):
         self.calibrate_btn.setEnabled(enabled)
         self.feature_btn.setEnabled(enabled)
         self.clear_weights_btn.setEnabled(enabled)
+        self.ml_feature_btn.setEnabled(enabled)
+        self.fft_btn.setEnabled(enabled)
 
     def _show_dict_table(self, key_header: str, val_header: str, data: dict) -> None:
         self.results_table.clear()
