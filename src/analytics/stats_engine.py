@@ -44,6 +44,9 @@ class PlayerStats:
     ast_to_ratio: float = 0.0  # assist-to-turnover ratio
     # Impact
     plus_minus_avg: float = 0.0  # average plus/minus
+    # Rebound breakdown
+    oreb_pg: float = 0.0  # offensive rebounds per game
+    dreb_pg: float = 0.0  # defensive rebounds per game
 
 
 @dataclass
@@ -61,12 +64,18 @@ class TeamMatchupStats:
     total_spg: float = 0.0  # team steals
     total_bpg: float = 0.0  # team blocks
     total_tpg: float = 0.0  # team turnovers
+    # Rebound breakdown
+    total_oreb: float = 0.0  # team offensive rebounds per game
+    total_dreb: float = 0.0  # team defensive rebounds per game
     # Team shooting efficiency (weighted by attempts)
     team_ts_pct: float = 0.0    # team true shooting %
     team_fg3_rate: float = 0.0  # team 3PT attempt rate
     team_ft_rate: float = 0.0   # team FT attempt rate
     # Net ratings
     turnover_margin: float = 0.0  # steals - turnovers (positive = good)
+    # Advanced ratings
+    off_rating: float = 0.0   # offensive rating (points per 100 possessions)
+    def_rating: float = 0.0   # defensive rating (opponent pts per 100 possessions)
 
 
 def _load_player_df(player_id: int) -> pd.DataFrame:
@@ -158,6 +167,10 @@ def get_player_comprehensive_stats(
     # Plus/minus average
     plus_minus_avg = safe_mean(df["plus_minus"]) if "plus_minus" in df.columns else 0.0
     
+    # Rebound breakdown per game
+    oreb_pg = safe_mean(df["oreb"]) if "oreb" in df.columns else 0.0
+    dreb_pg = safe_mean(df["dreb"]) if "dreb" in df.columns else 0.0
+    
     # Home/Away splits
     home_df = df[df["is_home"] == 1]
     away_df = df[df["is_home"] == 0]
@@ -188,6 +201,8 @@ def get_player_comprehensive_stats(
         fg3_rate=fg3_rate, ft_rate=ft_rate, fta_pg=fta_pg,
         ast_to_ratio=ast_to_ratio,
         plus_minus_avg=plus_minus_avg,
+        oreb_pg=oreb_pg,
+        dreb_pg=dreb_pg,
     )
 
 
@@ -366,6 +381,8 @@ def get_team_matchup_stats(
     total_spg = 0.0
     total_bpg = 0.0
     total_tpg = 0.0
+    total_oreb = 0.0
+    total_dreb = 0.0
     projected = 0.0
     
     # For team-level efficiency, we'll weight by minutes played
@@ -425,6 +442,8 @@ def get_team_matchup_stats(
         total_spg += p.spg
         total_bpg += p.bpg
         total_tpg += p.tpg
+        total_oreb += p.oreb_pg
+        total_dreb += p.dreb_pg
         
         # Weight efficiency metrics by minutes
         if p.mpg > 0:
@@ -453,12 +472,31 @@ def get_team_matchup_stats(
         total_spg *= scale_factor
         total_bpg *= scale_factor
         total_tpg *= scale_factor
+        total_oreb *= scale_factor
+        total_dreb *= scale_factor
     
     # Apply FT efficiency penalty from injuries
     # This accounts for losing good FT shooters and replacing with worse ones
     if ft_efficiency_penalty > 0:
         projected -= ft_efficiency_penalty
         total_ppg -= ft_efficiency_penalty
+    
+    # ============ PLAYMAKER INJURY PENALTY ============
+    # Losing a primary playmaker (6+ APG) hurts team offensive efficiency
+    # beyond just their personal scoring -- assisted shots are higher %
+    injured_assists = sum(p.apg for p in injured if p.apg >= 6.0)
+    if injured_assists > 0:
+        playmaker_penalty = injured_assists * 0.5
+        projected -= playmaker_penalty
+        total_ppg -= playmaker_penalty
+    
+    # ============ REBOUNDER INJURY PENALTY ============
+    # Losing a dominant rebounder (8+ RPG) reduces second-chance points
+    injured_rebounds = sum(p.rpg for p in injured if p.rpg >= 8.0)
+    if injured_rebounds > 0:
+        rebound_penalty = injured_rebounds * 0.2
+        projected -= rebound_penalty
+        total_ppg -= rebound_penalty
     
     # Calculate team-level efficiency metrics (weighted by minutes)
     team_ts_pct = (weighted_ts_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
@@ -467,6 +505,10 @@ def get_team_matchup_stats(
     
     # Turnover margin: positive means team creates more turnovers than commits
     turnover_margin = total_spg - total_tpg
+    
+    # Calculate offensive and defensive ratings from historical game data
+    off_rating = get_offensive_rating(team_id)
+    def_rating = get_defensive_rating(team_id)
     
     return TeamMatchupStats(
         team_id=team_id,
@@ -481,10 +523,14 @@ def get_team_matchup_stats(
         total_spg=total_spg,
         total_bpg=total_bpg,
         total_tpg=total_tpg,
+        total_oreb=total_oreb,
+        total_dreb=total_dreb,
         team_ts_pct=team_ts_pct,
         team_fg3_rate=team_fg3_rate,
         team_ft_rate=team_ft_rate,
         turnover_margin=turnover_margin,
+        off_rating=off_rating,
+        def_rating=def_rating,
     )
 
 
@@ -504,8 +550,10 @@ def player_splits(
         return {
             "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
             "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+            "oreb": 0.0, "dreb": 0.0,
             "fg_made": 0, "fg_attempted": 0, "fg3_made": 0, "fg3_attempted": 0,
             "ft_made": 0, "ft_attempted": 0,
+            "fga_pg": 0.0, "fta_pg": 0.0,
             "ts_pct": 0.0, "fg3_rate": 0.0,
         }
 
@@ -531,9 +579,20 @@ def player_splits(
     if recent_games:
         df = df.head(recent_games)
 
+    # Recency weighting: last 5 games get 60% weight, older games get 40%
+    _use_recency = recent_games is not None and len(df) > 5
+
     def safe_mean(col, default=0.0):
         if col not in df.columns or df.empty:
             return default
+        if _use_recency:
+            recent_5 = df.head(5)
+            older = df.iloc[5:]
+            r_val = recent_5[col].mean() if not recent_5.empty else default
+            o_val = older[col].mean() if not older.empty else default
+            r_val = r_val if pd.notna(r_val) else default
+            o_val = o_val if pd.notna(o_val) else default
+            return r_val * 0.6 + o_val * 0.4
         val = df[col].mean()
         return val if pd.notna(val) else default
     
@@ -565,6 +624,9 @@ def player_splits(
         "steals": safe_mean("steals"),
         "blocks": safe_mean("blocks"),
         "turnovers": safe_mean("turnovers"),
+        # Rebound breakdown
+        "oreb": safe_mean("oreb"),
+        "dreb": safe_mean("dreb"),
         # Shooting totals (for aggregate efficiency)
         "fg_made": safe_sum("fg_made"),
         "fg_attempted": safe_sum("fg_attempted"),
@@ -572,6 +634,9 @@ def player_splits(
         "fg3_attempted": safe_sum("fg3_attempted"),
         "ft_made": safe_sum("ft_made"),
         "ft_attempted": safe_sum("ft_attempted"),
+        # Per-game shooting averages (for pace/possession calculation)
+        "fga_pg": safe_mean("fg_attempted"),
+        "fta_pg": safe_mean("ft_attempted"),
         # Efficiency metrics
         "ts_pct": ts_pct,
         "fg3_rate": fg3_rate,
@@ -614,11 +679,13 @@ def aggregate_projection(
         Dict with team totals for all stats plus efficiency metrics.
     """
     totals = {
-        "points": 0.0, "rebounds": 0.0, "assists": 0.0,
+        "points": 0.0, "rebounds": 0.0, "assists": 0.0, "minutes": 0.0,
         "steals": 0.0, "blocks": 0.0, "turnovers": 0.0,
+        "oreb": 0.0, "dreb": 0.0,
         "fg_made": 0, "fg_attempted": 0,
         "fg3_made": 0, "fg3_attempted": 0,
         "ft_made": 0, "ft_attempted": 0,
+        "fga_pg": 0.0, "fta_pg": 0.0,
     }
     
     for pid in player_ids:
@@ -650,12 +717,207 @@ def aggregate_projection(
     # Turnover margin (positive = good, creates more than commits)
     totals["turnover_margin"] = totals["steals"] - totals["turnovers"]
     
+    # ============ POSSESSION & PACE ESTIMATION ============
+    # Standard NBA possession formula: POSS = FGA - OREB + TOV + 0.44 * FTA
+    # Using per-game averages for consistency
+    team_fga_pg = totals["fga_pg"]
+    team_oreb_pg = totals["oreb"]
+    team_tov_pg = totals["turnovers"]
+    team_fta_pg = totals["fta_pg"]
+    possessions_pg = team_fga_pg - team_oreb_pg + team_tov_pg + 0.44 * team_fta_pg
+    
+    # Offensive Rating: points scored per 100 possessions
+    totals["off_rating"] = (total_pts / possessions_pg * 100) if possessions_pg > 0 else 0.0
+    
+    # Pace: possessions per game (normalized to 240 player-minutes = 48 game-minutes)
+    team_minutes = totals.get("minutes", 0)
+    if team_minutes > 0 and possessions_pg > 0:
+        totals["pace"] = possessions_pg * (240.0 / team_minutes)
+    else:
+        totals["pace"] = 96.0  # league average fallback
+    
     return totals
 
 
 def usage_adjusted_projection(projection: Dict[str, float], usage_factor: float = 1.0) -> Dict[str, float]:
     """Scale projections based on expected usage changes (e.g., injuries)."""
     return {k: v * usage_factor for k, v in projection.items()}
+
+
+# ============ ADVANCED RATING FUNCTIONS ============
+
+
+def get_offensive_rating(team_id: int) -> float:
+    """
+    Calculate team's offensive rating (points per 100 possessions).
+    Higher = better offense.  Uses the last 20 games for stability.
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT 
+                ps.game_date,
+                SUM(ps.points) as team_pts,
+                SUM(ps.fg_attempted) as team_fga,
+                SUM(ps.ft_attempted) as team_fta,
+                SUM(ps.turnovers) as team_tov,
+                SUM(ps.oreb) as team_oreb
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            GROUP BY ps.game_date
+            ORDER BY ps.game_date DESC
+            LIMIT 20
+            """,
+            conn,
+            params=[team_id],
+        )
+    
+    if df.empty:
+        return 110.0  # league average fallback
+    
+    avg_pts = float(df["team_pts"].mean())
+    avg_fga = float(df["team_fga"].mean())
+    avg_fta = float(df["team_fta"].mean())
+    avg_tov = float(df["team_tov"].mean())
+    avg_oreb = float(df["team_oreb"].mean())
+    
+    possessions = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
+    
+    if possessions <= 0:
+        return 110.0
+    
+    return (avg_pts / possessions) * 100
+
+
+def get_defensive_rating(team_id: int) -> float:
+    """
+    Calculate team's defensive rating (opponent points per 100 possessions).
+    Lower = better defense.  Uses opponent stats from the last 20 games.
+    """
+    with get_conn() as conn:
+        df = pd.read_sql(
+            """
+            SELECT 
+                ps.game_date,
+                SUM(ps.points) as opp_pts,
+                SUM(ps.fg_attempted) as opp_fga,
+                SUM(ps.ft_attempted) as opp_fta,
+                SUM(ps.turnovers) as opp_tov,
+                SUM(ps.oreb) as opp_oreb
+            FROM player_stats ps
+            WHERE ps.opponent_team_id = ?
+            GROUP BY ps.game_date
+            ORDER BY ps.game_date DESC
+            LIMIT 20
+            """,
+            conn,
+            params=[team_id],
+        )
+    
+    if df.empty:
+        return 110.0  # league average fallback
+    
+    avg_pts = float(df["opp_pts"].mean())
+    avg_fga = float(df["opp_fga"].mean())
+    avg_fta = float(df["opp_fta"].mean())
+    avg_tov = float(df["opp_tov"].mean())
+    avg_oreb = float(df["opp_oreb"].mean())
+    
+    possessions = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
+    
+    if possessions <= 0:
+        return 110.0
+    
+    return (avg_pts / possessions) * 100
+
+
+def get_opponent_defensive_factor(team_id: int) -> float:
+    """
+    Returns a scaling factor for how well opponents are held defensively.
+    < 1.0 = good defense (opponents score less against this team)
+    > 1.0 = bad defense (opponents score more against this team)
+    Centered at 1.0 (league average).
+    """
+    with get_conn() as conn:
+        # Average points scored against this team per game
+        opp_row = conn.execute(
+            """
+            SELECT AVG(game_total) as avg_opp_pts FROM (
+                SELECT game_date, SUM(points) as game_total
+                FROM player_stats
+                WHERE opponent_team_id = ?
+                GROUP BY game_date
+            )
+            """,
+            (team_id,),
+        ).fetchone()
+        
+        # League-wide average points per team per game
+        league_row = conn.execute(
+            """
+            SELECT AVG(game_total) as league_avg FROM (
+                SELECT game_date, opponent_team_id, SUM(points) as game_total
+                FROM player_stats
+                GROUP BY game_date, opponent_team_id
+            )
+            """,
+        ).fetchone()
+    
+    if not opp_row or not opp_row[0]:
+        return 1.0
+    
+    avg_opp_pts = float(opp_row[0])
+    league_avg = float(league_row[0]) if league_row and league_row[0] else 112.0
+    
+    if league_avg <= 0:
+        return 1.0
+    
+    return avg_opp_pts / league_avg
+
+
+def get_home_court_advantage(team_id: int) -> float:
+    """
+    Calculate team-specific home court advantage from historical scoring.
+    Returns the expected point boost for playing at home (clamped to [1.5, 5.0]).
+    """
+    with get_conn() as conn:
+        # Team scoring at home (game-level totals)
+        home_df = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) as team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.is_home = 1
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id],
+        )
+        # Team scoring away
+        away_df = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) as team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.is_home = 0
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id],
+        )
+    
+    if home_df.empty or away_df.empty:
+        return 3.0  # league average fallback
+    
+    home_ppg = float(home_df["team_pts"].mean())
+    away_ppg = float(away_df["team_pts"].mean())
+    
+    # HCA = how many more points team scores at home vs away
+    hca = home_ppg - away_ppg
+    
+    # Clamp to reasonable range
+    return max(1.5, min(5.0, hca))
 
 
 def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:

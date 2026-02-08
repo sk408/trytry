@@ -169,6 +169,134 @@ def _get_position_group(position: str) -> str:
     return "F"
 
 
+# Cache for advanced profiles to avoid redundant DB queries during backtests
+_adv_profile_cache: Dict[tuple, Dict[str, float]] = {}
+
+
+def clear_advanced_profile_cache() -> None:
+    """Clear the cached advanced profiles (call before each backtest run)."""
+    _adv_profile_cache.clear()
+
+
+def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, float]:
+    """
+    Get team advanced stats before a date for backtesting.
+    Includes rebounds, offensive/defensive rating, pace, and HCA.
+    Results are cached for performance during backtests.
+    """
+    cache_key = (team_id, str(before_date))
+    if cache_key in _adv_profile_cache:
+        return _adv_profile_cache[cache_key]
+    
+    result = {
+        "rebounds_pg": 0.0,
+        "off_rating": 110.0,
+        "def_rating": 110.0,
+        "pace": 96.0,
+        "hca": 3.0,
+    }
+    
+    with get_conn() as conn:
+        # Team totals per game (for off_rating, pace, rebounds)
+        df = pd.read_sql(
+            """
+            SELECT 
+                ps.game_date,
+                SUM(ps.points) as team_pts,
+                SUM(ps.rebounds) as team_reb,
+                SUM(ps.fg_attempted) as team_fga,
+                SUM(ps.ft_attempted) as team_fta,
+                SUM(ps.turnovers) as team_tov,
+                SUM(ps.oreb) as team_oreb
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+        
+        # Opponent totals per game (for def_rating)
+        opp_df = pd.read_sql(
+            """
+            SELECT 
+                ps.game_date,
+                SUM(ps.points) as opp_pts,
+                SUM(ps.fg_attempted) as opp_fga,
+                SUM(ps.ft_attempted) as opp_fta,
+                SUM(ps.turnovers) as opp_tov,
+                SUM(ps.oreb) as opp_oreb
+            FROM player_stats ps
+            WHERE ps.opponent_team_id = ? AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+        
+        # Home/away scoring for HCA
+        home_df = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) as team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.is_home = 1 AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+        
+        away_df2 = pd.read_sql(
+            """
+            SELECT ps.game_date, SUM(ps.points) as team_pts
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.is_home = 0 AND ps.game_date < ?
+            GROUP BY ps.game_date
+            """,
+            conn,
+            params=[team_id, str(before_date)],
+        )
+    
+    if not df.empty:
+        # Team rebounds per game
+        result["rebounds_pg"] = float(df["team_reb"].mean())
+        
+        # Offensive rating & pace
+        avg_pts = float(df["team_pts"].mean())
+        avg_fga = float(df["team_fga"].mean())
+        avg_fta = float(df["team_fta"].mean())
+        avg_tov = float(df["team_tov"].mean())
+        avg_oreb = float(df["team_oreb"].mean())
+        poss = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
+        if poss > 0:
+            result["off_rating"] = (avg_pts / poss) * 100
+            result["pace"] = poss
+    
+    # Defensive rating
+    if not opp_df.empty:
+        opp_avg_pts = float(opp_df["opp_pts"].mean())
+        opp_avg_fga = float(opp_df["opp_fga"].mean())
+        opp_avg_fta = float(opp_df["opp_fta"].mean())
+        opp_avg_tov = float(opp_df["opp_tov"].mean())
+        opp_avg_oreb = float(opp_df["opp_oreb"].mean())
+        opp_poss = opp_avg_fga - opp_avg_oreb + opp_avg_tov + 0.44 * opp_avg_fta
+        if opp_poss > 0:
+            result["def_rating"] = (opp_avg_pts / opp_poss) * 100
+    
+    # HCA
+    if not home_df.empty and not away_df2.empty:
+        home_ppg = float(home_df["team_pts"].mean())
+        away_ppg = float(away_df2["team_pts"].mean())
+        hca = home_ppg - away_ppg
+        result["hca"] = max(1.5, min(5.0, hca))
+    
+    _adv_profile_cache[cache_key] = result
+    return result
+
+
 def calculate_injury_adjustment(
     team_id: int,
     game_date: date,
@@ -340,9 +468,29 @@ def predict_game_historical(
         home_proj += home_adj
         away_proj += away_adj
     
-    # Apply home court advantage to spread only
-    spread = (home_proj - away_proj) + home_court_adv
-    total = home_proj + away_proj
+    # ============ ADVANCED ADJUSTMENTS ============
+    # Get advanced profiles for both teams (cached for performance)
+    home_adv = get_team_advanced_profile(home_team_id, game_date)
+    away_adv = get_team_advanced_profile(away_team_id, game_date)
+    
+    # Dynamic home court advantage (team-specific)
+    hca = home_adv["hca"]
+    
+    # Rebound differential adjustment
+    rebound_adj = (home_adv["rebounds_pg"] - away_adv["rebounds_pg"]) * 0.15
+    
+    # Offensive/Defensive rating comparison
+    home_matchup_edge = home_adv["off_rating"] - away_adv["def_rating"]
+    away_matchup_edge = away_adv["off_rating"] - home_adv["def_rating"]
+    rating_adj = (home_matchup_edge - away_matchup_edge) * 0.1
+    
+    # Pace factor for total adjustment
+    expected_pace = (home_adv["pace"] + away_adv["pace"]) / 2
+    pace_factor = (expected_pace - 96.0) / 96.0
+    
+    # Compute final spread and total with all adjustments
+    spread = (home_proj - away_proj) + hca + rebound_adj + rating_adj
+    total = (home_proj + away_proj) * (1 + pace_factor * 0.5)
     
     return spread, total, home_proj, away_proj
 
@@ -445,6 +593,9 @@ def run_backtest(
     """
     progress = progress_cb or (lambda msg: None)
     results = BacktestResults()
+    
+    # Clear cached advanced profiles from previous runs
+    clear_advanced_profile_cache()
     
     progress("Loading game results...")
     games_df = get_actual_game_results()

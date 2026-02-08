@@ -14,6 +14,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from src.analytics.autotune import (
+    autotune_all,
+    autotune_team,
+    clear_tuning,
+    get_all_tunings,
+)
 from src.analytics.backtester import BacktestResults, run_backtest, get_actual_game_results
 from src.analytics.live_recommendations import build_live_recommendations
 from src.analytics.prediction import predict_matchup
@@ -728,6 +734,68 @@ async def accuracy(
             "use_injuries": use_injuries_flag,
         },
     )
+
+
+@app.get("/autotune", response_class=HTMLResponse)
+async def autotune_page(
+    request: Request,
+    run: str | None = None,
+    team_id: int | None = None,
+    strength: float = 0.75,
+    min_threshold: float = 1.5,
+) -> HTMLResponse:
+    """Autotune page -- run player-level historical analysis per team."""
+    teams = _team_list()
+    progress: List[str] = []
+    results: List[dict] = []
+    error = None
+
+    if run == "1":
+        def _cb(msg: str) -> None:
+            progress.append(msg)
+
+        try:
+            if team_id:
+                # Single team
+                res = await asyncio.to_thread(
+                    autotune_team, team_id, strength, min_threshold, _cb,
+                )
+                results = [res]
+            else:
+                # All teams
+                results = await asyncio.to_thread(
+                    autotune_all, strength, min_threshold, _cb,
+                )
+        except Exception as exc:
+            error = str(exc)
+
+    # Always load current tunings for display
+    current_tunings = await asyncio.to_thread(get_all_tunings)
+
+    return templates.TemplateResponse(
+        "autotune.html",
+        {
+            "request": request,
+            "teams": teams,
+            "team_id": team_id,
+            "strength": strength,
+            "min_threshold": min_threshold,
+            "progress": progress,
+            "results": results,
+            "current_tunings": current_tunings,
+            "error": error,
+        },
+    )
+
+
+@app.post("/autotune/clear", response_class=HTMLResponse)
+async def autotune_clear(
+    request: Request,
+    team_id: int | None = Form(None),
+) -> HTMLResponse:
+    """Clear autotune corrections for one team or all teams."""
+    await asyncio.to_thread(clear_tuning, team_id)
+    return RedirectResponse(url="/autotune", status_code=303)
 
 
 @app.get("/admin", response_class=HTMLResponse)

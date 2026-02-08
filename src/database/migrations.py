@@ -123,6 +123,18 @@ CREATE TABLE IF NOT EXISTS player_sync_cache (
 
 CREATE INDEX IF NOT EXISTS idx_player_sync_cache_date
     ON player_sync_cache(last_synced_at);
+
+-- Per-team prediction tuning corrections (from autotune)
+CREATE TABLE IF NOT EXISTS team_tuning (
+    team_id INTEGER PRIMARY KEY,
+    home_pts_correction REAL DEFAULT 0.0,
+    away_pts_correction REAL DEFAULT 0.0,
+    games_analyzed INTEGER DEFAULT 0,
+    avg_spread_error_before REAL DEFAULT 0.0,
+    avg_total_error_before REAL DEFAULT 0.0,
+    last_tuned_at TEXT,
+    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+);
 """
 
 
@@ -137,6 +149,7 @@ def clear_all(conn: sqlite3.Connection) -> None:
     """Dangerous: wipe all tables; useful for full refreshes."""
     conn.executescript(
         """
+        DELETE FROM team_tuning;
         DELETE FROM player_sync_cache;
         DELETE FROM injury_history;
         DELETE FROM predictions;
