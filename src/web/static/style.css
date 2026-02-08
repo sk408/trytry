@@ -589,18 +589,26 @@ select:focus, input:focus {
 
 /* Team Logos */
 .team-logo {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
+  max-width: 18px;
+  max-height: 18px;
   object-fit: contain;
   vertical-align: middle;
-  margin-right: 4px;
+  margin-right: 3px;
   border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .team-logo-lg {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
+  max-width: 32px;
+  max-height: 32px;
   object-fit: contain;
+  display: block;
+  margin: 0 auto 4px;
 }
 
 /* Player Headshots */
@@ -609,11 +617,14 @@ select:focus, input:focus {
 }
 
 .player-photo {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
+  max-width: 28px;
+  max-height: 28px;
   border-radius: 50%;
   object-fit: cover;
   background: var(--bg-dark);
+  display: block;
 }
 
 /* Schedule: Today / Tomorrow Highlighting */
@@ -765,13 +776,18 @@ select:focus, input:focus {
   }
 
   .team-logo {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
+    max-width: 24px;
+    max-height: 24px;
+    margin-right: 5px;
   }
 
   .team-logo-lg {
     width: 48px;
     height: 48px;
+    max-width: 48px;
+    max-height: 48px;
   }
 
   .player-photo-col {
@@ -781,5 +797,7 @@ select:focus, input:focus {
   .player-photo {
     width: 32px;
     height: 32px;
+    max-width: 32px;
+    max-height: 32px;
   }
 }

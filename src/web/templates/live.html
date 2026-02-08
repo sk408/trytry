@@ -34,11 +34,11 @@
         <tr class="{{ 'status-live' if is_live else 'status-final' if is_final else 'status-scheduled' }}">
           <td>{{ rec.status }}</td>
           <td>
-            <img src="{{ team_logo_url(rec.home_team) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <img src="{{ team_logo_url(rec.home_team) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
             {{ rec.home_team }}
           </td>
           <td>
-            <img src="{{ team_logo_url(rec.away_team) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <img src="{{ team_logo_url(rec.away_team) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
             {{ rec.away_team }}
           </td>
           <td><strong>{{ rec.home_score }} - {{ rec.away_score }}</strong></td>

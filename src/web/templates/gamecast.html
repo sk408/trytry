@@ -13,10 +13,10 @@
     <a href="/gamecast?game_id={{ g.game_id }}" 
        class="game-row {% if game_id == g.game_id %}active{% endif %}">
       <div class="game-teams">
-        <img src="{{ team_logo_url(g.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(g.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         <span>{{ g.away_abbr }}</span>
         <span class="at">@</span>
-        <img src="{{ team_logo_url(g.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(g.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         <span class="home">{{ g.home_abbr }}</span>
       </div>
       <div class="game-status">
@@ -45,7 +45,7 @@
 <div class="card" id="score-card">
   <div class="score-display">
     <div class="score-team">
-      <img src="{{ team_logo_url(selected_game.away_abbr) }}" class="team-logo-lg" alt="" onerror="this.style.display='none'">
+      <img src="{{ team_logo_url(selected_game.away_abbr) }}" width="32" height="32" class="team-logo-lg" alt="" onerror="this.style.display='none'">
       <span class="team-name">{{ selected_game.away_team }}</span>
       <span class="team-abbr">{{ selected_game.away_abbr }}</span>
       <span class="team-score" id="away-score">{{ selected_game.away_score }}</span>
@@ -62,7 +62,7 @@
       {% endif %}
     </div>
     <div class="score-team">
-      <img src="{{ team_logo_url(selected_game.home_abbr) }}" class="team-logo-lg" alt="" onerror="this.style.display='none'">
+      <img src="{{ team_logo_url(selected_game.home_abbr) }}" width="32" height="32" class="team-logo-lg" alt="" onerror="this.style.display='none'">
       <span class="team-name">{{ selected_game.home_team }}</span>
       <span class="team-abbr">{{ selected_game.home_abbr }}</span>
       <span class="team-score" id="home-score">{{ selected_game.home_score }}</span>

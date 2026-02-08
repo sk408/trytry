@@ -32,12 +32,12 @@
           <td>{{ r.date_label }}</td>
           <td>{{ r.game_date_fmt }}</td>
           <td>
-            <img src="{{ team_logo_url(r.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <img src="{{ team_logo_url(r.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
             <strong>{{ r.away_abbr }}</strong>
           </td>
           <td class="text-muted">@</td>
           <td>
-            <img src="{{ team_logo_url(r.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+            <img src="{{ team_logo_url(r.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
             <strong>{{ r.home_abbr }}</strong>
           </td>
           <td>{{ r.game_time or 'TBD' }}</td>

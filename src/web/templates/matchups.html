@@ -77,7 +77,7 @@
     <div class="stat-item" data-accent="green">
       <div class="stat-value">
         {% if home_stats %}
-        <img src="{{ team_logo_url(home_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(home_stats.team_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         {% endif %}
         {{ "%.1f"|format(prediction.home_projected) }}
       </div>
@@ -86,7 +86,7 @@
     <div class="stat-item" data-accent="red">
       <div class="stat-value">
         {% if away_stats %}
-        <img src="{{ team_logo_url(away_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(away_stats.team_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         {% endif %}
         {{ "%.1f"|format(prediction.away_projected) }}
       </div>
@@ -123,7 +123,7 @@
   <div class="stats-grid">
     <div class="stat-item">
       <div class="stat-value">
-        <img src="{{ team_logo_url(backtest.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(backtest.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         {{ backtest.home_record.wins }}-{{ backtest.home_record.losses }}
       </div>
       <div class="stat-label">{{ backtest.home_abbr }} at Home</div>
@@ -131,7 +131,7 @@
     </div>
     <div class="stat-item">
       <div class="stat-value">
-        <img src="{{ team_logo_url(backtest.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(backtest.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         {{ backtest.away_record.wins }}-{{ backtest.away_record.losses }}
       </div>
       <div class="stat-label">{{ backtest.away_abbr }} on Road</div>
@@ -173,7 +173,7 @@
 {% if home_players %}
 <div class="card">
   <h2>
-    <img src="{{ team_logo_url(home_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+    <img src="{{ team_logo_url(home_stats.team_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
     {{ home_stats.team_abbr }} Players (Home)
   </h2>
   <div class="scroll-x">
@@ -198,7 +198,7 @@
         {% for p in home_players %}
         <tr class="{{ 'text-danger' if p.is_injured else '' }}">
           <td class="player-photo-col">
-            <img src="{{ player_photo_url(p.player_id) }}" class="player-photo" alt="" onerror="this.style.display='none'">
+            <img src="{{ player_photo_url(p.player_id) }}" width="28" height="28" class="player-photo" alt="" onerror="this.style.display='none'">
           </td>
           <td>{{ p.name }}</td>
           <td>{{ p.position }}</td>
@@ -223,7 +223,7 @@
 {% if away_players %}
 <div class="card">
   <h2>
-    <img src="{{ team_logo_url(away_stats.team_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+    <img src="{{ team_logo_url(away_stats.team_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
     {{ away_stats.team_abbr }} Players (Away)
   </h2>
   <div class="scroll-x">
@@ -248,7 +248,7 @@
         {% for p in away_players %}
         <tr class="{{ 'text-danger' if p.is_injured else '' }}">
           <td class="player-photo-col">
-            <img src="{{ player_photo_url(p.player_id) }}" class="player-photo" alt="" onerror="this.style.display='none'">
+            <img src="{{ player_photo_url(p.player_id) }}" width="28" height="28" class="player-photo" alt="" onerror="this.style.display='none'">
           </td>
           <td>{{ p.name }}</td>
           <td>{{ p.position }}</td>
@@ -281,10 +281,10 @@
        class="game-row {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active{% endif %}">
       <span class="game-date">{{ g.game_date }}</span>
       <span class="game-teams">
-        <img src="{{ team_logo_url(g.away_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(g.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         <span class="away">{{ g.away_abbr }}</span>
         <span class="at">@</span>
-        <img src="{{ team_logo_url(g.home_abbr) }}" class="team-logo" alt="" onerror="this.style.display='none'">
+        <img src="{{ team_logo_url(g.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
         <span class="home">{{ g.home_abbr }}</span>
       </span>
     </a>
