@@ -18,10 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.analytics.stats_engine import get_team_matchup_stats, get_scheduled_games, TeamMatchupStats
+from src.analytics.prediction import predict_matchup
 from src.database.db import get_conn
-
-
-HOME_COURT_ADV = 3.0  # points
 
 
 def get_matchup_backtest(home_id: int, away_id: int) -> Dict:
@@ -306,11 +304,19 @@ class MatchupView(QWidget):
             self.total_label.setText("Run sync")
             return
         
-        # Calculate predictions
-        home_proj = home_stats.projected_points + HOME_COURT_ADV
-        away_proj = away_stats.projected_points
-        spread = home_proj - away_proj
-        total = home_proj + away_proj
+        # Use full prediction engine with all advanced factors
+        home_player_ids = [p.player_id for p in home_stats.players if not p.is_injured]
+        away_player_ids = [p.player_id for p in away_stats.players if not p.is_injured]
+        pred = predict_matchup(
+            home_team_id=home_id,
+            away_team_id=away_id,
+            home_players=home_player_ids,
+            away_players=away_player_ids,
+        )
+        spread = pred.predicted_spread
+        total = pred.predicted_total
+        home_proj = pred.predicted_home_score
+        away_proj = pred.predicted_away_score
         
         # Update summary labels
         self.spread_label.setText(f"{spread:+.1f}")

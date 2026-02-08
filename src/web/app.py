@@ -591,14 +591,24 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
             )
 
             if home_stats.players and away_stats.players:
-                # Calculate prediction
-                home_proj = home_stats.projected_points + HOME_COURT_ADV
-                away_proj = away_stats.projected_points
+                # Use full prediction engine with all advanced factors
+                home_player_ids = [p.player_id for p in home_stats.players if not p.is_injured]
+                away_player_ids = [p.player_id for p in away_stats.players if not p.is_injured]
+                full_pred = await asyncio.to_thread(
+                    predict_matchup,
+                    home_team_id=home_team_id,
+                    away_team_id=away_team_id,
+                    home_players=home_player_ids,
+                    away_players=away_player_ids,
+                )
                 prediction = {
-                    "predicted_spread": home_proj - away_proj,
-                    "predicted_total": home_proj + away_proj,
-                    "home_projected": home_proj,
-                    "away_projected": away_proj,
+                    "predicted_spread": full_pred.predicted_spread,
+                    "predicted_total": full_pred.predicted_total,
+                    "home_projected": full_pred.predicted_home_score,
+                    "away_projected": full_pred.predicted_away_score,
+                    "four_factors_adj": full_pred.four_factors_adj,
+                    "clutch_adj": full_pred.clutch_adj,
+                    "fatigue_adj": full_pred.fatigue_adj,
                 }
 
                 # Get injury summaries

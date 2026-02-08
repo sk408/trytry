@@ -6,6 +6,8 @@ from .db import get_conn
 
 
 SCHEMA = """
+-- ============ CORE TABLES ============
+
 CREATE TABLE IF NOT EXISTS teams (
     team_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -20,6 +22,11 @@ CREATE TABLE IF NOT EXISTS players (
     position TEXT,
     is_injured INTEGER NOT NULL DEFAULT 0,
     injury_note TEXT,
+    -- Roster context (from CommonTeamRoster)
+    height TEXT,
+    weight TEXT,
+    age INTEGER,
+    experience INTEGER,
     FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
 );
 
@@ -46,11 +53,14 @@ CREATE TABLE IF NOT EXISTS player_stats (
     fg3_attempted INTEGER DEFAULT 0,
     ft_made INTEGER DEFAULT 0,
     ft_attempted INTEGER DEFAULT 0,
-    -- Rebound breakdown (NBA specific)
+    -- Rebound breakdown
     oreb REAL DEFAULT 0,
     dreb REAL DEFAULT 0,
     -- Impact rating
     plus_minus REAL DEFAULT 0,
+    -- NEW: Win/Loss result and personal fouls (from PlayerGameLog)
+    win_loss TEXT,           -- 'W' or 'L'
+    personal_fouls REAL DEFAULT 0,
     UNIQUE(player_id, opponent_team_id, game_date),
     FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
     FOREIGN KEY (opponent_team_id) REFERENCES teams(team_id) ON DELETE CASCADE
@@ -84,24 +94,30 @@ CREATE TABLE IF NOT EXISTS live_games (
     FOREIGN KEY (away_team_id) REFERENCES teams(team_id) ON DELETE CASCADE
 );
 
+-- ============ INDEXES (core tables) ============
+
 CREATE INDEX IF NOT EXISTS idx_player_stats_player_date
     ON player_stats(player_id, game_date DESC);
 
 CREATE INDEX IF NOT EXISTS idx_player_stats_matchup
     ON player_stats(opponent_team_id, game_date DESC);
 
+CREATE INDEX IF NOT EXISTS idx_player_stats_game_id
+    ON player_stats(game_id, is_home);
+
 CREATE INDEX IF NOT EXISTS idx_predictions_matchup
     ON predictions(home_team_id, away_team_id, game_date);
 
--- Historical injury tracking (inferred from game logs)
+-- ============ INJURY TRACKING ============
+
 CREATE TABLE IF NOT EXISTS injury_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     player_id INTEGER NOT NULL,
     team_id INTEGER NOT NULL,
     game_date DATE NOT NULL,
     was_out INTEGER NOT NULL DEFAULT 1,
-    avg_minutes REAL,  -- Player's avg minutes before this game
-    reason TEXT,       -- 'inferred' or 'reported'
+    avg_minutes REAL,
+    reason TEXT,
     UNIQUE(player_id, game_date),
     FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
     FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
@@ -113,7 +129,8 @@ CREATE INDEX IF NOT EXISTS idx_injury_history_team_date
 CREATE INDEX IF NOT EXISTS idx_injury_history_player
     ON injury_history(player_id, game_date);
 
--- Track when player logs were last synced (for caching)
+-- ============ SYNC CACHE ============
+
 CREATE TABLE IF NOT EXISTS player_sync_cache (
     player_id INTEGER PRIMARY KEY,
     last_synced_at TEXT NOT NULL,
@@ -124,7 +141,8 @@ CREATE TABLE IF NOT EXISTS player_sync_cache (
 CREATE INDEX IF NOT EXISTS idx_player_sync_cache_date
     ON player_sync_cache(last_synced_at);
 
--- Per-team prediction tuning corrections (from autotune)
+-- ============ AUTOTUNE ============
+
 CREATE TABLE IF NOT EXISTS team_tuning (
     team_id INTEGER PRIMARY KEY,
     home_pts_correction REAL DEFAULT 0.0,
@@ -135,6 +153,134 @@ CREATE TABLE IF NOT EXISTS team_tuning (
     last_tuned_at TEXT,
     FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
 );
+
+-- ============ TEAM ADVANCED METRICS (new) ============
+-- Consolidated team-level metrics from multiple NBA API endpoints.
+-- One row per team per season.  Populated by sync_team_metrics().
+
+CREATE TABLE IF NOT EXISTS team_metrics (
+    team_id INTEGER NOT NULL,
+    season TEXT NOT NULL,
+
+    -- Record
+    gp INTEGER DEFAULT 0,
+    w INTEGER DEFAULT 0,
+    l INTEGER DEFAULT 0,
+    w_pct REAL DEFAULT 0.0,
+
+    -- From TeamEstimatedMetrics (NBA tracking-based)
+    e_off_rating REAL,
+    e_def_rating REAL,
+    e_net_rating REAL,
+    e_pace REAL,
+    e_ast_ratio REAL,
+    e_oreb_pct REAL,
+    e_dreb_pct REAL,
+    e_reb_pct REAL,
+    e_tm_tov_pct REAL,
+
+    -- From LeagueDashTeamStats (Advanced)
+    off_rating REAL,
+    def_rating REAL,
+    net_rating REAL,
+    pace REAL,
+    efg_pct REAL,
+    ts_pct REAL,
+    ast_ratio REAL,
+    ast_to REAL,
+    oreb_pct REAL,
+    dreb_pct REAL,
+    reb_pct REAL,
+    tm_tov_pct REAL,
+    pie REAL,
+
+    -- Four Factors (team offense)
+    ff_efg_pct REAL,
+    ff_fta_rate REAL,
+    ff_tm_tov_pct REAL,
+    ff_oreb_pct REAL,
+
+    -- Four Factors (opponent / defensive forcing)
+    opp_efg_pct REAL,
+    opp_fta_rate REAL,
+    opp_tm_tov_pct REAL,
+    opp_oreb_pct REAL,
+
+    -- Opponent stats (what opponents score/shoot against us)
+    opp_pts REAL,
+    opp_fg_pct REAL,
+    opp_fg3_pct REAL,
+    opp_ft_pct REAL,
+
+    -- Clutch stats (last 5 min, score within 5)
+    clutch_gp INTEGER DEFAULT 0,
+    clutch_w INTEGER DEFAULT 0,
+    clutch_l INTEGER DEFAULT 0,
+    clutch_net_rating REAL,
+    clutch_efg_pct REAL,
+    clutch_ts_pct REAL,
+
+    -- Hustle stats
+    deflections REAL,
+    loose_balls_recovered REAL,
+    contested_shots REAL,
+    charges_drawn REAL,
+    screen_assists REAL,
+
+    -- Home / Road splits
+    home_gp INTEGER DEFAULT 0,
+    home_w INTEGER DEFAULT 0,
+    home_l INTEGER DEFAULT 0,
+    home_pts REAL,
+    home_opp_pts REAL,
+    road_gp INTEGER DEFAULT 0,
+    road_w INTEGER DEFAULT 0,
+    road_l INTEGER DEFAULT 0,
+    road_pts REAL,
+    road_opp_pts REAL,
+
+    last_synced_at TEXT,
+    PRIMARY KEY (team_id, season),
+    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+);
+
+-- ============ PLAYER IMPACT METRICS (new) ============
+-- On/off court impact + player estimated metrics.
+-- One row per player per season.  Populated by sync_player_impact().
+
+CREATE TABLE IF NOT EXISTS player_impact (
+    player_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    season TEXT NOT NULL,
+
+    -- On/Off court splits (from TeamPlayerOnOffSummary)
+    on_court_off_rating REAL,
+    on_court_def_rating REAL,
+    on_court_net_rating REAL,
+    off_court_off_rating REAL,
+    off_court_def_rating REAL,
+    off_court_net_rating REAL,
+    net_rating_diff REAL,          -- on_net - off_net (positive = team better WITH player)
+    on_court_minutes REAL,
+
+    -- Player Estimated Metrics (from PlayerEstimatedMetrics)
+    e_usg_pct REAL,
+    e_off_rating REAL,
+    e_def_rating REAL,
+    e_net_rating REAL,
+    e_pace REAL,
+    e_ast_ratio REAL,
+    e_oreb_pct REAL,
+    e_dreb_pct REAL,
+
+    last_synced_at TEXT,
+    PRIMARY KEY (player_id, season),
+    FOREIGN KEY (player_id) REFERENCES players(player_id) ON DELETE CASCADE,
+    FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_impact_team
+    ON player_impact(team_id, season);
 """
 
 
@@ -175,12 +321,27 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         cur = conn.execute(f"PRAGMA table_info({table});")
         return any(row[1] == column for row in cur.fetchall())
 
+    def has_table(table: str) -> bool:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?;",
+            (table,),
+        )
+        return cur.fetchone() is not None
+
     # Player columns
     if not has_column("players", "is_injured"):
         conn.execute("ALTER TABLE players ADD COLUMN is_injured INTEGER NOT NULL DEFAULT 0;")
     if not has_column("players", "injury_note"):
         conn.execute("ALTER TABLE players ADD COLUMN injury_note TEXT;")
-    
+    if not has_column("players", "height"):
+        conn.execute("ALTER TABLE players ADD COLUMN height TEXT;")
+    if not has_column("players", "weight"):
+        conn.execute("ALTER TABLE players ADD COLUMN weight TEXT;")
+    if not has_column("players", "age"):
+        conn.execute("ALTER TABLE players ADD COLUMN age INTEGER;")
+    if not has_column("players", "experience"):
+        conn.execute("ALTER TABLE players ADD COLUMN experience INTEGER;")
+
     # Extended player_stats columns
     if not has_column("player_stats", "game_id"):
         conn.execute("ALTER TABLE player_stats ADD COLUMN game_id TEXT;")
@@ -208,3 +369,7 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE player_stats ADD COLUMN dreb REAL DEFAULT 0;")
     if not has_column("player_stats", "plus_minus"):
         conn.execute("ALTER TABLE player_stats ADD COLUMN plus_minus REAL DEFAULT 0;")
+    if not has_column("player_stats", "win_loss"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN win_loss TEXT;")
+    if not has_column("player_stats", "personal_fouls"):
+        conn.execute("ALTER TABLE player_stats ADD COLUMN personal_fouls REAL DEFAULT 0;")

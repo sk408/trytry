@@ -7,8 +7,15 @@ from typing import Iterable, Optional
 from src.analytics.stats_engine import (
     aggregate_projection,
     get_defensive_rating,
+    get_offensive_rating,
     get_opponent_defensive_factor,
     get_home_court_advantage,
+    get_pace,
+    get_four_factors,
+    get_clutch_stats,
+    get_hustle_stats,
+    detect_fatigue,
+    get_team_metrics,
 )
 from src.analytics.autotune import get_team_tuning
 from src.database.db import get_conn
@@ -21,10 +28,14 @@ class MatchupPrediction:
     game_date: date
     predicted_spread: float
     predicted_total: float
-
-
-def _rest_penalty(is_back_to_back: bool) -> float:
-    return -1.0 if is_back_to_back else 0.0
+    predicted_home_score: float = 0.0
+    predicted_away_score: float = 0.0
+    # Diagnostic breakdown
+    four_factors_adj: float = 0.0
+    clutch_adj: float = 0.0
+    hustle_adj: float = 0.0
+    fatigue_adj: float = 0.0
+    espn_blend_applied: bool = False
 
 
 def predict_matchup(
@@ -34,51 +45,49 @@ def predict_matchup(
     away_players: Iterable[int],
     game_date: Optional[date] = None,
     home_court: Optional[float] = None,
-    is_back_to_back_home: bool = False,
-    is_back_to_back_away: bool = False,
+    # ESPN predictor data (if available from gamecast)
+    espn_home_win_pct: float = 0.0,
+    espn_away_win_pct: float = 0.0,
 ) -> MatchupPrediction:
     """
-    Predict game spread and total using comprehensive stats.
-    
+    Predict game spread and total using comprehensive multi-factor model.
+
     Factors considered:
-    - Base scoring projections with opponent defensive adjustment
-    - Dynamic home court advantage (team-specific, 1.5-5.0 range)
-    - Home/away splits (30% weight)
-    - Head-to-head history (30% weight)
-    - Turnover differential (affects spread)
-    - True Shooting % advantage (affects spread)
-    - Offensive/Defensive rating matchup comparison (affects spread)
-    - Rebound differential (affects spread)
-    - 3PT shooting volume (affects total)
-    - Defensive stats (affects total - good D = lower scores)
-    - Offensive rebounds / second-chance points (affects total)
-    - Pace estimation (affects total)
-    - Back-to-back fatigue penalty
-    - Recent form weighting (last 5 games weighted 60%, older 40%)
+    - Player-level scoring projections with opponent defensive adjustment
+    - Dynamic home court advantage (official home/road splits)
+    - Home/away splits (30% weight) and head-to-head history (30% weight)
+    - Official NBA off/def ratings and pace (from team_metrics)
+    - Four Factors of basketball (eFG%, TOV%, OREB%, FT rate)
+    - Turnover differential and True Shooting % advantage
+    - Rebound differential
+    - Clutch performance stats (for projected close games)
+    - Hustle stats (deflections, contested shots = defensive intensity)
+    - Auto-detected fatigue (B2B, 3-in-4, 4-in-6, rest days)
+    - ESPN predictor ensemble blending (when available)
+    - Per-team autotune corrections
+    - Recent form weighting (last 5 games 60%, older 40%)
     """
+    gd = game_date or date.today()
+
+    # ============ 1. PLAYER-LEVEL PROJECTIONS ============
     home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
     away_proj = aggregate_projection(away_players, opponent_team_id=home_team_id, is_home=False)
 
-    # ============ DYNAMIC HOME COURT ADVANTAGE ============
-    # Use team-specific HCA unless explicitly overridden
+    # ============ 2. HOME COURT ADVANTAGE ============
     if home_court is None:
         home_court = get_home_court_advantage(home_team_id)
-    
-    # ============ OPPONENT DEFENSIVE ADJUSTMENT ============
-    # Scale projected points by how well the opponent defends
-    # Factor < 1.0 = opponent has good defense, reduces scoring
-    # Factor > 1.0 = opponent has bad defense, increases scoring
+
+    # ============ 3. OPPONENT DEFENSIVE ADJUSTMENT ============
     away_def_factor = get_opponent_defensive_factor(away_team_id)
     home_def_factor = get_opponent_defensive_factor(home_team_id)
-    # Dampen: pull 50% toward 1.0 to avoid overcorrection
+    # Dampen: 50% toward 1.0 to avoid overcorrection
     away_def_factor = 1.0 + (away_def_factor - 1.0) * 0.5
     home_def_factor = 1.0 + (home_def_factor - 1.0) * 0.5
-    
+
     home_base_pts = home_proj["points"] * away_def_factor
     away_base_pts = away_proj["points"] * home_def_factor
 
-    # ============ AUTOTUNE CORRECTIONS ============
-    # Apply per-team scoring corrections (if available from autotune)
+    # ============ 4. AUTOTUNE CORRECTIONS ============
     home_tuning = get_team_tuning(home_team_id)
     away_tuning = get_team_tuning(away_team_id)
     if home_tuning:
@@ -86,104 +95,282 @@ def predict_matchup(
     if away_tuning:
         away_base_pts += away_tuning["away_pts_correction"]
 
+    # ============ 5. FATIGUE (auto-detected) ============
+    home_fatigue = detect_fatigue(home_team_id, gd)
+    away_fatigue = detect_fatigue(away_team_id, gd)
+    fatigue_adj = home_fatigue["fatigue_penalty"] - away_fatigue["fatigue_penalty"]
+
     # ============ SPREAD CALCULATION ============
-    
-    # 1. Base spread from defense-adjusted scoring differential
+
+    # 5a. Base spread from defense-adjusted scoring differential
     spread = (home_base_pts - away_base_pts) + home_court
-    
-    # 2. Rest penalty (back-to-back games)
-    spread += _rest_penalty(is_back_to_back_home)
-    spread -= _rest_penalty(is_back_to_back_away)
-    
-    # 3. Turnover differential impact
-    # Each net turnover forced is worth ~1.0 points (scoring opportunity + denied possession)
-    home_to_margin = home_proj.get("turnover_margin", 0)  # steals - turnovers
+
+    # 5b. Fatigue penalty (negative fatigue_adj = home has MORE fatigue = worse for home)
+    spread -= fatigue_adj
+
+    # 5c. Turnover differential impact (~0.8 pts per net turnover advantage)
+    home_to_margin = home_proj.get("turnover_margin", 0)
     away_to_margin = away_proj.get("turnover_margin", 0)
-    turnover_advantage = home_to_margin - away_to_margin
-    spread += turnover_advantage * 0.8  # ~0.8 points per net turnover advantage
-    
-    # 4. True Shooting % advantage
-    # Higher efficiency = more points on same possessions
-    home_ts = home_proj.get("ts_pct", 55.0)  # default to league avg ~55%
+    spread += (home_to_margin - away_to_margin) * 0.8
+
+    # 5d. True Shooting % advantage (~0.25 pts per 1% TS advantage)
+    home_ts = home_proj.get("ts_pct", 55.0)
     away_ts = away_proj.get("ts_pct", 55.0)
-    ts_advantage = home_ts - away_ts
-    spread += ts_advantage * 0.25  # ~0.25 pts per 1% TS advantage
-    
-    # 5. Offensive/Defensive rating matchup comparison
-    # Compares each team's offensive efficiency vs the opponent's defensive efficiency
-    home_off_rating = home_proj.get("off_rating", 110.0)
-    away_off_rating = away_proj.get("off_rating", 110.0)
-    home_def_rating = get_defensive_rating(home_team_id)
-    away_def_rating = get_defensive_rating(away_team_id)
-    # Home offense vs away defense, and vice versa
-    home_matchup_edge = home_off_rating - away_def_rating  # positive = home has edge
-    away_matchup_edge = away_off_rating - home_def_rating
-    rating_spread_adj = (home_matchup_edge - away_matchup_edge) * 0.1
+    spread += (home_ts - away_ts) * 0.25
+
+    # 5e. Official Off/Def rating matchup comparison
+    home_off = get_offensive_rating(home_team_id)
+    away_off = get_offensive_rating(away_team_id)
+    home_def = get_defensive_rating(home_team_id)
+    away_def = get_defensive_rating(away_team_id)
+    home_matchup_edge = home_off - away_def   # positive = home offense > away defense
+    away_matchup_edge = away_off - home_def
+    rating_spread_adj = (home_matchup_edge - away_matchup_edge) * 0.12
     spread += rating_spread_adj
-    
-    # 6. Rebound differential impact
-    # Teams that outrebound opponents control the possession battle
+
+    # 5f. Rebound differential (~0.15 pts per rebound advantage)
     home_reb = home_proj.get("rebounds", 0)
     away_reb = away_proj.get("rebounds", 0)
-    spread += (home_reb - away_reb) * 0.15  # ~0.15 pts per rebound advantage
-    
+    spread += (home_reb - away_reb) * 0.15
+
+    # 5g. FOUR FACTORS COMPARISON (strongest predictor of winning)
+    home_ff = get_four_factors(home_team_id)
+    away_ff = get_four_factors(away_team_id)
+    four_factors_adj = _compute_four_factors_spread(home_ff, away_ff)
+    spread += four_factors_adj
+
+    # 5h. CLUTCH PERFORMANCE (for projected close games)
+    clutch_adj = 0.0
+    if abs(spread) < 6.0:  # game projects as close
+        home_clutch = get_clutch_stats(home_team_id)
+        away_clutch = get_clutch_stats(away_team_id)
+        clutch_adj = _compute_clutch_adjustment(home_clutch, away_clutch)
+        spread += clutch_adj
+
+    # 5i. HUSTLE STATS (defensive effort)
+    home_hustle = get_hustle_stats(home_team_id)
+    away_hustle = get_hustle_stats(away_team_id)
+    hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle)
+    spread += hustle_spread_adj
+
     # ============ TOTAL CALCULATION ============
-    
-    # 1. Base total from defense-adjusted scoring
+
+    # 6a. Base total from defense-adjusted scoring
     total = home_base_pts + away_base_pts
-    
-    # 2. Pacing boost from assists (more ball movement = more scoring)
+
+    # 6b. Pacing boost from assists
     total += 0.08 * (home_proj.get("assists", 0) + away_proj.get("assists", 0))
-    
-    # 3. Three-point volume impact
-    # High 3PT attempt rates = more variance but typically faster pace
-    # League avg ~38% of shots are 3s
+
+    # 6c. Three-point volume impact
     home_fg3_rate = home_proj.get("fg3_rate", 38.0)
     away_fg3_rate = away_proj.get("fg3_rate", 38.0)
     combined_fg3_rate = (home_fg3_rate + away_fg3_rate) / 2
-    # Teams shooting lots of 3s = slightly higher totals
-    fg3_rate_above_avg = max(0, combined_fg3_rate - 38.0)
-    total += fg3_rate_above_avg * 0.15  # +0.15 pts per 1% above avg 3PT rate
-    
-    # 4. Defensive strength impact (steals + blocks slow the game)
-    # Good defensive teams = lower pace, fewer easy baskets
+    total += max(0, combined_fg3_rate - 38.0) * 0.15
+
+    # 6d. Defensive strength impact (steals + blocks slow the game)
     combined_steals = home_proj.get("steals", 0) + away_proj.get("steals", 0)
     combined_blocks = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
-    # League avg: ~7-8 steals, ~5 blocks per team per game
-    steals_above_avg = max(0, combined_steals - 14.0)  # 14 = 7 per team avg
-    blocks_above_avg = max(0, combined_blocks - 10.0)  # 10 = 5 per team avg
-    total -= (steals_above_avg * 0.3 + blocks_above_avg * 0.25)
-    
-    # 5. Free throw rate impact
-    # High FT rate = more stoppages, slower pace but more points
-    home_ft_rate = home_proj.get("ft_rate", 25.0)  # ~25% FTA/FGA is avg
+    total -= max(0, combined_steals - 14.0) * 0.3 + max(0, combined_blocks - 10.0) * 0.25
+
+    # 6e. Free throw rate impact
+    home_ft_rate = home_proj.get("ft_rate", 25.0)
     away_ft_rate = away_proj.get("ft_rate", 25.0)
-    combined_ft_rate = (home_ft_rate + away_ft_rate) / 2
-    ft_rate_above_avg = max(0, combined_ft_rate - 25.0)
-    total += ft_rate_above_avg * 0.1  # Slight boost for FT-heavy games
-    
-    # 6. Offensive rebound impact (second-chance points)
-    # Each offensive rebound is worth ~1.1 expected points (extra possession)
-    home_oreb = home_proj.get("oreb", 0)
-    away_oreb = away_proj.get("oreb", 0)
-    combined_oreb = home_oreb + away_oreb
-    total += (combined_oreb - 20.0) * 0.4  # 20 = ~10 per team avg
-    
-    # 7. Pace adjustment
-    # Fast-paced matchups produce more possessions and higher totals
-    home_pace = home_proj.get("pace", 96.0)
-    away_pace = away_proj.get("pace", 96.0)
+    total += max(0, (home_ft_rate + away_ft_rate) / 2 - 25.0) * 0.1
+
+    # 6f. Offensive rebound impact (second-chance points)
+    combined_oreb = home_proj.get("oreb", 0) + away_proj.get("oreb", 0)
+    total += (combined_oreb - 20.0) * 0.4
+
+    # 6g. Official pace adjustment (use NBA tracking-based pace)
+    home_pace = get_pace(home_team_id)
+    away_pace = get_pace(away_team_id)
     expected_pace = (home_pace + away_pace) / 2
-    pace_factor = (expected_pace - 96.0) / 96.0  # % above/below league avg pace
-    total *= (1 + pace_factor * 0.5)  # Dampen to avoid overcorrection
+    pace_factor = (expected_pace - 98.0) / 98.0  # % above/below league avg
+    total *= (1 + pace_factor * 0.5)
+
+    # 6h. Hustle impact on total (high hustle = tighter defense = lower scoring)
+    hustle_total_adj = _compute_hustle_total(home_hustle, away_hustle)
+    total += hustle_total_adj
+
+    # 6i. Fatigue impact on total (fatigued teams = sloppier play, slightly lower scoring)
+    combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
+    total -= combined_fatigue * 0.3  # slight reduction in total for fatigued games
+
+    # ============ 7. ESPN PREDICTOR ENSEMBLE ============
+    espn_blend_applied = False
+    if espn_home_win_pct > 0 and espn_away_win_pct > 0:
+        spread, espn_blend_applied = _blend_with_espn(
+            spread, espn_home_win_pct, espn_away_win_pct
+        )
+
+    # ============ DERIVE INDIVIDUAL SCORES ============
+    pred_home_score = (total + spread) / 2
+    pred_away_score = (total - spread) / 2
 
     return MatchupPrediction(
         home_team_id=home_team_id,
         away_team_id=away_team_id,
-        game_date=game_date or date.today(),
+        game_date=gd,
         predicted_spread=spread,
         predicted_total=total,
+        predicted_home_score=pred_home_score,
+        predicted_away_score=pred_away_score,
+        four_factors_adj=four_factors_adj,
+        clutch_adj=clutch_adj,
+        hustle_adj=hustle_spread_adj,
+        fatigue_adj=fatigue_adj,
+        espn_blend_applied=espn_blend_applied,
     )
+
+
+# ============ HELPER FUNCTIONS ============
+
+
+def _compute_four_factors_spread(
+    home_ff: dict, away_ff: dict
+) -> float:
+    """
+    Compare the Four Factors between two teams.
+    Weights: eFG% 40%, TOV% 25%, OREB% 20%, FT rate 15%
+    (based on Oliver's research on factors that determine winning)
+    """
+    # For each factor, compute the edge:
+    #   team's offensive factor vs opponent's defensive forcing
+    #   home_ff["efg_pct"] vs away_ff["opp_efg_pct"] (what away D forces)
+    edges = []
+
+    # eFG% edge: home shooting vs away defensive forcing
+    h_efg = home_ff.get("efg_pct")
+    a_opp_efg = away_ff.get("opp_efg_pct")
+    a_efg = away_ff.get("efg_pct")
+    h_opp_efg = home_ff.get("opp_efg_pct")
+    if all(v is not None for v in [h_efg, a_opp_efg, a_efg, h_opp_efg]):
+        # Positive = home advantage
+        home_efg_edge = (h_efg - a_opp_efg) - (a_efg - h_opp_efg)
+        edges.append(home_efg_edge * 0.40)
+
+    # TOV% edge (lower is better for offense)
+    h_tov = home_ff.get("tm_tov_pct")
+    a_opp_tov = away_ff.get("opp_tm_tov_pct")
+    a_tov = away_ff.get("tm_tov_pct")
+    h_opp_tov = home_ff.get("opp_tm_tov_pct")
+    if all(v is not None for v in [h_tov, a_opp_tov, a_tov, h_opp_tov]):
+        # Negative = home advantage (home has lower TOV%)
+        home_tov_edge = (a_tov - h_opp_tov) - (h_tov - a_opp_tov)
+        edges.append(home_tov_edge * 0.25)
+
+    # OREB% edge
+    h_oreb = home_ff.get("oreb_pct")
+    a_opp_oreb = away_ff.get("opp_oreb_pct")
+    a_oreb = away_ff.get("oreb_pct")
+    h_opp_oreb = home_ff.get("opp_oreb_pct")
+    if all(v is not None for v in [h_oreb, a_opp_oreb, a_oreb, h_opp_oreb]):
+        home_oreb_edge = (h_oreb - a_opp_oreb) - (a_oreb - h_opp_oreb)
+        edges.append(home_oreb_edge * 0.20)
+
+    # FT rate edge
+    h_fta = home_ff.get("fta_rate")
+    a_opp_fta = away_ff.get("opp_fta_rate")
+    a_fta = away_ff.get("fta_rate")
+    h_opp_fta = home_ff.get("opp_fta_rate")
+    if all(v is not None for v in [h_fta, a_opp_fta, a_fta, h_opp_fta]):
+        home_fta_edge = (h_fta - a_opp_fta) - (a_fta - h_opp_fta)
+        edges.append(home_fta_edge * 0.15)
+
+    if not edges:
+        return 0.0
+
+    # Scale: 1% combined Four Factors edge ≈ 0.3 points
+    return sum(edges) * 0.3
+
+
+def _compute_clutch_adjustment(
+    home_clutch: dict, away_clutch: dict
+) -> float:
+    """
+    For projected close games, adjust spread based on clutch performance.
+    Teams that perform well in crunch time outperform in tight games.
+    """
+    home_net = home_clutch.get("clutch_net_rating")
+    away_net = away_clutch.get("clutch_net_rating")
+    if home_net is None or away_net is None:
+        return 0.0
+
+    # Net rating differential in clutch situations, dampened
+    clutch_diff = (home_net - away_net) * 0.05  # ~0.05 pts per 1 net rating point
+    # Cap the clutch adjustment to +-2.0 pts
+    return max(-2.0, min(2.0, clutch_diff))
+
+
+def _compute_hustle_spread(
+    home_hustle: dict, away_hustle: dict
+) -> float:
+    """
+    Hustle stats impact on spread: teams with more deflections, contested shots,
+    and charges drawn tend to have stronger defensive effort.
+    """
+    h_defl = home_hustle.get("deflections")
+    a_defl = away_hustle.get("deflections")
+    h_cont = home_hustle.get("contested_shots")
+    a_cont = away_hustle.get("contested_shots")
+
+    if h_defl is None or a_defl is None:
+        return 0.0
+
+    # Combine deflections and contested shots into an "effort score"
+    h_effort = (h_defl or 0) + (h_cont or 0) * 0.3
+    a_effort = (a_defl or 0) + (a_cont or 0) * 0.3
+    effort_diff = h_effort - a_effort
+
+    # ~0.02 pts per unit of effort differential
+    return effort_diff * 0.02
+
+
+def _compute_hustle_total(
+    home_hustle: dict, away_hustle: dict
+) -> float:
+    """
+    High combined hustle = tighter defense overall = slightly lower totals.
+    """
+    h_defl = home_hustle.get("deflections") or 0
+    a_defl = away_hustle.get("deflections") or 0
+    combined_defl = h_defl + a_defl
+
+    # League avg ~30 combined deflections per game (15 per team)
+    if combined_defl > 30:
+        excess = combined_defl - 30
+        return -excess * 0.1  # ~0.1 pts reduction per excess deflection
+    return 0.0
+
+
+def _blend_with_espn(
+    model_spread: float,
+    espn_home_pct: float,
+    espn_away_pct: float,
+) -> tuple[float, bool]:
+    """
+    Blend our model's spread with ESPN's predictor.
+    ESPN gives win probabilities; convert to implied spread.
+    """
+    if espn_home_pct <= 0 and espn_away_pct <= 0:
+        return model_spread, False
+
+    # Convert ESPN win probability to implied spread
+    # Rough conversion: each 5% win probability ≈ 1.5 points of spread
+    # Home at 60% → +3.0 pts; Home at 40% → -3.0 pts
+    espn_edge = espn_home_pct - 50.0  # positive = home favored
+    espn_implied_spread = espn_edge * 0.3  # scale factor
+
+    # Blend: 80% our model, 20% ESPN
+    blended = model_spread * 0.80 + espn_implied_spread * 0.20
+
+    # Disagreement dampening: if our model and ESPN disagree on direction,
+    # reduce confidence
+    if (model_spread > 0.5 and espn_implied_spread < -0.5) or \
+       (model_spread < -0.5 and espn_implied_spread > 0.5):
+        blended *= 0.85  # 15% dampening for disagreement
+
+    return blended, True
 
 
 def save_prediction(prediction: MatchupPrediction) -> None:

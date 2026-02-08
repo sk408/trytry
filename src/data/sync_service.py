@@ -8,7 +8,14 @@ import pandas as pd
 
 from src.data.injury_scraper import get_all_injuries
 from src.data.live_scores import fetch_live_games
-from src.data.nba_fetcher import fetch_player_game_logs, fetch_players, fetch_schedule, fetch_teams, get_current_season
+from src.data.nba_fetcher import (
+    fetch_player_game_logs, fetch_players, fetch_schedule, fetch_teams,
+    get_current_season,
+    fetch_team_estimated_metrics, fetch_league_dash_team_stats,
+    fetch_team_clutch_stats, fetch_team_hustle_stats,
+    fetch_player_on_off, fetch_player_estimated_metrics,
+    _safe_float, _safe_int,
+)
 from src.database import migrations
 from src.database.db import get_conn
 from src.analytics.injury_history import build_injury_history
@@ -75,16 +82,27 @@ def sync_reference_data(
             teams_df[["id", "full_name", "abbreviation", "conference"]].itertuples(index=False),
         )
 
+        # Ensure columns exist for roster context
+        for col, default in [("height", ""), ("weight", ""), ("age", None), ("experience", None)]:
+            if col not in players_df.columns:
+                players_df[col] = default
+
         conn.executemany(
             """
-            INSERT INTO players (player_id, name, team_id, position, is_injured, injury_note)
-            VALUES (?, ?, ?, ?, 0, NULL)
+            INSERT INTO players (player_id, name, team_id, position, is_injured, injury_note,
+                                 height, weight, age, experience)
+            VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
             ON CONFLICT(player_id) DO UPDATE SET
                 name = excluded.name,
                 team_id = excluded.team_id,
-                position = excluded.position
+                position = excluded.position,
+                height = excluded.height,
+                weight = excluded.weight,
+                age = excluded.age,
+                experience = excluded.experience
             """,
-            players_df[["id", "full_name", "team_id", "position"]].itertuples(index=False),
+            players_df[["id", "full_name", "team_id", "position",
+                        "height", "weight", "age", "experience"]].itertuples(index=False),
         )
         conn.commit()
     return players_df
@@ -168,7 +186,7 @@ def sync_player_logs(
             logs["opponent_team_id"] = logs["opponent_abbr"].map(abbr_to_id)
             logs = logs.dropna(subset=["opponent_team_id"])
             
-            # Build payload with all stats
+            # Build payload with all stats (including WL and PF)
             payload = []
             for row in logs.itertuples(index=False):
                 payload.append((
@@ -198,6 +216,9 @@ def sync_player_logs(
                     float(getattr(row, 'dreb', 0) or 0),
                     # Impact
                     float(getattr(row, 'plus_minus', 0) or 0),
+                    # Win/Loss and personal fouls (NEW)
+                    str(getattr(row, 'win_loss', '') or '') or None,
+                    float(getattr(row, 'personal_fouls', 0) or 0),
                 ))
             
             conn.executemany(
@@ -207,8 +228,9 @@ def sync_player_logs(
                      points, rebounds, assists, minutes,
                      steals, blocks, turnovers,
                      fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
-                     oreb, dreb, plus_minus)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     oreb, dreb, plus_minus,
+                     win_loss, personal_fouls)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(player_id, opponent_team_id, game_date) DO UPDATE SET
                     game_id = excluded.game_id,
                     steals = excluded.steals,
@@ -222,7 +244,9 @@ def sync_player_logs(
                     ft_attempted = excluded.ft_attempted,
                     oreb = excluded.oreb,
                     dreb = excluded.dreb,
-                    plus_minus = excluded.plus_minus
+                    plus_minus = excluded.plus_minus,
+                    win_loss = excluded.win_loss,
+                    personal_fouls = excluded.personal_fouls
                 """,
                 payload,
             )
@@ -308,27 +332,355 @@ def sync_schedule(
     return fetch_schedule(season=season, team_ids=team_ids, include_future_days=include_future_days)
 
 
+def sync_team_metrics(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> int:
+    """
+    Sync comprehensive team metrics from multiple NBA API endpoints into
+    the consolidated team_metrics table.
+
+    Endpoints called:
+    - TeamEstimatedMetrics (off/def/net rating, pace)
+    - LeagueDashTeamStats (Advanced)
+    - LeagueDashTeamStats (Four Factors)
+    - LeagueDashTeamStats (Opponent)
+    - LeagueDashTeamStats (Base, Home)
+    - LeagueDashTeamStats (Base, Road)
+    - LeagueDashTeamClutch (Advanced)
+    - LeagueHustleStatsTeam
+
+    Returns number of teams updated.
+    """
+    import time as _time
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    migrations.init_db()
+
+    # Accumulate per-team data in a dict keyed by team_id
+    team_data: dict[int, dict] = {}
+
+    def _ensure(tid: int) -> dict:
+        if tid not in team_data:
+            team_data[tid] = {"team_id": tid, "season": season}
+        return team_data[tid]
+
+    # 1. TeamEstimatedMetrics
+    df = fetch_team_estimated_metrics(season=season, progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["gp"] = _safe_int(row.get("GP"))
+            d["w"] = _safe_int(row.get("W"))
+            d["l"] = _safe_int(row.get("L"))
+            d["w_pct"] = _safe_float(row.get("W_PCT"))
+            d["e_off_rating"] = _safe_float(row.get("E_OFF_RATING"))
+            d["e_def_rating"] = _safe_float(row.get("E_DEF_RATING"))
+            d["e_net_rating"] = _safe_float(row.get("E_NET_RATING"))
+            d["e_pace"] = _safe_float(row.get("E_PACE"))
+            d["e_ast_ratio"] = _safe_float(row.get("E_AST_RATIO"))
+            d["e_oreb_pct"] = _safe_float(row.get("E_OREB_PCT"))
+            d["e_dreb_pct"] = _safe_float(row.get("E_DREB_PCT"))
+            d["e_reb_pct"] = _safe_float(row.get("E_REB_PCT"))
+            d["e_tm_tov_pct"] = _safe_float(row.get("E_TM_TOV_PCT"))
+    _time.sleep(0.8)
+
+    # 2. LeagueDashTeamStats (Advanced)
+    df = fetch_league_dash_team_stats(season=season, measure_type="Advanced", progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["off_rating"] = _safe_float(row.get("OFF_RATING"))
+            d["def_rating"] = _safe_float(row.get("DEF_RATING"))
+            d["net_rating"] = _safe_float(row.get("NET_RATING"))
+            d["pace"] = _safe_float(row.get("PACE"))
+            d["efg_pct"] = _safe_float(row.get("EFG_PCT"))
+            d["ts_pct"] = _safe_float(row.get("TS_PCT"))
+            d["ast_ratio"] = _safe_float(row.get("AST_RATIO"))
+            d["ast_to"] = _safe_float(row.get("AST_TO"))
+            d["oreb_pct"] = _safe_float(row.get("OREB_PCT"))
+            d["dreb_pct"] = _safe_float(row.get("DREB_PCT"))
+            d["reb_pct"] = _safe_float(row.get("REB_PCT"))
+            d["tm_tov_pct"] = _safe_float(row.get("TM_TOV_PCT"))
+            d["pie"] = _safe_float(row.get("PIE"))
+    _time.sleep(0.8)
+
+    # 3. Four Factors
+    df = fetch_league_dash_team_stats(season=season, measure_type="Four Factors", progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["ff_efg_pct"] = _safe_float(row.get("EFG_PCT"))
+            d["ff_fta_rate"] = _safe_float(row.get("FTA_RATE"))
+            d["ff_tm_tov_pct"] = _safe_float(row.get("TM_TOV_PCT"))
+            d["ff_oreb_pct"] = _safe_float(row.get("OREB_PCT"))
+            d["opp_efg_pct"] = _safe_float(row.get("OPP_EFG_PCT"))
+            d["opp_fta_rate"] = _safe_float(row.get("OPP_FTA_RATE"))
+            d["opp_tm_tov_pct"] = _safe_float(row.get("OPP_TM_TOV_PCT"))
+            d["opp_oreb_pct"] = _safe_float(row.get("OPP_OREB_PCT"))
+    _time.sleep(0.8)
+
+    # 4. Opponent stats
+    df = fetch_league_dash_team_stats(season=season, measure_type="Opponent", progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["opp_pts"] = _safe_float(row.get("OPP_PTS"))
+            d["opp_fg_pct"] = _safe_float(row.get("OPP_FG_PCT"))
+            d["opp_fg3_pct"] = _safe_float(row.get("OPP_FG3_PCT"))
+            d["opp_ft_pct"] = _safe_float(row.get("OPP_FT_PCT"))
+    _time.sleep(0.8)
+
+    # 5. Home splits
+    df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Home", progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["home_gp"] = _safe_int(row.get("GP"))
+            d["home_w"] = _safe_int(row.get("W"))
+            d["home_l"] = _safe_int(row.get("L"))
+            d["home_pts"] = _safe_float(row.get("PTS"))
+            # Compute opponent PPG at home from PLUS_MINUS: opp_pts = pts - plus_minus
+            pm = _safe_float(row.get("PLUS_MINUS"), 0.0)
+            pts = _safe_float(row.get("PTS"), 0.0)
+            d["home_opp_pts"] = pts - pm if pts and pm is not None else None
+    _time.sleep(0.8)
+
+    # 6. Road splits
+    df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Road", progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["road_gp"] = _safe_int(row.get("GP"))
+            d["road_w"] = _safe_int(row.get("W"))
+            d["road_l"] = _safe_int(row.get("L"))
+            d["road_pts"] = _safe_float(row.get("PTS"))
+            pm = _safe_float(row.get("PLUS_MINUS"), 0.0)
+            pts = _safe_float(row.get("PTS"), 0.0)
+            d["road_opp_pts"] = pts - pm if pts and pm is not None else None
+    _time.sleep(0.8)
+
+    # 7. Clutch stats
+    df = fetch_team_clutch_stats(season=season, progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["clutch_gp"] = _safe_int(row.get("GP"))
+            d["clutch_w"] = _safe_int(row.get("W"))
+            d["clutch_l"] = _safe_int(row.get("L"))
+            d["clutch_net_rating"] = _safe_float(row.get("NET_RATING"))
+            d["clutch_efg_pct"] = _safe_float(row.get("EFG_PCT"))
+            d["clutch_ts_pct"] = _safe_float(row.get("TS_PCT"))
+    _time.sleep(0.8)
+
+    # 8. Hustle stats
+    df = fetch_team_hustle_stats(season=season, progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            tid = int(row.get("TEAM_ID", 0))
+            if not tid:
+                continue
+            d = _ensure(tid)
+            d["deflections"] = _safe_float(row.get("DEFLECTIONS"))
+            d["loose_balls_recovered"] = _safe_float(row.get("LOOSE_BALLS_RECOVERED"))
+            d["contested_shots"] = _safe_float(row.get("CONTESTED_SHOTS"))
+            d["charges_drawn"] = _safe_float(row.get("CHARGES_DRAWN"))
+            d["screen_assists"] = _safe_float(row.get("SCREEN_ASSISTS"))
+
+    # Write all team_data to DB
+    now_iso = datetime.now().isoformat()
+    with get_conn() as conn:
+        for d in team_data.values():
+            d["last_synced_at"] = now_iso
+            cols = list(d.keys())
+            placeholders = ", ".join("?" for _ in cols)
+            col_names = ", ".join(cols)
+            # Build ON CONFLICT update for all columns except PK
+            update_parts = [f"{c} = excluded.{c}" for c in cols if c not in ("team_id", "season")]
+            update_clause = ", ".join(update_parts)
+            conn.execute(
+                f"INSERT INTO team_metrics ({col_names}) VALUES ({placeholders}) "
+                f"ON CONFLICT(team_id, season) DO UPDATE SET {update_clause}",
+                [d[c] for c in cols],
+            )
+        conn.commit()
+
+    progress(f"Team metrics synced for {len(team_data)} teams")
+    return len(team_data)
+
+
+def sync_player_impact(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> int:
+    """
+    Sync player on/off impact and estimated metrics into player_impact table.
+
+    - PlayerEstimatedMetrics: one call for all players (USG%, ratings)
+    - TeamPlayerOnOffSummary: one call per team (on/off net rating differential)
+    """
+    import time as _time
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    migrations.init_db()
+
+    player_data: dict[int, dict] = {}
+
+    def _ensure(pid: int) -> dict:
+        if pid not in player_data:
+            player_data[pid] = {"player_id": pid, "season": season}
+        return player_data[pid]
+
+    # 1. Player Estimated Metrics (one API call for all players)
+    df = fetch_player_estimated_metrics(season=season, progress_cb=progress_cb)
+    if not df.empty:
+        for _, row in df.iterrows():
+            pid = int(row.get("PLAYER_ID", 0))
+            if not pid:
+                continue
+            d = _ensure(pid)
+            d["e_usg_pct"] = _safe_float(row.get("E_USG_PCT"))
+            d["e_off_rating"] = _safe_float(row.get("E_OFF_RATING"))
+            d["e_def_rating"] = _safe_float(row.get("E_DEF_RATING"))
+            d["e_net_rating"] = _safe_float(row.get("E_NET_RATING"))
+            d["e_pace"] = _safe_float(row.get("E_PACE"))
+            d["e_ast_ratio"] = _safe_float(row.get("E_AST_RATIO"))
+            d["e_oreb_pct"] = _safe_float(row.get("E_OREB_PCT"))
+            d["e_dreb_pct"] = _safe_float(row.get("E_DREB_PCT"))
+    _time.sleep(0.8)
+
+    # 2. On/Off impact per team
+    with get_conn() as conn:
+        teams = conn.execute("SELECT team_id, abbreviation FROM teams ORDER BY abbreviation").fetchall()
+
+    for idx, (tid, abbr) in enumerate(teams, start=1):
+        progress(f"  Fetching on/off data {idx}/{len(teams)} ({abbr})...")
+        on_df, off_df = fetch_player_on_off(tid, season=season, progress_cb=progress_cb)
+
+        if not on_df.empty and not off_df.empty:
+            # Build lookup: player_id -> on-court stats
+            on_lookup = {}
+            pid_col = "VS_PLAYER_ID" if "VS_PLAYER_ID" in on_df.columns else "PLAYER_ID"
+            for _, row in on_df.iterrows():
+                pid = int(row.get(pid_col, 0))
+                if pid:
+                    on_lookup[pid] = row
+
+            off_pid_col = "VS_PLAYER_ID" if "VS_PLAYER_ID" in off_df.columns else "PLAYER_ID"
+            for _, row in off_df.iterrows():
+                pid = int(row.get(off_pid_col, 0))
+                if pid and pid in on_lookup:
+                    on_row = on_lookup[pid]
+                    d = _ensure(pid)
+                    d["team_id"] = tid
+                    d["on_court_off_rating"] = _safe_float(on_row.get("OFF_RATING"))
+                    d["on_court_def_rating"] = _safe_float(on_row.get("DEF_RATING"))
+                    d["on_court_net_rating"] = _safe_float(on_row.get("NET_RATING"))
+                    d["off_court_off_rating"] = _safe_float(row.get("OFF_RATING"))
+                    d["off_court_def_rating"] = _safe_float(row.get("DEF_RATING"))
+                    d["off_court_net_rating"] = _safe_float(row.get("NET_RATING"))
+                    on_net = d["on_court_net_rating"]
+                    off_net = d["off_court_net_rating"]
+                    if on_net is not None and off_net is not None:
+                        d["net_rating_diff"] = on_net - off_net
+                    d["on_court_minutes"] = _safe_float(on_row.get("MIN"))
+        _time.sleep(0.8)
+
+    # Resolve team_id for players who only got estimated metrics (no on/off)
+    with get_conn() as conn:
+        pid_to_tid = dict(conn.execute("SELECT player_id, team_id FROM players").fetchall())
+
+    now_iso = datetime.now().isoformat()
+    with get_conn() as conn:
+        for d in player_data.values():
+            if "team_id" not in d:
+                d["team_id"] = pid_to_tid.get(d["player_id"], 0)
+            if not d.get("team_id"):
+                continue  # skip if no team mapping
+            d["last_synced_at"] = now_iso
+            cols = list(d.keys())
+            placeholders = ", ".join("?" for _ in cols)
+            col_names = ", ".join(cols)
+            update_parts = [f"{c} = excluded.{c}" for c in cols if c not in ("player_id", "season")]
+            update_clause = ", ".join(update_parts)
+            conn.execute(
+                f"INSERT INTO player_impact ({col_names}) VALUES ({placeholders}) "
+                f"ON CONFLICT(player_id, season) DO UPDATE SET {update_clause}",
+                [d[c] for c in cols],
+            )
+        conn.commit()
+
+    progress(f"Player impact synced for {len(player_data)} players")
+    return len(player_data)
+
+
 def full_sync(
     active_only: bool = True, season: Optional[str] = None, progress_cb: Optional[Callable[[str], None]] = None
 ) -> None:
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
+
+    # 1. Core reference data (teams + rosters with height/weight/age/exp)
     progress("Sync: reference data (teams + rosters)")
     players_df = sync_reference_data(progress_cb=progress_cb, season=season)
+
+    # 2. Player game logs (now includes WL and PF)
     progress(f"Sync: game logs for {len(players_df)} players (this may take a while)...")
     sync_player_logs(players_df["id"].tolist(), season=season, progress_cb=progress_cb)
+
+    # 3. Current injuries
     progress("Sync: current injuries")
     try:
         sync_injuries(progress_cb=progress)
         progress("Current injuries synced")
     except Exception as exc:
         progress(f"Current injuries sync skipped: {exc}")
+
+    # 4. Historical injury inference
     progress("Building historical injury data...")
     try:
         count = sync_injury_history(progress_cb=progress)
         progress(f"Historical injury data built: {count} records")
     except Exception as exc:
         progress(f"Historical injury build skipped: {exc}")
+
+    # 5. Team advanced metrics (official NBA ratings, Four Factors, clutch, hustle, splits)
+    progress("Sync: team advanced metrics (8 API endpoints)...")
+    try:
+        n = sync_team_metrics(season=season, progress_cb=progress_cb)
+        progress(f"Team metrics synced: {n} teams")
+    except Exception as exc:
+        progress(f"Team metrics sync skipped: {exc}")
+
+    # 6. Player impact (on/off + estimated metrics)
+    progress("Sync: player impact data (on/off + estimated metrics)...")
+    try:
+        n = sync_player_impact(season=season, progress_cb=progress_cb)
+        progress(f"Player impact synced: {n} players")
+    except Exception as exc:
+        progress(f"Player impact sync skipped: {exc}")
+
     progress("Sync complete")
 
 

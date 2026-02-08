@@ -49,6 +49,11 @@ class GameOdds:
     away_win_pct: float = 0.0
     home_ats_record: str = ""
     away_ats_record: str = ""
+    # ESPN ML-based predictor (pre-game prediction)
+    espn_home_win_pct: float = 0.0  # ESPN's predicted home win probability (0-100)
+    espn_away_win_pct: float = 0.0
+    # Season series head-to-head
+    season_series: str = ""  # e.g. "BOS leads 2-1"
 
 
 @dataclass
@@ -217,7 +222,56 @@ def get_game_odds(game_id: str) -> Optional[GameOdds]:
         # Convert from decimal to percentage (0.06 -> 6.0)
         odds.home_win_pct = home_pct * 100
         odds.away_win_pct = (1 - home_pct) * 100
-    
+
+    # Parse ESPN predictor (ML-based pre-game prediction)
+    predictor = data.get("predictor", {})
+    if predictor:
+        try:
+            home_pred = predictor.get("homeTeam", {})
+            away_pred = predictor.get("awayTeam", {})
+            # gameProjection is a percentage (e.g. 65.2 = 65.2% chance)
+            espn_home = float(home_pred.get("gameProjection", 0) or 0)
+            espn_away = float(away_pred.get("gameProjection", 0) or 0)
+            if espn_home > 0 or espn_away > 0:
+                odds.espn_home_win_pct = espn_home
+                odds.espn_away_win_pct = espn_away
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    # Parse season series (head-to-head record this season)
+    season_series = data.get("seasonseries", [])
+    if season_series and isinstance(season_series, list):
+        try:
+            # seasonseries contains game results; derive the series record
+            series_summary = data.get("header", {}).get("seasonseries", {})
+            if series_summary and isinstance(series_summary, dict):
+                summary_text = series_summary.get("summary", "")
+                if summary_text:
+                    odds.season_series = summary_text
+            elif isinstance(season_series, list) and len(season_series) > 0:
+                # Count wins per team from the game list
+                home_wins = 0
+                away_wins = 0
+                # Get header to determine which team is home
+                header = data.get("header", {})
+                comp = header.get("competitions", [{}])[0]
+                home_team_id = ""
+                for c in comp.get("competitors", []):
+                    if c.get("homeAway") == "home":
+                        home_team_id = c.get("team", {}).get("id", "")
+                        break
+                for game in season_series:
+                    competitors = game.get("competitors", [])
+                    for c in competitors:
+                        if c.get("winner") and c.get("id") == home_team_id:
+                            home_wins += 1
+                        elif c.get("winner"):
+                            away_wins += 1
+                if home_wins or away_wins:
+                    odds.season_series = f"{home_wins}-{away_wins}"
+        except (ValueError, TypeError, AttributeError):
+            pass
+
     return odds
 
 

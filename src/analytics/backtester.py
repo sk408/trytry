@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.database.db import get_conn
 from src.analytics.injury_history import get_injuries_for_game
+from src.analytics.stats_engine import get_team_metrics, detect_fatigue
 
 
 @dataclass
@@ -38,10 +39,13 @@ class GamePrediction:
     spread_within_5: bool  # spread prediction within 5 points
     total_within_10: bool  # total prediction within 10 points
     # Injury info
-    home_injuries: List[str] = field(default_factory=list)  # Names of injured players
+    home_injuries: List[str] = field(default_factory=list)
     away_injuries: List[str] = field(default_factory=list)
-    home_injury_adj: float = 0.0  # Points adjustment from injuries
+    home_injury_adj: float = 0.0
     away_injury_adj: float = 0.0
+    # Fatigue info
+    home_fatigue_penalty: float = 0.0
+    away_fatigue_penalty: float = 0.0
 
 
 @dataclass
@@ -71,30 +75,26 @@ class BacktestResults:
 
 
 def get_team_record_before_date(team_id: int, before_date: date) -> Tuple[int, int]:
-    """Get team's win-loss record before a specific date."""
+    """
+    Get team's win-loss record before a specific date.
+    Uses the win_loss column from player_stats for accurate results.
+    """
     with get_conn() as conn:
-        df = pd.read_sql(
+        # Use win_loss column: get one row per game (any player from this team)
+        rows = conn.execute(
             """
-            SELECT ps.game_date, ps.is_home, ps.points as team_pts,
-                   (SELECT AVG(ps2.points) FROM player_stats ps2 
-                    JOIN players p2 ON p2.player_id = ps2.player_id
-                    WHERE ps2.opponent_team_id = p.team_id 
-                    AND ps2.game_date = ps.game_date) as opp_pts
+            SELECT DISTINCT ps.game_date, ps.win_loss
             FROM player_stats ps
             JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.game_date < ?
+            WHERE p.team_id = ? AND ps.game_date < ? AND ps.win_loss IS NOT NULL
             GROUP BY ps.game_date
             """,
-            conn,
-            params=[team_id, str(before_date)],
-        )
+            (team_id, str(before_date)),
+        ).fetchall()
     
-    if df.empty:
-        return 0, 0
-    
-    # This is approximate - we'd need actual game results
-    # For now, return based on available data
-    return 0, 0
+    wins = sum(1 for _, wl in rows if wl == "W")
+    losses = sum(1 for _, wl in rows if wl == "L")
+    return wins, losses
 
 
 def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
@@ -181,8 +181,10 @@ def clear_advanced_profile_cache() -> None:
 def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, float]:
     """
     Get team advanced stats before a date for backtesting.
-    Includes rebounds, offensive/defensive rating, pace, and HCA.
-    Results are cached for performance during backtests.
+    Includes rebounds, offensive/defensive rating, pace, HCA, and Four Factors.
+
+    Checks official team_metrics first (if synced); then falls back to
+    computing from player game logs.  Results are cached for performance.
     """
     cache_key = (team_id, str(before_date))
     if cache_key in _adv_profile_cache:
@@ -192,107 +194,113 @@ def get_team_advanced_profile(team_id: int, before_date: date) -> Dict[str, floa
         "rebounds_pg": 0.0,
         "off_rating": 110.0,
         "def_rating": 110.0,
-        "pace": 96.0,
+        "pace": 98.0,
         "hca": 3.0,
+        # Four Factors (default None = unavailable)
+        "ff_efg_pct": None,
+        "ff_fta_rate": None,
+        "ff_tm_tov_pct": None,
+        "ff_oreb_pct": None,
+        "opp_efg_pct": None,
+        "opp_fta_rate": None,
+        "opp_tm_tov_pct": None,
+        "opp_oreb_pct": None,
+        # Clutch
+        "clutch_net_rating": None,
     }
-    
+
+    # Try official metrics first (they represent the full season, which is
+    # acceptable since we're backtesting within the same season)
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        result["off_rating"] = float(metrics.get("e_off_rating") or metrics.get("off_rating") or 110.0)
+        result["def_rating"] = float(metrics.get("e_def_rating") or metrics.get("def_rating") or 110.0)
+        result["pace"] = float(metrics.get("e_pace") or metrics.get("pace") or 98.0)
+        # Four Factors
+        for k in ["ff_efg_pct", "ff_fta_rate", "ff_tm_tov_pct", "ff_oreb_pct",
+                   "opp_efg_pct", "opp_fta_rate", "opp_tm_tov_pct", "opp_oreb_pct"]:
+            result[k] = metrics.get(k)
+        result["clutch_net_rating"] = metrics.get("clutch_net_rating")
+        # HCA from home/road splits
+        home_pts = metrics.get("home_pts")
+        road_pts = metrics.get("road_pts")
+        if home_pts and road_pts:
+            result["hca"] = max(1.5, min(5.0, float(home_pts) - float(road_pts)))
+
+    # Always compute rebounds from game logs (per-date for accuracy)
     with get_conn() as conn:
-        # Team totals per game (for off_rating, pace, rebounds)
         df = pd.read_sql(
             """
-            SELECT 
-                ps.game_date,
-                SUM(ps.points) as team_pts,
-                SUM(ps.rebounds) as team_reb,
-                SUM(ps.fg_attempted) as team_fga,
-                SUM(ps.ft_attempted) as team_fta,
-                SUM(ps.turnovers) as team_tov,
-                SUM(ps.oreb) as team_oreb
+            SELECT ps.game_date,
+                   SUM(ps.points) as team_pts,
+                   SUM(ps.rebounds) as team_reb,
+                   SUM(ps.fg_attempted) as team_fga,
+                   SUM(ps.ft_attempted) as team_fta,
+                   SUM(ps.turnovers) as team_tov,
+                   SUM(ps.oreb) as team_oreb
             FROM player_stats ps
             JOIN players p ON p.player_id = ps.player_id
             WHERE p.team_id = ? AND ps.game_date < ?
             GROUP BY ps.game_date
             """,
-            conn,
-            params=[team_id, str(before_date)],
-        )
-        
-        # Opponent totals per game (for def_rating)
-        opp_df = pd.read_sql(
-            """
-            SELECT 
-                ps.game_date,
-                SUM(ps.points) as opp_pts,
-                SUM(ps.fg_attempted) as opp_fga,
-                SUM(ps.ft_attempted) as opp_fta,
-                SUM(ps.turnovers) as opp_tov,
-                SUM(ps.oreb) as opp_oreb
-            FROM player_stats ps
-            WHERE ps.opponent_team_id = ? AND ps.game_date < ?
-            GROUP BY ps.game_date
-            """,
-            conn,
-            params=[team_id, str(before_date)],
-        )
-        
-        # Home/away scoring for HCA
-        home_df = pd.read_sql(
-            """
-            SELECT ps.game_date, SUM(ps.points) as team_pts
-            FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.is_home = 1 AND ps.game_date < ?
-            GROUP BY ps.game_date
-            """,
-            conn,
-            params=[team_id, str(before_date)],
-        )
-        
-        away_df2 = pd.read_sql(
-            """
-            SELECT ps.game_date, SUM(ps.points) as team_pts
-            FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.is_home = 0 AND ps.game_date < ?
-            GROUP BY ps.game_date
-            """,
-            conn,
-            params=[team_id, str(before_date)],
+            conn, params=[team_id, str(before_date)],
         )
     
     if not df.empty:
-        # Team rebounds per game
         result["rebounds_pg"] = float(df["team_reb"].mean())
         
-        # Offensive rating & pace
-        avg_pts = float(df["team_pts"].mean())
-        avg_fga = float(df["team_fga"].mean())
-        avg_fta = float(df["team_fta"].mean())
-        avg_tov = float(df["team_tov"].mean())
-        avg_oreb = float(df["team_oreb"].mean())
-        poss = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
-        if poss > 0:
-            result["off_rating"] = (avg_pts / poss) * 100
-            result["pace"] = poss
-    
-    # Defensive rating
-    if not opp_df.empty:
-        opp_avg_pts = float(opp_df["opp_pts"].mean())
-        opp_avg_fga = float(opp_df["opp_fga"].mean())
-        opp_avg_fta = float(opp_df["opp_fta"].mean())
-        opp_avg_tov = float(opp_df["opp_tov"].mean())
-        opp_avg_oreb = float(opp_df["opp_oreb"].mean())
-        opp_poss = opp_avg_fga - opp_avg_oreb + opp_avg_tov + 0.44 * opp_avg_fta
-        if opp_poss > 0:
-            result["def_rating"] = (opp_avg_pts / opp_poss) * 100
-    
-    # HCA
-    if not home_df.empty and not away_df2.empty:
-        home_ppg = float(home_df["team_pts"].mean())
-        away_ppg = float(away_df2["team_pts"].mean())
-        hca = home_ppg - away_ppg
-        result["hca"] = max(1.5, min(5.0, hca))
-    
+        # If official metrics were NOT available, compute from logs
+        if not metrics:
+            avg_pts = float(df["team_pts"].mean())
+            avg_fga = float(df["team_fga"].mean())
+            avg_fta = float(df["team_fta"].mean())
+            avg_tov = float(df["team_tov"].mean())
+            avg_oreb = float(df["team_oreb"].mean())
+            poss = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
+            if poss > 0:
+                result["off_rating"] = (avg_pts / poss) * 100
+                result["pace"] = poss
+
+            # Defensive rating from opponent data
+            opp_df = pd.read_sql(
+                """
+                SELECT ps.game_date,
+                       SUM(ps.points) as opp_pts,
+                       SUM(ps.fg_attempted) as opp_fga,
+                       SUM(ps.ft_attempted) as opp_fta,
+                       SUM(ps.turnovers) as opp_tov,
+                       SUM(ps.oreb) as opp_oreb
+                FROM player_stats ps
+                WHERE ps.opponent_team_id = ? AND ps.game_date < ?
+                GROUP BY ps.game_date
+                """,
+                conn, params=[team_id, str(before_date)],
+            )
+            if not opp_df.empty:
+                opp_poss = float(opp_df["opp_fga"].mean()) - float(opp_df["opp_oreb"].mean()) + \
+                           float(opp_df["opp_tov"].mean()) + 0.44 * float(opp_df["opp_fta"].mean())
+                if opp_poss > 0:
+                    result["def_rating"] = (float(opp_df["opp_pts"].mean()) / opp_poss) * 100
+
+            # HCA from home/away scoring
+            home_df = pd.read_sql(
+                "SELECT ps.game_date, SUM(ps.points) as team_pts "
+                "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+                "WHERE p.team_id = ? AND ps.is_home = 1 AND ps.game_date < ? "
+                "GROUP BY ps.game_date",
+                conn, params=[team_id, str(before_date)],
+            )
+            away_df2 = pd.read_sql(
+                "SELECT ps.game_date, SUM(ps.points) as team_pts "
+                "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+                "WHERE p.team_id = ? AND ps.is_home = 0 AND ps.game_date < ? "
+                "GROUP BY ps.game_date",
+                conn, params=[team_id, str(before_date)],
+            )
+            if not home_df.empty and not away_df2.empty:
+                hca = float(home_df["team_pts"].mean()) - float(away_df2["team_pts"].mean())
+                result["hca"] = max(1.5, min(5.0, hca))
+
     _adv_profile_cache[cache_key] = result
     return result
 
@@ -469,28 +477,58 @@ def predict_game_historical(
         away_proj += away_adj
     
     # ============ ADVANCED ADJUSTMENTS ============
-    # Get advanced profiles for both teams (cached for performance)
     home_adv = get_team_advanced_profile(home_team_id, game_date)
     away_adv = get_team_advanced_profile(away_team_id, game_date)
     
-    # Dynamic home court advantage (team-specific)
+    # Dynamic home court advantage
     hca = home_adv["hca"]
     
-    # Rebound differential adjustment
+    # Rebound differential
     rebound_adj = (home_adv["rebounds_pg"] - away_adv["rebounds_pg"]) * 0.15
     
-    # Offensive/Defensive rating comparison
+    # Off/Def rating comparison
     home_matchup_edge = home_adv["off_rating"] - away_adv["def_rating"]
     away_matchup_edge = away_adv["off_rating"] - home_adv["def_rating"]
-    rating_adj = (home_matchup_edge - away_matchup_edge) * 0.1
+    rating_adj = (home_matchup_edge - away_matchup_edge) * 0.12
     
-    # Pace factor for total adjustment
+    # Pace factor for total
     expected_pace = (home_adv["pace"] + away_adv["pace"]) / 2
-    pace_factor = (expected_pace - 96.0) / 96.0
+    pace_factor = (expected_pace - 98.0) / 98.0
     
-    # Compute final spread and total with all adjustments
-    spread = (home_proj - away_proj) + hca + rebound_adj + rating_adj
+    # Four Factors adjustment (if available)
+    four_factors_adj = 0.0
+    h_efg = home_adv.get("ff_efg_pct")
+    a_efg = away_adv.get("ff_efg_pct")
+    if h_efg is not None and a_efg is not None:
+        # Simplified Four Factors comparison for backtesting
+        efg_edge = (h_efg or 0) - (a_efg or 0)
+        tov_edge = (away_adv.get("ff_tm_tov_pct") or 0) - (home_adv.get("ff_tm_tov_pct") or 0)
+        oreb_edge = (home_adv.get("ff_oreb_pct") or 0) - (away_adv.get("ff_oreb_pct") or 0)
+        fta_edge = (home_adv.get("ff_fta_rate") or 0) - (away_adv.get("ff_fta_rate") or 0)
+        four_factors_adj = (efg_edge * 0.40 + tov_edge * 0.25 +
+                           oreb_edge * 0.20 + fta_edge * 0.15) * 0.3
+    
+    # Clutch adjustment for projected close games
+    clutch_adj = 0.0
+    base_spread = (home_proj - away_proj) + hca
+    if abs(base_spread) < 6.0:
+        h_clutch = home_adv.get("clutch_net_rating")
+        a_clutch = away_adv.get("clutch_net_rating")
+        if h_clutch is not None and a_clutch is not None:
+            clutch_adj = max(-2.0, min(2.0, (h_clutch - a_clutch) * 0.05))
+
+    # Fatigue detection
+    home_fatigue = detect_fatigue(home_team_id, game_date)
+    away_fatigue = detect_fatigue(away_team_id, game_date)
+    fatigue_adj = home_fatigue["fatigue_penalty"] - away_fatigue["fatigue_penalty"]
+
+    # Final spread and total
+    spread = (home_proj - away_proj) + hca + rebound_adj + rating_adj + \
+             four_factors_adj + clutch_adj - fatigue_adj
     total = (home_proj + away_proj) * (1 + pace_factor * 0.5)
+    # Reduce total slightly for fatigued games
+    combined_fatigue = home_fatigue["fatigue_penalty"] + away_fatigue["fatigue_penalty"]
+    total -= combined_fatigue * 0.3
     
     return spread, total, home_proj, away_proj
 
@@ -677,6 +715,10 @@ def run_backtest(
         
         home_injury_names = [p.get("name", "Unknown") for p in home_injured if p.get("avg_minutes", 0) >= 12]
         away_injury_names = [p.get("name", "Unknown") for p in away_injured if p.get("avg_minutes", 0) >= 12]
+
+        # Fatigue detection
+        home_fatigue_info = detect_fatigue(home_id, game_date)
+        away_fatigue_info = detect_fatigue(away_id, game_date)
         
         # Make prediction using only data before this game
         pred_spread, pred_total, pred_home, pred_away = predict_game_historical(
@@ -737,6 +779,8 @@ def run_backtest(
             away_injuries=away_injury_names,
             home_injury_adj=home_adj,
             away_injury_adj=away_adj,
+            home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
+            away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
         )
         predictions.append(pred)
         

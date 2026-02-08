@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
 
 from src.database.db import get_conn
+from src.data.nba_fetcher import get_current_season
 
 
 @dataclass
@@ -47,6 +49,8 @@ class PlayerStats:
     # Rebound breakdown
     oreb_pg: float = 0.0  # offensive rebounds per game
     dreb_pg: float = 0.0  # defensive rebounds per game
+    # Fouls
+    pf_pg: float = 0.0    # personal fouls per game
 
 
 @dataclass
@@ -171,6 +175,9 @@ def get_player_comprehensive_stats(
     oreb_pg = safe_mean(df["oreb"]) if "oreb" in df.columns else 0.0
     dreb_pg = safe_mean(df["dreb"]) if "dreb" in df.columns else 0.0
     
+    # Personal fouls per game
+    pf_pg = safe_mean(df["personal_fouls"]) if "personal_fouls" in df.columns else 0.0
+    
     # Home/Away splits
     home_df = df[df["is_home"] == 1]
     away_df = df[df["is_home"] == 0]
@@ -203,6 +210,7 @@ def get_player_comprehensive_stats(
         plus_minus_avg=plus_minus_avg,
         oreb_pg=oreb_pg,
         dreb_pg=dreb_pg,
+        pf_pg=pf_pg,
     )
 
 
@@ -476,27 +484,54 @@ def get_team_matchup_stats(
         total_dreb *= scale_factor
     
     # Apply FT efficiency penalty from injuries
-    # This accounts for losing good FT shooters and replacing with worse ones
     if ft_efficiency_penalty > 0:
         projected -= ft_efficiency_penalty
         total_ppg -= ft_efficiency_penalty
     
-    # ============ PLAYMAKER INJURY PENALTY ============
-    # Losing a primary playmaker (6+ APG) hurts team offensive efficiency
-    # beyond just their personal scoring -- assisted shots are higher %
-    injured_assists = sum(p.apg for p in injured if p.apg >= 6.0)
-    if injured_assists > 0:
-        playmaker_penalty = injured_assists * 0.5
-        projected -= playmaker_penalty
-        total_ppg -= playmaker_penalty
+    # ============ DATA-DRIVEN INJURY IMPACT (on/off metrics) ============
+    # Use player on/off net rating differential to quantify true impact.
+    # If on/off data unavailable, fall back to heuristic penalties.
+    season = get_current_season()
+    total_onoff_penalty = 0.0
+    players_with_onoff = 0
     
-    # ============ REBOUNDER INJURY PENALTY ============
-    # Losing a dominant rebounder (8+ RPG) reduces second-chance points
-    injured_rebounds = sum(p.rpg for p in injured if p.rpg >= 8.0)
-    if injured_rebounds > 0:
-        rebound_penalty = injured_rebounds * 0.2
-        projected -= rebound_penalty
-        total_ppg -= rebound_penalty
+    with get_conn() as conn:
+        for inj_player in injured:
+            impact_row = conn.execute(
+                "SELECT net_rating_diff, on_court_minutes, e_usg_pct FROM player_impact "
+                "WHERE player_id = ? AND season = ?",
+                (inj_player.player_id, season),
+            ).fetchone()
+            
+            if impact_row and impact_row[0] is not None:
+                net_diff = float(impact_row[0])   # positive = team is better WITH this player
+                on_minutes = float(impact_row[1] or inj_player.mpg)
+                # Convert net rating differential to expected point impact
+                # net_rating is per 100 possessions; scale by minutes played
+                # ~100 possessions per 48 minutes, so per-minute factor = poss/4800
+                minute_fraction = on_minutes / 48.0
+                # Expected point swing from losing this player
+                point_impact = net_diff * minute_fraction * 0.5  # 0.5 dampening
+                total_onoff_penalty += max(0, point_impact)  # only penalize for positive-impact players
+                players_with_onoff += 1
+    
+    if players_with_onoff > 0:
+        # Use data-driven penalty
+        projected -= total_onoff_penalty
+        total_ppg -= total_onoff_penalty
+    else:
+        # Fallback: heuristic penalties for playmakers and rebounders
+        injured_assists = sum(p.apg for p in injured if p.apg >= 6.0)
+        if injured_assists > 0:
+            playmaker_penalty = injured_assists * 0.5
+            projected -= playmaker_penalty
+            total_ppg -= playmaker_penalty
+        
+        injured_rebounds = sum(p.rpg for p in injured if p.rpg >= 8.0)
+        if injured_rebounds > 0:
+            rebound_penalty = injured_rebounds * 0.2
+            projected -= rebound_penalty
+            total_ppg -= rebound_penalty
     
     # Calculate team-level efficiency metrics (weighted by minutes)
     team_ts_pct = (weighted_ts_sum / total_minutes_weight) if total_minutes_weight > 0 else 0.0
@@ -744,24 +779,64 @@ def usage_adjusted_projection(projection: Dict[str, float], usage_factor: float 
     return {k: v * usage_factor for k, v in projection.items()}
 
 
-# ============ ADVANCED RATING FUNCTIONS ============
+# ============ TEAM METRICS (official NBA data with fallbacks) ============
+
+
+def get_team_metrics(team_id: int, season: Optional[str] = None) -> Optional[Dict]:
+    """
+    Load the consolidated team_metrics row for a team.
+    Returns dict of all columns, or None if not available.
+    """
+    season = season or get_current_season()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM team_metrics WHERE team_id = ? AND season = ?",
+            (team_id, season),
+        ).fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in conn.execute("SELECT * FROM team_metrics LIMIT 0").description]
+    return dict(zip(cols, row))
+
+
+def get_player_impact_data(player_id: int, season: Optional[str] = None) -> Optional[Dict]:
+    """Load player_impact row for a player."""
+    season = season or get_current_season()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM player_impact WHERE player_id = ? AND season = ?",
+            (player_id, season),
+        ).fetchone()
+        if not row:
+            return None
+        cols = [desc[0] for desc in conn.execute("SELECT * FROM player_impact LIMIT 0").description]
+    return dict(zip(cols, row))
 
 
 def get_offensive_rating(team_id: int) -> float:
     """
-    Calculate team's offensive rating (points per 100 possessions).
-    Higher = better offense.  Uses the last 20 games for stability.
+    Get team offensive rating.
+    Prefers official NBA metrics from team_metrics table; falls back to
+    hand-calculated from player game logs.
     """
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        # Prefer NBA estimated metric, then dashboard advanced
+        for key in ("e_off_rating", "off_rating"):
+            val = metrics.get(key)
+            if val is not None:
+                return float(val)
+
+    # Fallback: hand-calculate from last 20 games
     with get_conn() as conn:
         df = pd.read_sql(
             """
-            SELECT 
-                ps.game_date,
-                SUM(ps.points) as team_pts,
-                SUM(ps.fg_attempted) as team_fga,
-                SUM(ps.ft_attempted) as team_fta,
-                SUM(ps.turnovers) as team_tov,
-                SUM(ps.oreb) as team_oreb
+            SELECT ps.game_date,
+                   SUM(ps.points) as team_pts,
+                   SUM(ps.fg_attempted) as team_fga,
+                   SUM(ps.ft_attempted) as team_fta,
+                   SUM(ps.turnovers) as team_tov,
+                   SUM(ps.oreb) as team_oreb
             FROM player_stats ps
             JOIN players p ON p.player_id = ps.player_id
             WHERE p.team_id = ?
@@ -769,91 +844,89 @@ def get_offensive_rating(team_id: int) -> float:
             ORDER BY ps.game_date DESC
             LIMIT 20
             """,
-            conn,
-            params=[team_id],
+            conn, params=[team_id],
         )
-    
     if df.empty:
-        return 110.0  # league average fallback
-    
-    avg_pts = float(df["team_pts"].mean())
-    avg_fga = float(df["team_fga"].mean())
-    avg_fta = float(df["team_fta"].mean())
-    avg_tov = float(df["team_tov"].mean())
-    avg_oreb = float(df["team_oreb"].mean())
-    
-    possessions = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
-    
-    if possessions <= 0:
         return 110.0
-    
-    return (avg_pts / possessions) * 100
+    poss = float(df["team_fga"].mean()) - float(df["team_oreb"].mean()) + \
+           float(df["team_tov"].mean()) + 0.44 * float(df["team_fta"].mean())
+    return (float(df["team_pts"].mean()) / poss * 100) if poss > 0 else 110.0
 
 
 def get_defensive_rating(team_id: int) -> float:
     """
-    Calculate team's defensive rating (opponent points per 100 possessions).
-    Lower = better defense.  Uses opponent stats from the last 20 games.
+    Get team defensive rating (opponent pts per 100 possessions).
+    Lower = better defense.
+    Prefers official metrics; falls back to hand-calculated.
     """
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        for key in ("e_def_rating", "def_rating"):
+            val = metrics.get(key)
+            if val is not None:
+                return float(val)
+
     with get_conn() as conn:
         df = pd.read_sql(
             """
-            SELECT 
-                ps.game_date,
-                SUM(ps.points) as opp_pts,
-                SUM(ps.fg_attempted) as opp_fga,
-                SUM(ps.ft_attempted) as opp_fta,
-                SUM(ps.turnovers) as opp_tov,
-                SUM(ps.oreb) as opp_oreb
+            SELECT ps.game_date,
+                   SUM(ps.points) as opp_pts,
+                   SUM(ps.fg_attempted) as opp_fga,
+                   SUM(ps.ft_attempted) as opp_fta,
+                   SUM(ps.turnovers) as opp_tov,
+                   SUM(ps.oreb) as opp_oreb
             FROM player_stats ps
             WHERE ps.opponent_team_id = ?
             GROUP BY ps.game_date
             ORDER BY ps.game_date DESC
             LIMIT 20
             """,
-            conn,
-            params=[team_id],
+            conn, params=[team_id],
         )
-    
     if df.empty:
-        return 110.0  # league average fallback
-    
-    avg_pts = float(df["opp_pts"].mean())
-    avg_fga = float(df["opp_fga"].mean())
-    avg_fta = float(df["opp_fta"].mean())
-    avg_tov = float(df["opp_tov"].mean())
-    avg_oreb = float(df["opp_oreb"].mean())
-    
-    possessions = avg_fga - avg_oreb + avg_tov + 0.44 * avg_fta
-    
-    if possessions <= 0:
         return 110.0
-    
-    return (avg_pts / possessions) * 100
+    poss = float(df["opp_fga"].mean()) - float(df["opp_oreb"].mean()) + \
+           float(df["opp_tov"].mean()) + 0.44 * float(df["opp_fta"].mean())
+    return (float(df["opp_pts"].mean()) / poss * 100) if poss > 0 else 110.0
+
+
+def get_pace(team_id: int) -> float:
+    """Get team pace (possessions per game). Prefers official metrics."""
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        for key in ("e_pace", "pace"):
+            val = metrics.get(key)
+            if val is not None:
+                return float(val)
+    return 98.0  # league average fallback
 
 
 def get_opponent_defensive_factor(team_id: int) -> float:
     """
-    Returns a scaling factor for how well opponents are held defensively.
-    < 1.0 = good defense (opponents score less against this team)
-    > 1.0 = bad defense (opponents score more against this team)
-    Centered at 1.0 (league average).
+    Scaling factor for how well opponents defend.
+    < 1.0 = good defense, > 1.0 = bad defense.
+    Prefers official opponent stats from team_metrics.
     """
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        opp_pts = metrics.get("opp_pts")
+        if opp_pts is not None:
+            # Use league average of ~112-114 PPG as baseline
+            league_avg = _get_league_avg_ppg()
+            return float(opp_pts) / league_avg if league_avg > 0 else 1.0
+
+    # Fallback: compute from game data
     with get_conn() as conn:
-        # Average points scored against this team per game
         opp_row = conn.execute(
             """
             SELECT AVG(game_total) as avg_opp_pts FROM (
                 SELECT game_date, SUM(points) as game_total
-                FROM player_stats
-                WHERE opponent_team_id = ?
+                FROM player_stats WHERE opponent_team_id = ?
                 GROUP BY game_date
             )
             """,
             (team_id,),
         ).fetchone()
-        
-        # League-wide average points per team per game
         league_row = conn.execute(
             """
             SELECT AVG(game_total) as league_avg FROM (
@@ -863,61 +936,226 @@ def get_opponent_defensive_factor(team_id: int) -> float:
             )
             """,
         ).fetchone()
-    
+
     if not opp_row or not opp_row[0]:
         return 1.0
-    
-    avg_opp_pts = float(opp_row[0])
+    avg_opp = float(opp_row[0])
     league_avg = float(league_row[0]) if league_row and league_row[0] else 112.0
-    
-    if league_avg <= 0:
-        return 1.0
-    
-    return avg_opp_pts / league_avg
+    return avg_opp / league_avg if league_avg > 0 else 1.0
+
+
+def _get_league_avg_ppg() -> float:
+    """Helper to compute current league average PPG."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT AVG(game_total) FROM (
+                SELECT game_date, opponent_team_id, SUM(points) as game_total
+                FROM player_stats
+                GROUP BY game_date, opponent_team_id
+            )
+            """
+        ).fetchone()
+    return float(row[0]) if row and row[0] else 112.0
 
 
 def get_home_court_advantage(team_id: int) -> float:
     """
-    Calculate team-specific home court advantage from historical scoring.
-    Returns the expected point boost for playing at home (clamped to [1.5, 5.0]).
+    Team-specific home court advantage in points.
+    Prefers official home/road splits from team_metrics.
+    Clamped to [1.5, 5.0].
+    """
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        home_pts = metrics.get("home_pts")
+        road_pts = metrics.get("road_pts")
+        if home_pts is not None and road_pts is not None:
+            hca = float(home_pts) - float(road_pts)
+            return max(1.5, min(5.0, hca))
+
+    # Fallback: compute from player game logs
+    with get_conn() as conn:
+        home_df = pd.read_sql(
+            "SELECT ps.game_date, SUM(ps.points) as team_pts "
+            "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+            "WHERE p.team_id = ? AND ps.is_home = 1 GROUP BY ps.game_date",
+            conn, params=[team_id],
+        )
+        away_df = pd.read_sql(
+            "SELECT ps.game_date, SUM(ps.points) as team_pts "
+            "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+            "WHERE p.team_id = ? AND ps.is_home = 0 GROUP BY ps.game_date",
+            conn, params=[team_id],
+        )
+    if home_df.empty or away_df.empty:
+        return 3.0
+    hca = float(home_df["team_pts"].mean()) - float(away_df["team_pts"].mean())
+    return max(1.5, min(5.0, hca))
+
+
+def get_four_factors(team_id: int) -> Dict[str, Optional[float]]:
+    """
+    Get the Four Factors of basketball success for a team.
+    Returns team's own factors AND opponent's (defensive forcing).
+    """
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        return {
+            "efg_pct": metrics.get("ff_efg_pct"),
+            "fta_rate": metrics.get("ff_fta_rate"),
+            "tm_tov_pct": metrics.get("ff_tm_tov_pct"),
+            "oreb_pct": metrics.get("ff_oreb_pct"),
+            "opp_efg_pct": metrics.get("opp_efg_pct"),
+            "opp_fta_rate": metrics.get("opp_fta_rate"),
+            "opp_tm_tov_pct": metrics.get("opp_tm_tov_pct"),
+            "opp_oreb_pct": metrics.get("opp_oreb_pct"),
+        }
+    return {k: None for k in [
+        "efg_pct", "fta_rate", "tm_tov_pct", "oreb_pct",
+        "opp_efg_pct", "opp_fta_rate", "opp_tm_tov_pct", "opp_oreb_pct",
+    ]}
+
+
+def get_clutch_stats(team_id: int) -> Dict[str, Optional[float]]:
+    """Get clutch performance metrics for a team."""
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        return {
+            "clutch_gp": metrics.get("clutch_gp"),
+            "clutch_w": metrics.get("clutch_w"),
+            "clutch_l": metrics.get("clutch_l"),
+            "clutch_net_rating": metrics.get("clutch_net_rating"),
+            "clutch_efg_pct": metrics.get("clutch_efg_pct"),
+            "clutch_ts_pct": metrics.get("clutch_ts_pct"),
+        }
+    return {k: None for k in [
+        "clutch_gp", "clutch_w", "clutch_l",
+        "clutch_net_rating", "clutch_efg_pct", "clutch_ts_pct",
+    ]}
+
+
+def get_hustle_stats(team_id: int) -> Dict[str, Optional[float]]:
+    """Get hustle stats for a team."""
+    metrics = get_team_metrics(team_id)
+    if metrics:
+        return {
+            "deflections": metrics.get("deflections"),
+            "loose_balls_recovered": metrics.get("loose_balls_recovered"),
+            "contested_shots": metrics.get("contested_shots"),
+            "charges_drawn": metrics.get("charges_drawn"),
+            "screen_assists": metrics.get("screen_assists"),
+        }
+    return {k: None for k in [
+        "deflections", "loose_balls_recovered", "contested_shots",
+        "charges_drawn", "screen_assists",
+    ]}
+
+
+# ============ SCHEDULE INTELLIGENCE (fatigue / rest) ============
+
+
+def get_team_schedule_dates(team_id: int, around_date: Optional[date] = None) -> List[date]:
+    """
+    Get a team's game dates from player_stats (past games) ordered ascending.
+    Optionally filter to a window around a given date.
     """
     with get_conn() as conn:
-        # Team scoring at home (game-level totals)
-        home_df = pd.read_sql(
-            """
-            SELECT ps.game_date, SUM(ps.points) as team_pts
-            FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.is_home = 1
-            GROUP BY ps.game_date
-            """,
-            conn,
-            params=[team_id],
-        )
-        # Team scoring away
-        away_df = pd.read_sql(
-            """
-            SELECT ps.game_date, SUM(ps.points) as team_pts
-            FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.is_home = 0
-            GROUP BY ps.game_date
-            """,
-            conn,
-            params=[team_id],
-        )
+        if around_date:
+            window_start = around_date - timedelta(days=7)
+            window_end = around_date + timedelta(days=1)
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ps.game_date FROM player_stats ps
+                JOIN players p ON p.player_id = ps.player_id
+                WHERE p.team_id = ? AND ps.game_date BETWEEN ? AND ?
+                ORDER BY ps.game_date
+                """,
+                (team_id, str(window_start), str(window_end)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ps.game_date FROM player_stats ps
+                JOIN players p ON p.player_id = ps.player_id
+                WHERE p.team_id = ?
+                ORDER BY ps.game_date
+                """,
+                (team_id,),
+            ).fetchall()
     
-    if home_df.empty or away_df.empty:
-        return 3.0  # league average fallback
-    
-    home_ppg = float(home_df["team_pts"].mean())
-    away_ppg = float(away_df["team_pts"].mean())
-    
-    # HCA = how many more points team scores at home vs away
-    hca = home_ppg - away_ppg
-    
-    # Clamp to reasonable range
-    return max(1.5, min(5.0, hca))
+    result = []
+    for (d,) in rows:
+        if isinstance(d, str):
+            try:
+                result.append(date.fromisoformat(d))
+            except ValueError:
+                pass
+        elif isinstance(d, date):
+            result.append(d)
+    return result
+
+
+def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
+    """
+    Auto-detect fatigue factors for a team on a given date.
+
+    Returns dict with:
+    - is_back_to_back: bool
+    - is_3_in_4: bool (3 games in 4 days including this one)
+    - is_4_in_6: bool
+    - rest_days: int (days since last game, 0 = B2B)
+    - fatigue_penalty: float (total points penalty to apply)
+    """
+    game_dates = get_team_schedule_dates(team_id, around_date=game_date)
+
+    # Convert game_date to date if needed
+    if isinstance(game_date, str):
+        game_date = date.fromisoformat(game_date)
+
+    # Filter to games before this date
+    prior = [d for d in game_dates if d < game_date]
+
+    result = {
+        "is_back_to_back": False,
+        "is_3_in_4": False,
+        "is_4_in_6": False,
+        "rest_days": 99,  # default: well rested
+        "fatigue_penalty": 0.0,
+    }
+
+    if not prior:
+        return result
+
+    last_game = prior[-1]
+    rest_days = (game_date - last_game).days
+    result["rest_days"] = rest_days
+
+    # Back-to-back: played yesterday
+    result["is_back_to_back"] = rest_days == 1
+
+    # 3-in-4: including today, 3 games in a 4-day window
+    window_4 = game_date - timedelta(days=3)
+    games_in_4 = sum(1 for d in prior if d >= window_4) + 1  # +1 for today
+    result["is_3_in_4"] = games_in_4 >= 3
+
+    # 4-in-6: including today, 4 games in a 6-day window
+    window_6 = game_date - timedelta(days=5)
+    games_in_6 = sum(1 for d in prior if d >= window_6) + 1
+    result["is_4_in_6"] = games_in_6 >= 4
+
+    # Calculate graduated fatigue penalty
+    penalty = 0.0
+    if result["is_back_to_back"]:
+        penalty += 2.0  # B2B penalty
+    if result["is_3_in_4"]:
+        penalty += 1.0  # Cumulative fatigue
+    if result["is_4_in_6"]:
+        penalty += 1.5  # Heavy schedule
+    elif rest_days == 0:
+        penalty += 3.0  # Same-day (rare, doubleheader scenario)
+
+    result["fatigue_penalty"] = penalty
+    return result
 
 
 def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:

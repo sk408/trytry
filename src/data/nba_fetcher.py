@@ -108,15 +108,26 @@ def fetch_players(
         roster_df = _fetch_team_roster(commonteamroster, tid, season, progress)
         if roster_df is None or roster_df.empty:
             continue
-        rows.extend(
-            {
+        for r in roster_df.itertuples(index=False):
+            row = {
                 "id": int(r.PLAYER_ID),
                 "full_name": str(r.PLAYER),
                 "team_id": int(tid),
                 "position": str(r.POSITION or ""),
+                "height": str(getattr(r, "HEIGHT", "") or ""),
+                "weight": str(getattr(r, "WEIGHT", "") or ""),
+                "age": int(getattr(r, "AGE", 0) or 0) or None,
+                "experience": None,
             }
-            for r in roster_df.itertuples(index=False)
-        )
+            exp_val = getattr(r, "EXP", None)
+            if exp_val is not None and str(exp_val).strip().upper() != "R":
+                try:
+                    row["experience"] = int(exp_val)
+                except (ValueError, TypeError):
+                    row["experience"] = 0
+            elif exp_val is not None:
+                row["experience"] = 0  # Rookie
+            rows.append(row)
         if sleep_between > 0:
             time.sleep(sleep_between)
 
@@ -127,7 +138,7 @@ def fetch_players(
         return pd.DataFrame(players)[["id", "full_name"]].assign(team_id=None, position=None)
 
     progress(f"Rosters aggregated: {len(rows)} players")
-    return pd.DataFrame(rows)[["id", "full_name", "team_id", "position"]]
+    return pd.DataFrame(rows)[["id", "full_name", "team_id", "position", "height", "weight", "age", "experience"]]
 
 
 def _fetch_team_roster(commonteamroster, team_id: int, season: str, progress: Callable[[str], None]):
@@ -141,7 +152,12 @@ def _fetch_team_roster(commonteamroster, team_id: int, season: str, progress: Ca
                 progress(f"Team {team_id} roster bytes ~{len(str(raw).encode('utf-8'))}")
             except Exception:
                 pass
-            return df[["PLAYER_ID", "PLAYER", "POSITION"]]
+            # Return extended roster columns: include height, weight, age, experience
+            keep_cols = ["PLAYER_ID", "PLAYER", "POSITION"]
+            for col in ["HEIGHT", "WEIGHT", "AGE", "EXP"]:
+                if col in df.columns:
+                    keep_cols.append(col)
+            return df[keep_cols]
         except Exception as exc:
             progress(f"Team {team_id} roster attempt {attempt+1}/3 failed: {exc}")
             # brief backoff before next attempt
@@ -193,6 +209,9 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
         "DREB",
         # Impact
         "PLUS_MINUS",
+        # Game result and fouls
+        "WL",
+        "PF",
     ]
     
     # Only use columns that exist in the response
@@ -225,6 +244,8 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
         "GAME_DATE": "game_date",
         "IS_HOME": "is_home",
         "OPP_TEAM_ABBR": "opponent_abbr",
+        "WL": "win_loss",
+        "PF": "personal_fouls",
     }
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     
@@ -236,6 +257,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
         ("ft_made", 0), ("ft_attempted", 0),
         ("oreb", 0), ("dreb", 0), ("plus_minus", 0),
         ("game_id", ""),
+        ("win_loss", None), ("personal_fouls", 0),
     ]:
         if col not in df.columns:
             df[col] = default
@@ -436,3 +458,195 @@ def fetch_schedule(
         combined = combined.sort_values("game_date", ascending=False)
     
     return combined
+
+
+# ============ NEW ADVANCED METRIC FETCHERS ============
+
+
+def _safe_float(val, default=None):
+    """Safely convert a value to float, returning default on failure."""
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        return f if pd.notna(f) else default
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(val, default=0):
+    """Safely convert a value to int, returning default on failure."""
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def fetch_team_estimated_metrics(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch NBA's official estimated team metrics (off/def rating, pace, etc.).
+    Uses TeamEstimatedMetrics endpoint.  One API call for all teams.
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import teamestimatedmetrics
+        progress("Fetching TeamEstimatedMetrics...")
+        resp = teamestimatedmetrics.TeamEstimatedMetrics(
+            season=season, timeout=30
+        )
+        df = resp.get_data_frames()[0]
+        progress(f"  Got estimated metrics for {len(df)} teams")
+        return df
+    except Exception as exc:
+        progress(f"TeamEstimatedMetrics failed: {exc}")
+        return pd.DataFrame()
+
+
+def fetch_league_dash_team_stats(
+    season: Optional[str] = None,
+    measure_type: str = "Base",
+    location: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch team stats from LeagueDashTeamStats with flexible measure type and filters.
+
+    measure_type: 'Base', 'Advanced', 'Four Factors', 'Opponent'
+    location: None (all), 'Home', 'Road'
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import leaguedashteamstats
+        label = f"LeagueDashTeamStats({measure_type}"
+        if location:
+            label += f", {location}"
+        label += ")"
+        progress(f"Fetching {label}...")
+
+        kwargs = dict(
+            season=season,
+            measure_type_detailed_defense=measure_type,
+            per_mode_detailed="PerGame",
+            timeout=30,
+        )
+        if location:
+            kwargs["location_nullable"] = location
+
+        resp = leaguedashteamstats.LeagueDashTeamStats(**kwargs)
+        df = resp.get_data_frames()[0]
+        progress(f"  Got {label}: {len(df)} teams")
+        return df
+    except Exception as exc:
+        progress(f"LeagueDashTeamStats({measure_type}) failed: {exc}")
+        return pd.DataFrame()
+
+
+def fetch_team_clutch_stats(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch clutch team stats (last 5 min, score within 5) with advanced metrics.
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import leaguedashteamclutch
+        progress("Fetching LeagueDashTeamClutch (Advanced)...")
+        resp = leaguedashteamclutch.LeagueDashTeamClutch(
+            season=season,
+            measure_type_detailed_defense="Advanced",
+            clutch_time_nullable="Last 5 Minutes",
+            ahead_behind_nullable="Ahead or Behind",
+            point_diff_nullable=5,
+            per_mode_detailed="PerGame",
+            timeout=30,
+        )
+        df = resp.get_data_frames()[0]
+        progress(f"  Got clutch stats for {len(df)} teams")
+        return df
+    except Exception as exc:
+        progress(f"LeagueDashTeamClutch failed: {exc}")
+        return pd.DataFrame()
+
+
+def fetch_team_hustle_stats(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch hustle stats (deflections, contested shots, loose balls, etc.).
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import leaguehustlestatsteam
+        progress("Fetching LeagueHustleStatsTeam...")
+        resp = leaguehustlestatsteam.LeagueHustleStatsTeam(
+            season=season, per_mode_time="PerGame", timeout=30,
+        )
+        df = resp.get_data_frames()[0]
+        progress(f"  Got hustle stats for {len(df)} teams")
+        return df
+    except Exception as exc:
+        progress(f"LeagueHustleStatsTeam failed: {exc}")
+        return pd.DataFrame()
+
+
+def fetch_player_on_off(
+    team_id: int,
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Fetch player on/off court impact for a specific team.
+    Returns (on_court_df, off_court_df).
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import teamplayeronoffsummary
+        resp = teamplayeronoffsummary.TeamPlayerOnOffSummary(
+            team_id=team_id, season=season,
+            measure_type_detailed_defense="Advanced",
+            per_mode_detailed="PerGame",
+            timeout=30,
+        )
+        frames = resp.get_data_frames()
+        on_court = frames[0] if len(frames) > 0 else pd.DataFrame()
+        off_court = frames[1] if len(frames) > 1 else pd.DataFrame()
+        return on_court, off_court
+    except Exception as exc:
+        progress(f"TeamPlayerOnOffSummary(team={team_id}) failed: {exc}")
+        return pd.DataFrame(), pd.DataFrame()
+
+
+def fetch_player_estimated_metrics(
+    season: Optional[str] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch NBA's official estimated player metrics (USG%, off/def rating, etc.).
+    One API call for all players.
+    """
+    season = season or get_current_season()
+    progress = progress_cb or (lambda _: None)
+    try:
+        from nba_api.stats.endpoints import playerestimatedmetrics
+        progress("Fetching PlayerEstimatedMetrics...")
+        resp = playerestimatedmetrics.PlayerEstimatedMetrics(
+            season=season, timeout=30
+        )
+        df = resp.get_data_frames()[0]
+        progress(f"  Got estimated metrics for {len(df)} players")
+        return df
+    except Exception as exc:
+        progress(f"PlayerEstimatedMetrics failed: {exc}")
+        return pd.DataFrame()
