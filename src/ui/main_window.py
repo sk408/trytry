@@ -2,9 +2,18 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QMainWindow, QStatusBar, QTabWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStatusBar,
+    QTabWidget,
+    QWidget,
+)
 
 from src.database import migrations
 from src.ui.accuracy_view import AccuracyView
@@ -310,10 +319,15 @@ QFormLayout { spacing: 8px; }
 
 
 class MainWindow(QMainWindow):
+    """Main application window with thread registry and graceful shutdown."""
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("NBA Betting Analytics")
         self.resize(1280, 860)
+
+        # Active thread registry for graceful shutdown
+        self._active_threads: set[QThread] = set()
 
         self.tabs = QTabWidget()
 
@@ -335,15 +349,72 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.tabs)
 
-        # Status bar
+        # Status bar with Exit button
         sb = QStatusBar()
         sb.showMessage("Ready")
+        exit_btn = QPushButton("Exit App")
+        exit_btn.setProperty("cssClass", "danger")
+        exit_btn.setFixedWidth(90)
+        exit_btn.clicked.connect(self.close)  # type: ignore
+        sb.addPermanentWidget(exit_btn)
         self.setStatusBar(sb)
+
+    # ── Thread registry ──
+
+    def register_thread(self, thread: QThread) -> None:
+        """Register a background thread for shutdown tracking."""
+        self._active_threads.add(thread)
+        thread.finished.connect(lambda t=thread: self._active_threads.discard(t))  # type: ignore
+
+    def unregister_thread(self, thread: QThread) -> None:
+        self._active_threads.discard(thread)
+
+    # ── Navigation ──
 
     def _on_schedule_game_selected(self, home_team_id: int, away_team_id: int) -> None:
         """When a game is selected in the schedule, switch to matchup tab and load it."""
         self.tabs.setCurrentWidget(self.matchup_view)
         self.matchup_view.load_game(home_team_id, away_team_id)
+
+    # ── Graceful shutdown ──
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        """Flush caches, stop threads, and quit gracefully."""
+        running = [t for t in self._active_threads if t.isRunning()]
+        if running:
+            reply = QMessageBox.question(
+                self,
+                "Background Tasks Running",
+                f"{len(running)} background task(s) are still running.\n"
+                "Exit anyway? (tasks will be stopped)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+
+        # Stop all running threads
+        for t in running:
+            t.quit()
+            t.wait(5000)  # 5 second timeout
+
+        # Flush in-memory store
+        try:
+            from src.analytics.memory_store import get_memory_store
+            get_memory_store().flush()
+        except Exception:
+            pass
+
+        # Clear module-level caches
+        try:
+            from src.analytics.backtester import clear_advanced_profile_cache
+            clear_advanced_profile_cache()
+        except Exception:
+            pass
+
+        event.accept()
+        QApplication.quit()
 
 
 def run_app() -> None:

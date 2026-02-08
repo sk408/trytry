@@ -165,6 +165,7 @@ class OptimiserResult:
 def run_weight_optimiser(
     n_trials: int = 200,
     progress_cb: Optional[Callable[[str], None]] = None,
+    precomputed_games: Optional[List[PrecomputedGame]] = None,
 ) -> OptimiserResult:
     """Optimise prediction weights.
 
@@ -178,6 +179,7 @@ def run_weight_optimiser(
     Args:
         n_trials: Number of configurations to evaluate.
         progress_cb: Optional progress callback.
+        precomputed_games: Optional pre-built list; skips Phase 1 if provided.
 
     Returns:
         OptimiserResult with the best config and metrics.
@@ -185,8 +187,12 @@ def run_weight_optimiser(
     progress = progress_cb or (lambda _: None)
 
     # ── Phase 1: Precompute all game data (one-time DB cost) ──
-    progress("Phase 1/2: Precomputing game data (one-time DB read)...")
-    games = precompute_game_data(progress_cb=progress)
+    if precomputed_games is not None:
+        games = precomputed_games
+        progress(f"Using {len(games)} pre-supplied precomputed games")
+    else:
+        progress("Phase 1/2: Precomputing game data (one-time DB read)...")
+        games = precompute_game_data(progress_cb=progress)
     if not games:
         progress("No games found for optimisation")
         return OptimiserResult(
@@ -388,6 +394,7 @@ def run_per_team_refinement(
     holdout_games: int = 5,
     max_worse_pct: float = 30.0,
     progress_cb: Optional[Callable[[str], None]] = None,
+    precomputed_games: Optional[List[PrecomputedGame]] = None,
 ) -> List[TeamRefinementResult]:
     """Optimise weights per-team with regressive validation.
 
@@ -405,6 +412,7 @@ def run_per_team_refinement(
         max_worse_pct: If per-team holdout loss is this % worse than global
                        on the holdout, discard per-team weights.
         progress_cb: Optional progress callback.
+        precomputed_games: Optional pre-built list; skips Phase 1 if provided.
 
     Returns:
         List of ``TeamRefinementResult`` (one per team with enough data).
@@ -412,8 +420,12 @@ def run_per_team_refinement(
     progress = progress_cb or (lambda _: None)
 
     # ── Phase 1: Precompute all game data ──
-    progress("Phase 1/3: Precomputing game data...")
-    all_games = precompute_game_data(progress_cb=progress)
+    if precomputed_games is not None:
+        all_games = precomputed_games
+        progress(f"Using {len(all_games)} pre-supplied precomputed games")
+    else:
+        progress("Phase 1/3: Precomputing game data...")
+        all_games = precompute_game_data(progress_cb=progress)
     if not all_games:
         progress("No games found")
         return []
@@ -1071,3 +1083,81 @@ def run_fft_error_analysis(
         progress("No significant periodic error patterns detected (good — errors are random)")
 
     return patterns
+
+
+# -----------------------------------------------------------------------
+# Combo: Global + Per-Team optimisation in one pass
+# -----------------------------------------------------------------------
+
+@dataclass
+class ComboOptimiserResult:
+    """Combined results from global + per-team optimisation."""
+    global_result: OptimiserResult
+    team_results: List[TeamRefinementResult]
+    total_seconds: float = 0.0
+
+
+def run_combo_optimiser(
+    n_trials: int = 200,
+    team_trials: int = 100,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> ComboOptimiserResult:
+    """Run global weight optimisation followed by per-team refinement.
+
+    Precomputes game data once and shares it across both phases for
+    maximum speed.
+
+    Args:
+        n_trials: Trials for the global optimiser.
+        team_trials: Trials per team for refinement.
+        progress_cb: Optional progress callback.
+
+    Returns:
+        ComboOptimiserResult with both sets of results.
+    """
+    import time as _time
+    t0 = _time.perf_counter()
+    progress = progress_cb or (lambda _: None)
+
+    # ── Phase 1: Precompute once ──
+    progress("[Combo 1/3] Precomputing game data (shared)...")
+    games = precompute_game_data(progress_cb=progress)
+    if not games:
+        progress("No games found — aborting")
+        return ComboOptimiserResult(
+            global_result=OptimiserResult(
+                best_config=WeightConfig(), best_loss=999.0,
+                baseline_loss=999.0, trials_run=0, improvement_pct=0.0,
+            ),
+            team_results=[],
+        )
+
+    # ── Phase 2: Global optimisation ──
+    progress(f"[Combo 2/3] Global optimisation ({n_trials} trials)...")
+    global_result = run_weight_optimiser(
+        n_trials=n_trials,
+        progress_cb=progress,
+        precomputed_games=games,
+    )
+
+    # ── Phase 3: Per-team refinement ──
+    progress(f"[Combo 3/3] Per-team refinement ({team_trials} trials/team)...")
+    team_results = run_per_team_refinement(
+        n_trials=team_trials,
+        progress_cb=progress,
+        precomputed_games=games,
+    )
+
+    elapsed = _time.perf_counter() - t0
+    adopted = sum(1 for r in team_results if r.used_team_weights)
+    progress(
+        f"Combo complete in {elapsed:.0f}s — "
+        f"global improved {global_result.improvement_pct:+.1f}%, "
+        f"{adopted}/{len(team_results)} teams got custom weights"
+    )
+
+    return ComboOptimiserResult(
+        global_result=global_result,
+        team_results=team_results,
+        total_seconds=elapsed,
+    )

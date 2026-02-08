@@ -24,12 +24,14 @@ from src.analytics.backtester import BacktestResults, run_backtest, get_actual_g
 from src.analytics.weight_optimizer import (
     run_weight_optimiser,
     run_per_team_refinement,
+    run_combo_optimiser,
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
     run_ml_feature_importance,
     run_fft_error_analysis,
 )
+from src.analytics.pipeline import run_full_pipeline
 from src.analytics.weight_config import (
     get_weight_config,
     clear_weights,
@@ -1230,6 +1232,141 @@ async def stream_team_refinement(trials: int = 100) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# --- Pipeline cancel flag (shared across requests) ---
+_pipeline_cancel_flag = threading.Event()
+
+
+@app.get("/api/optimize-all")
+async def stream_optimize_all(trials: int = 200) -> StreamingResponse:
+    """Stream combo optimisation (global + per-team) via SSE."""
+    n_trials = max(50, min(2000, trials))
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_combo() -> None:
+            try:
+                result = run_combo_optimiser(
+                    n_trials=n_trials,
+                    team_trials=n_trials,
+                    progress_cb=progress_cb,
+                )
+                gr = result.global_result
+                adopted = sum(1 for r in result.team_results if r.used_team_weights)
+                msg_queue.put(
+                    f"[RESULT] global_baseline={gr.baseline_loss:.2f},"
+                    f"global_best={gr.best_loss:.2f},"
+                    f"improvement={gr.improvement_pct:+.1f}%,"
+                    f"teams_refined={adopted}/{len(result.team_results)},"
+                    f"seconds={result.total_seconds:.0f}"
+                )
+                for r in result.team_results:
+                    msg_queue.put(
+                        f"[TEAM] abbr={r.team_abbr},"
+                        f"used_team={str(r.used_team_weights).lower()},"
+                        f"global_holdout={r.global_loss_recent:.2f},"
+                        f"team_holdout={r.team_loss_recent:.2f}"
+                    )
+                msg_queue.put("[DONE] Combo optimisation complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_combo, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/full-pipeline")
+async def stream_full_pipeline(
+    trials: int = 200,
+    max_workers: int = 4,
+    force_rerun: str = "0",
+) -> StreamingResponse:
+    """Stream the full optimisation pipeline via SSE."""
+    n_trials = max(50, min(2000, trials))
+    n_workers = max(1, min(16, max_workers))
+    force = force_rerun.lower() in {"1", "true", "yes"}
+
+    _pipeline_cancel_flag.clear()
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_pipe() -> None:
+            try:
+                summary = run_full_pipeline(
+                    n_trials=n_trials,
+                    team_trials=n_trials,
+                    max_workers=n_workers,
+                    progress_cb=progress_cb,
+                    cancel_check=_pipeline_cancel_flag.is_set,
+                    force_rerun=force,
+                )
+                total_s = summary.get("total_seconds", 0)
+                msg_queue.put(f"[RESULT] total_seconds={total_s:.0f}")
+                for name, info in summary.get("steps", {}).items():
+                    status = info.get("status", "?")
+                    secs = info.get("seconds", 0)
+                    msg_queue.put(f"[STEP] name={name},status={status},seconds={secs:.1f}")
+                if summary.get("cancelled"):
+                    msg_queue.put("[DONE] Pipeline cancelled by user")
+                else:
+                    msg_queue.put(f"[DONE] Full pipeline complete in {total_s:.0f}s")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_pipe, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/pipeline/cancel")
+async def api_pipeline_cancel() -> dict:
+    """Set the cancel flag for the running pipeline."""
+    _pipeline_cancel_flag.set()
+    return {"status": "ok", "message": "Cancel signal sent"}
 
 
 @app.post("/api/weights/clear")

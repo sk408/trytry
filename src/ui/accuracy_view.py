@@ -28,17 +28,20 @@ from src.analytics.backtester import (
 from src.analytics.weight_optimizer import (
     run_weight_optimiser,
     run_per_team_refinement,
+    run_combo_optimiser,
     build_residual_calibration,
     load_residual_calibration,
     run_feature_importance,
     run_ml_feature_importance,
     run_fft_error_analysis,
     OptimiserResult,
+    ComboOptimiserResult,
     TeamRefinementResult,
     FeatureImportance,
     MLFeatureImportance,
     FFTPattern,
 )
+from src.analytics.pipeline import run_full_pipeline
 from src.analytics.weight_config import get_weight_config, clear_weights, clear_team_weights
 from src.database.db import get_conn
 
@@ -168,6 +171,70 @@ class TeamRefineWorker(QObject):
             result = run_per_team_refinement(
                 n_trials=self.n_trials,
                 progress_cb=self.progress.emit,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class ComboOptimiserWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # ComboOptimiserResult
+    error = Signal(str)
+
+    def __init__(self, n_trials: int = 200, team_trials: int = 100):
+        super().__init__()
+        self.n_trials = n_trials
+        self.team_trials = team_trials
+
+    def run(self) -> None:
+        try:
+            result = run_combo_optimiser(
+                n_trials=self.n_trials,
+                team_trials=self.team_trials,
+                progress_cb=self.progress.emit,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class FullPipelineWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # dict summary
+    error = Signal(str)
+
+    def __init__(
+        self,
+        n_trials: int = 200,
+        team_trials: int = 100,
+        autotune_strength: float = 0.75,
+        max_workers: int = 4,
+        force_rerun: bool = False,
+    ):
+        super().__init__()
+        self.n_trials = n_trials
+        self.team_trials = team_trials
+        self.autotune_strength = autotune_strength
+        self.max_workers = max_workers
+        self.force_rerun = force_rerun
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            result = run_full_pipeline(
+                n_trials=self.n_trials,
+                team_trials=self.team_trials,
+                autotune_strength=self.autotune_strength,
+                max_workers=self.max_workers,
+                progress_cb=self.progress.emit,
+                cancel_check=lambda: self._cancel,
+                force_rerun=self.force_rerun,
             )
             self.finished.emit(result)
         except Exception as exc:
@@ -322,6 +389,35 @@ class AccuracyView(QWidget):
         )
         self.fft_btn.clicked.connect(self._run_fft_analysis)  # type: ignore[arg-type]
 
+        self.combo_opt_btn = QPushButton("  Optimize All")
+        self.combo_opt_btn.setProperty("cssClass", "primary")
+        self.combo_opt_btn.setToolTip(
+            "Run global weight optimisation THEN per-team refinement\n"
+            "in a single pass with shared precomputed data."
+        )
+        self.combo_opt_btn.clicked.connect(self._run_combo_optimiser)  # type: ignore[arg-type]
+
+        self.pipeline_btn = QPushButton("  Full Pipeline")
+        self.pipeline_btn.setProperty("cssClass", "primary")
+        self.pipeline_btn.setToolTip(
+            "Run EVERYTHING: sync, injury history, autotune, global optimisation,\n"
+            "per-team refinement, calibration, and validation backtest.\n"
+            "Skips steps if data hasn't changed since last run."
+        )
+        self.pipeline_btn.clicked.connect(self._run_full_pipeline)  # type: ignore[arg-type]
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setProperty("cssClass", "danger")
+        self.cancel_btn.setToolTip("Cancel the currently running pipeline")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._cancel_pipeline)  # type: ignore[arg-type]
+
+        self.force_rerun_checkbox = QCheckBox("Force re-run")
+        self.force_rerun_checkbox.setToolTip(
+            "Bypass smart caching — re-run all steps\n"
+            "even if data hasn't changed."
+        )
+
         # Feature importance / calibration results table
         self.results_table = QTableWidget()
         self.results_table.setAlternatingRowColors(True)
@@ -380,18 +476,32 @@ class AccuracyView(QWidget):
 
         # ──── Model optimisation section ────
         opt_box = QGroupBox("Model Optimisation")
-        opt_top = QHBoxLayout()
-        opt_top.addWidget(self.optimise_btn)
-        opt_top.addWidget(QLabel("Trials:"))
-        opt_top.addWidget(self.trials_spin)
-        opt_top.addWidget(self.calibrate_btn)
-        opt_top.addWidget(self.feature_btn)
-        opt_top.addWidget(self.ml_feature_btn)
-        opt_top.addWidget(self.team_refine_btn)
-        opt_top.addWidget(self.fft_btn)
-        opt_top.addWidget(self.clear_weights_btn)
-        opt_top.addStretch()
-        opt_box.setLayout(opt_top)
+        opt_layout = QVBoxLayout()
+
+        # Row 1: Main optimisation buttons
+        opt_row1 = QHBoxLayout()
+        opt_row1.addWidget(self.optimise_btn)
+        opt_row1.addWidget(self.team_refine_btn)
+        opt_row1.addWidget(self.combo_opt_btn)
+        opt_row1.addWidget(QLabel("Trials:"))
+        opt_row1.addWidget(self.trials_spin)
+        opt_row1.addWidget(self.clear_weights_btn)
+        opt_row1.addStretch()
+
+        # Row 2: Pipeline + analysis buttons
+        opt_row2 = QHBoxLayout()
+        opt_row2.addWidget(self.pipeline_btn)
+        opt_row2.addWidget(self.cancel_btn)
+        opt_row2.addWidget(self.force_rerun_checkbox)
+        opt_row2.addWidget(self.calibrate_btn)
+        opt_row2.addWidget(self.feature_btn)
+        opt_row2.addWidget(self.ml_feature_btn)
+        opt_row2.addWidget(self.fft_btn)
+        opt_row2.addStretch()
+
+        opt_layout.addLayout(opt_row1)
+        opt_layout.addLayout(opt_row2)
+        opt_box.setLayout(opt_layout)
         
         # Team accuracy box
         team_box = QGroupBox("Accuracy by Team")
@@ -783,6 +893,127 @@ class AccuracyView(QWidget):
             self._thread.quit()
             self._thread.wait()
 
+    # ──── Combo optimiser ────
+
+    def _run_combo_optimiser(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Starting combo optimisation (global + per-team)...")
+        self.status.setText("Combo optimisation running...")
+
+        self._thread = QThread()
+        self._worker = ComboOptimiserWorker(
+            n_trials=self.trials_spin.value(),
+            team_trials=self.trials_spin.value(),
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_combo_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_combo_done(self, result: ComboOptimiserResult) -> None:
+        gr = result.global_result
+        adopted = sum(1 for r in result.team_results if r.used_team_weights)
+        self.log.append(
+            f"\nCombo complete in {result.total_seconds:.0f}s\n"
+            f"  Global: loss {gr.baseline_loss:.2f} → {gr.best_loss:.2f} "
+            f"({gr.improvement_pct:+.1f}%)\n"
+            f"  Per-team: {adopted}/{len(result.team_results)} teams refined"
+        )
+        self.status.setText("Combo optimisation done!")
+        self._set_buttons_enabled(True)
+
+        # Show team results in table
+        headers = ["Team", "Decision", "Global (holdout)", "Per-Team (holdout)", "Reason"]
+        rows = []
+        for r in sorted(result.team_results, key=lambda x: x.team_abbr):
+            decision = "Per-Team" if r.used_team_weights else "Global"
+            rows.append([
+                r.team_abbr, decision,
+                f"{r.global_loss_recent:.2f}", f"{r.team_loss_recent:.2f}",
+                r.reason,
+            ])
+        self._show_list_table(headers, rows)
+
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── Full pipeline ────
+
+    def _run_full_pipeline(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.log.clear()
+        self.log.append("Starting full optimisation pipeline...")
+        self.status.setText("Full pipeline running...")
+
+        self._thread = QThread()
+        self._worker = FullPipelineWorker(
+            n_trials=self.trials_spin.value(),
+            team_trials=self.trials_spin.value(),
+            max_workers=self.workers_spin.value(),
+            force_rerun=self.force_rerun_checkbox.isChecked(),
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_pipeline_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_pipeline_done(self, summary: dict) -> None:
+        self.cancel_btn.setEnabled(False)
+        total_s = summary.get("total_seconds", 0)
+        self.log.append(f"\nFull pipeline complete in {total_s:.0f}s")
+
+        # Show per-step summary
+        headers = ["Step", "Status", "Time (s)", "Details"]
+        rows = []
+        for name, info in summary.get("steps", {}).items():
+            details = ""
+            if "improvement_pct" in info:
+                details = f"{info['improvement_pct']:+.1f}% improvement"
+            elif "adopted" in info:
+                details = f"{info['adopted']} teams refined"
+            elif "games" in info:
+                details = f"{info['games']} games, {info.get('winner_pct', 0):.1f}% winner"
+            elif "error" in info:
+                details = info["error"][:60]
+            elif info.get("new_data") is not None:
+                details = "new data" if info["new_data"] else "no new data"
+            rows.append([
+                name, info.get("status", "?"),
+                f"{info.get('seconds', 0):.1f}", details,
+            ])
+        self._show_list_table(headers, rows)
+
+        # If backtest results are included, display them
+        bt = summary.get("backtest_results")
+        if bt:
+            self._display_results(bt)
+
+        self.status.setText(f"Full pipeline done in {total_s:.0f}s")
+        self._set_buttons_enabled(True)
+
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    def _cancel_pipeline(self) -> None:
+        if self._worker and hasattr(self._worker, "cancel"):
+            self._worker.cancel()
+            self.log.append("Cancellation requested — will stop after current step...")
+            self.cancel_btn.setEnabled(False)
+
     # ──── Clear weights ────
 
     def _clear_weights(self) -> None:
@@ -802,6 +1033,10 @@ class AccuracyView(QWidget):
         self.ml_feature_btn.setEnabled(enabled)
         self.team_refine_btn.setEnabled(enabled)
         self.fft_btn.setEnabled(enabled)
+        self.combo_opt_btn.setEnabled(enabled)
+        self.pipeline_btn.setEnabled(enabled)
+        if enabled:
+            self.cancel_btn.setEnabled(False)
 
     def _show_dict_table(self, key_header: str, val_header: str, data: dict) -> None:
         self.results_table.clear()

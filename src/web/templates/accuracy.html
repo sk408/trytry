@@ -204,19 +204,29 @@
     Improve prediction accuracy by optimising model weights, building spread calibration,
     or analysing which features help the most.
   </p>
-  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
+  <!-- Row 1: Main optimisation buttons -->
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
     <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
+    <button id="btn-team-refine" onclick="startTeamRefinement()">Per-Team Refinement</button>
+    <button id="btn-optimize-all" onclick="startOptimizeAll()" style="background:#2563eb; color:#fff; font-weight:600;">Optimize All</button>
     <label for="opt-trials" style="margin-left: 2px; font-size: 13px; color: #94a3b8;">Trials:</label>
     <input type="number" id="opt-trials" value="200" min="50" max="2000" step="50"
            title="Number of weight combinations to evaluate. More = better but slower. 200 default, 500+ for thorough."
            style="width: 72px; padding: 6px 8px; border: 1px solid #334155; border-radius: 6px;
                   background: #1e293b; color: #e2e8f0; font-size: 13px;">
+    <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
+  </div>
+  <!-- Row 2: Pipeline + analysis buttons -->
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
+    <button id="btn-pipeline" onclick="startFullPipeline()" style="background:#2563eb; color:#fff; font-weight:600;">Full Pipeline</button>
+    <button id="btn-cancel-pipeline" onclick="cancelPipeline()" style="background:#991b1b; color:#fecaca; display:none;">Cancel</button>
+    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:13px; color:#94a3b8;">
+      <input type="checkbox" id="force-rerun" style="width:14px; height:14px;"> Force re-run
+    </label>
     <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
     <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
     <button id="btn-ml-features" onclick="startMLFeatureImportance()">ML Feature Importance</button>
-    <button id="btn-team-refine" onclick="startTeamRefinement()">Per-Team Refinement</button>
     <button id="btn-fft" onclick="startFFTAnalysis()">Error Patterns (FFT)</button>
-    <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
   </div>
   <div id="opt-log" class="log" style="max-height: 200px; overflow-y: auto; display: none;"></div>
   <div id="opt-results" style="display: none; margin-top: 12px;"></div>
@@ -224,9 +234,13 @@
 
 <script>
 function _disableOptButtons(disabled) {
-  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights'].forEach(id => {
-    document.getElementById(id).disabled = disabled;
+  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights','btn-optimize-all','btn-pipeline'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
   });
+  // Show/hide cancel button
+  const cancelBtn = document.getElementById('btn-cancel-pipeline');
+  if (cancelBtn) cancelBtn.style.display = disabled ? 'inline-block' : 'none';
 }
 
 function _appendLog(msg) {
@@ -518,6 +532,102 @@ function showFFTResults(results) {
     });
     html += '</tbody></table></div>';
   }
+  container.innerHTML = html;
+}
+
+// ── Optimize All (global + per-team) ──
+function startOptimizeAll() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting combo optimisation (global + per-team)...');
+
+  const trials = parseInt(document.getElementById('opt-trials').value) || 200;
+  const teamResults = [];
+  const es = new EventSource('/api/optimize-all?trials=' + trials);
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      if (teamResults.length) showTeamRefinementResults(teamResults);
+    } else if (msg.startsWith('[TEAM]')) {
+      teamResults.push(msg.replace('[TEAM] ', ''));
+    } else if (msg.startsWith('[RESULT]')) {
+      _appendLog(msg.replace('[RESULT] ', ''));
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+// ── Full Pipeline ──
+function startFullPipeline() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting full optimisation pipeline...');
+
+  const trials = parseInt(document.getElementById('opt-trials').value) || 200;
+  const workers = parseInt(document.getElementById('workers').value) || 4;
+  const forceRerun = document.getElementById('force-rerun').checked ? '1' : '0';
+
+  const stepResults = [];
+  const url = '/api/full-pipeline?trials=' + trials + '&max_workers=' + workers + '&force_rerun=' + forceRerun;
+  const es = new EventSource(url);
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      if (stepResults.length) showPipelineResults(stepResults);
+    } else if (msg.startsWith('[STEP]')) {
+      stepResults.push(msg.replace('[STEP] ', ''));
+    } else if (msg.startsWith('[RESULT]')) {
+      _appendLog(msg.replace('[RESULT] ', ''));
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function cancelPipeline() {
+  fetch('/api/pipeline/cancel', {method: 'POST'}).then(r => r.json()).then(d => {
+    _appendLog('Cancellation requested...');
+    const cancelBtn = document.getElementById('btn-cancel-pipeline');
+    if (cancelBtn) cancelBtn.disabled = true;
+  });
+}
+
+function showPipelineResults(steps) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Pipeline Step Summary</h3>';
+  html += '<div class="scroll-x"><table><thead><tr><th>Step</th><th>Status</th><th>Time (s)</th></tr></thead><tbody>';
+  steps.forEach(s => {
+    const parts = {};
+    s.split(',').forEach(p => { const [k,v] = p.split('='); parts[k.trim()] = v; });
+    const status = parts.status || '?';
+    const cls = status === 'done' ? 'text-success' : (status === 'skipped' ? 'text-muted' : (status === 'error' ? 'text-danger' : ''));
+    html += '<tr><td>' + (parts.name||'') + '</td><td class="' + cls + '">' + status + '</td><td>' + (parts.seconds||'') + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
   container.innerHTML = html;
 }
 

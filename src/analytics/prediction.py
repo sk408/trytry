@@ -471,11 +471,15 @@ class PrecomputedGame:
 
 def precompute_game_data(
     progress_cb: Optional[Callable] = None,
+    use_cache: bool = True,
 ) -> list["PrecomputedGame"]:
     """Extract all raw game data from the DB once.
 
     Returns a list of ``PrecomputedGame`` that the optimiser can
     re-evaluate with different weights purely in memory.
+
+    When *use_cache* is True (default), checks the in-memory store and
+    disk pickle before hitting the database.
     """
     from src.analytics.backtester import (
         get_actual_game_results,
@@ -483,8 +487,32 @@ def precompute_game_data(
         _get_roster_for_game,
     )
     from src.analytics.autotune import get_team_tuning
+    from src.analytics.memory_store import get_memory_store
+    from src.analytics.pipeline_cache import (
+        load_pipeline_state,
+        load_precomputed_games,
+        save_precomputed_games,
+        has_new_games,
+    )
 
     progress = progress_cb or (lambda _: None)
+
+    # ── Try in-memory cache first ──
+    store = get_memory_store()
+    if use_cache and store.precomputed_games:
+        progress(f"Using {len(store.precomputed_games)} precomputed games from memory")
+        return store.precomputed_games
+
+    # ── Try disk pickle cache ──
+    if use_cache:
+        state = load_pipeline_state()
+        if state.precomputed_games_hash and not has_new_games(state):
+            cached = load_precomputed_games(state.precomputed_games_hash)
+            if cached:
+                progress(f"Loaded {len(cached)} precomputed games from disk cache")
+                store.precomputed_games = cached
+                return cached
+
     progress("Loading game results for precomputation...")
 
     games_df = get_actual_game_results()
@@ -565,6 +593,19 @@ def precompute_game_data(
         ))
 
     progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")
+
+    # ── Cache the results ──
+    store.precomputed_games = precomputed
+    try:
+        h = save_precomputed_games(precomputed)
+        state = load_pipeline_state()
+        state.precomputed_games_hash = h
+        from src.analytics.pipeline_cache import save_pipeline_state
+        save_pipeline_state(state)
+        progress("Precomputed games cached to memory + disk")
+    except Exception:
+        pass  # Non-fatal
+
     return precomputed
 
 
