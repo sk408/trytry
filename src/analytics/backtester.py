@@ -500,71 +500,78 @@ def get_actual_game_results() -> pd.DataFrame:
     Get actual game results by aggregating player stats per game.
     Returns DataFrame with game_date, home_team_id, away_team_id, home_score, away_score.
 
-    Uses players.team_id to assign each stat line to a team, then matches
-    home/away sides by opponent_team_id and is_home. This allows filtering
-    by home/away team reliably (even if trades add some noise).
+    Groups by game_id + is_home so that each side of the game is summed correctly,
+    regardless of whether players were later traded to other teams.  The team
+    identities come from opponent_team_id cross-referencing (the home side's
+    opponent is the away team and vice-versa).
     """
     with get_conn() as conn:
         df = pd.read_sql(
             """
-            SELECT 
+            SELECT
                 ps.game_date,
-                p.team_id AS team_id,
-                ps.opponent_team_id,
+                ps.game_id,
                 ps.is_home,
-                SUM(ps.points) as team_score
+                MIN(ps.opponent_team_id) AS opponent_team_id,
+                SUM(ps.points)           AS team_score
             FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            GROUP BY ps.game_date, p.team_id, ps.opponent_team_id, ps.is_home
+            WHERE ps.game_id IS NOT NULL AND ps.game_id != ''
+            GROUP BY ps.game_date, ps.game_id, ps.is_home
             ORDER BY ps.game_date DESC
             """,
             conn,
         )
         teams = pd.read_sql("SELECT team_id, abbreviation FROM teams", conn)
-    
+
     if df.empty:
         return pd.DataFrame()
-    
+
     team_lookup = {int(row["team_id"]): row["abbreviation"] for _, row in teams.iterrows()}
-    
-    games = []
-    processed = set()
-    
-    # Build index for quick lookup: (date, team_id, opp_id, is_home) -> score
-    index = {}
+
+    # Index: (game_id, is_home) -> {game_date, opponent_team_id, team_score}
+    game_sides: dict[tuple, dict] = {}
     for _, row in df.iterrows():
-        key = (str(row["game_date"]), int(row["team_id"]), int(row["opponent_team_id"]), int(row["is_home"]))
-        index[key] = float(row["team_score"])
+        gid = str(row["game_id"])
+        is_home = int(row["is_home"])
+        game_sides[(gid, is_home)] = {
+            "game_date": str(row["game_date"]),
+            "opponent_team_id": int(row["opponent_team_id"]),
+            "team_score": float(row["team_score"]),
+        }
 
-    for (date_str, home_id, away_id, is_home), home_score in list(index.items()):
-        if is_home != 1:
+    games = []
+    processed: set[str] = set()
+
+    for (gid, is_home), data in game_sides.items():
+        if is_home != 1 or gid in processed:
             continue
 
-        # Find matching away entry (same date, opp/home swapped, is_home=0)
-        opp_key = (date_str, away_id, home_id, 0)
-        away_score = index.get(opp_key)
-        if away_score is None:
+        away_data = game_sides.get((gid, 0))
+        if away_data is None:
             continue
 
-        key = (date_str, min(home_id, away_id), max(home_id, away_id))
-        if key in processed:
-            continue
+        home_score = data["team_score"]
+        away_score = away_data["team_score"]
 
-        # Basic sanity check
+        # Home side's opponent = away team; away side's opponent = home team
+        away_team_id = data["opponent_team_id"]
+        home_team_id = away_data["opponent_team_id"]
+
+        # Sanity check
         if home_score < 20 or away_score < 20:
             continue
 
         games.append({
-            "game_date": date_str,
-            "home_team_id": home_id,
-            "away_team_id": away_id,
-            "home_abbr": team_lookup.get(home_id, "???"),
-            "away_abbr": team_lookup.get(away_id, "???"),
+            "game_date": data["game_date"],
+            "home_team_id": home_team_id,
+            "away_team_id": away_team_id,
+            "home_abbr": team_lookup.get(home_team_id, "???"),
+            "away_abbr": team_lookup.get(away_team_id, "???"),
             "home_score": home_score,
             "away_score": away_score,
         })
-        processed.add(key)
-    
+        processed.add(gid)
+
     return pd.DataFrame(games)
 
 
