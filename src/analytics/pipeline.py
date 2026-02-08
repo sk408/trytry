@@ -93,7 +93,7 @@ def run_full_pipeline(
             return True
         return False
 
-    TOTAL_STEPS = 10
+    TOTAL_STEPS = 11
     migrations.init_db()
 
     # ── Step 1: Check pipeline state ──
@@ -177,11 +177,28 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
-    # ── Step 6: Autotune all teams ──
+    # ── Step 6: Injury intelligence backfill ──
+    progress(_step_header(6, TOTAL_STEPS, "Injury intelligence backfill"))
+    t0 = time.perf_counter()
+    try:
+        from src.analytics.injury_intelligence import backfill_play_outcomes
+        resolved = backfill_play_outcomes(progress_cb=progress)
+        progress(f"  Backfilled {resolved} injury outcomes")
+        state = mark_step_done(state, "injury_intel")
+    except Exception as exc:
+        progress(f"  Injury intelligence error: {exc}")
+    summary["steps"]["injury_intel"] = {
+        "status": "done",
+        "seconds": round(time.perf_counter() - t0, 1),
+    }
+    if _check_cancel():
+        return summary
+
+    # ── Step 7: Autotune all teams ──
     if not force_rerun and is_step_fresh(state, "autotune") and not new_after_sync:
-        _skipped(6, TOTAL_STEPS, "Autotune all teams")
+        _skipped(7, TOTAL_STEPS, "Autotune all teams")
     else:
-        progress(_step_header(6, TOTAL_STEPS, "Autotune all teams"))
+        progress(_step_header(7, TOTAL_STEPS, "Autotune all teams"))
         t0 = time.perf_counter()
         try:
             from src.analytics.autotune import autotune_all
@@ -200,11 +217,11 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
-    # ── Step 7: Global weight optimisation ──
+    # ── Step 8: Global weight optimisation ──
     if not force_rerun and is_step_fresh(state, "optimize") and not new_after_sync:
-        _skipped(7, TOTAL_STEPS, "Global weight optimisation")
+        _skipped(8, TOTAL_STEPS, "Global weight optimisation")
     else:
-        progress(_step_header(7, TOTAL_STEPS, f"Global weight optimisation ({n_trials} trials)"))
+        progress(_step_header(8, TOTAL_STEPS, f"Global weight optimisation ({n_trials} trials)"))
         t0 = time.perf_counter()
         try:
             games = precompute_game_data(progress_cb=progress)
@@ -233,11 +250,11 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
-    # ── Step 8: Per-team refinement ──
+    # ── Step 9: Per-team refinement ──
     if not force_rerun and is_step_fresh(state, "team_refine") and not new_after_sync:
-        _skipped(8, TOTAL_STEPS, "Per-team refinement")
+        _skipped(9, TOTAL_STEPS, "Per-team refinement")
     else:
-        progress(_step_header(8, TOTAL_STEPS, f"Per-team refinement ({team_trials} trials/team)"))
+        progress(_step_header(9, TOTAL_STEPS, f"Per-team refinement ({team_trials} trials/team)"))
         t0 = time.perf_counter()
         try:
             games = precompute_game_data(progress_cb=progress)  # cache hit
@@ -264,11 +281,11 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
-    # ── Step 9: Build residual calibration ──
+    # ── Step 10: Build residual calibration ──
     if not force_rerun and is_step_fresh(state, "calibrate") and not new_after_sync:
-        _skipped(9, TOTAL_STEPS, "Build residual calibration")
+        _skipped(10, TOTAL_STEPS, "Build residual calibration")
     else:
-        progress(_step_header(9, TOTAL_STEPS, "Build residual calibration"))
+        progress(_step_header(10, TOTAL_STEPS, "Build residual calibration"))
         t0 = time.perf_counter()
         try:
             cal = build_residual_calibration(progress_cb=progress)
@@ -283,8 +300,8 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
-    # ── Step 10: Validation backtest ──
-    progress(_step_header(10, TOTAL_STEPS, "Validation backtest"))
+    # ── Step 11: Validation backtest ──
+    progress(_step_header(11, TOTAL_STEPS, "Validation backtest"))
     t0 = time.perf_counter()
     try:
         bt_results = run_backtest(

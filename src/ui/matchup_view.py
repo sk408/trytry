@@ -477,48 +477,53 @@ class MatchupView(QWidget):
             self.h2h_table.setVisible(False)
 
     def _update_injury_labels(self, stats: TeamMatchupStats, label: QLabel) -> None:
-        """Update injury impact label for a team."""
+        """Update injury impact label for a team, now with play probabilities."""
         injured = [p for p in stats.players if p.is_injured and p.mpg > 0]
-        
+
         if not injured:
             label.setText("No injuries")
             label.setStyleSheet("color: #10b981; font-size: 12px;")
             return
-        
-        # Calculate total lost points
-        lost_points = sum(p.ppg for p in injured)
-        
-        # Determine impact level and get position info
-        key_injuries = [p for p in injured if p.mpg >= 25]
-        rotation_injuries = [p for p in injured if 15 <= p.mpg < 25]
-        
+
         def get_pos_abbr(pos: str) -> str:
-            """Get short position abbreviation."""
             pos = pos.upper()
             if "G" in pos or "GUARD" in pos:
                 return "G"
             if "C" in pos or "CENTER" in pos:
                 return "C"
             return "F"
-        
-        if key_injuries:
-            # Show name and position for key injuries
-            parts = []
-            for p in key_injuries[:2]:
-                last_name = p.name.split()[-1]
-                pos = get_pos_abbr(p.position)
-                parts.append(f"{last_name}({pos})")
-            names = ", ".join(parts)
-            label.setText(f"KEY OUT: {names} (-{lost_points:.0f} PPG)")
+
+        # Weighted lost points (scaled by absent fraction)
+        lost_points = sum(p.ppg * (1.0 - getattr(p, "play_probability", 0.0)) for p in injured)
+
+        # Separate definite outs from uncertain
+        definite_out = [p for p in injured if getattr(p, "play_probability", 0.0) <= 0]
+        uncertain = [p for p in injured if 0 < getattr(p, "play_probability", 0.0) < 1.0]
+
+        parts = []
+        for p in sorted(definite_out, key=lambda x: x.mpg, reverse=True)[:2]:
+            last_name = p.name.split()[-1]
+            pos = get_pos_abbr(p.position)
+            parts.append(f"{last_name}({pos}) OUT")
+
+        for p in sorted(uncertain, key=lambda x: x.mpg, reverse=True)[:2]:
+            last_name = p.name.split()[-1]
+            pp = getattr(p, "play_probability", 0.0)
+            status = getattr(p, "injury_status", "?")
+            parts.append(f"{last_name} {status} {pp*100:.0f}%")
+
+        text = ", ".join(parts)
+        if lost_points > 0:
+            text += f" (-{lost_points:.0f} exp PPG)"
+
+        if any(p.mpg >= 25 for p in definite_out):
+            label.setText(f"KEY: {text}")
             label.setStyleSheet("color: #ef4444; font-weight: bold; font-size: 12px;")
-        elif rotation_injuries:
-            parts = []
-            for p in rotation_injuries[:2]:
-                last_name = p.name.split()[-1]
-                pos = get_pos_abbr(p.position)
-                parts.append(f"{last_name}({pos})")
-            names = ", ".join(parts)
-            label.setText(f"OUT: {names} (-{lost_points:.0f} PPG)")
+        elif uncertain:
+            label.setText(text)
+            label.setStyleSheet("color: #f59e0b; font-size: 12px;")
+        elif definite_out:
+            label.setText(text)
             label.setStyleSheet("color: #f59e0b; font-size: 12px;")
         else:
             label.setText(f"{len(injured)} minor injuries")
@@ -544,14 +549,24 @@ class MatchupView(QWidget):
             vs = (p.ppg_vs_opp if p.games_vs_opp > 0 else p.ppg) * 0.3
             proj = base + loc + vs
             
-            status = "INJ" if p.is_injured else "OK"
+            # Rich injury status with play probability
+            pp = getattr(p, "play_probability", 1.0)
+            inj_status = getattr(p, "injury_status", "")
+            if not p.is_injured:
+                status = "OK"
+            elif pp <= 0:
+                status = "OUT"
+            elif inj_status:
+                status = f"{inj_status} {pp*100:.0f}%"
+            else:
+                status = "INJ"
 
             # Player headshot in column 0
             photo_pm = get_player_photo_pixmap(p.player_id, 30)
             photo_item = QTableWidgetItem()
             photo_item.setIcon(QIcon(photo_pm))
             table.setItem(row_idx, 0, photo_item)
-            
+
             items = [
                 p.name,
                 p.position,
@@ -565,11 +580,18 @@ class MatchupView(QWidget):
                 f"{proj:.1f}",
                 status,
             ]
-            
+
             for col_idx, val in enumerate(items):
                 item = QTableWidgetItem(val)
                 if p.is_injured:
-                    item.setForeground(QColor("#ef4444"))
+                    if pp <= 0:
+                        item.setForeground(QColor("#ef4444"))        # red — OUT
+                    elif pp < 0.5:
+                        item.setForeground(QColor("#f97316"))        # orange — unlikely
+                    elif pp < 0.8:
+                        item.setForeground(QColor("#eab308"))        # yellow — uncertain
+                    else:
+                        item.setForeground(QColor("#22d3ee"))        # cyan — probable
                 table.setItem(row_idx, col_idx + 1, item)  # +1 for photo column
         
         table.setColumnWidth(0, 40)  # photo column

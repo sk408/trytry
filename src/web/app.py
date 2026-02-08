@@ -659,6 +659,9 @@ def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> Li
             "ppg_vs_opp": p.ppg_vs_opp if p.games_vs_opp > 0 else None,
             "projected": proj,
             "is_injured": p.is_injured,
+            "play_probability": getattr(p, "play_probability", 1.0),
+            "injury_status": getattr(p, "injury_status", ""),
+            "injury_keyword": getattr(p, "injury_keyword", ""),
         })
     return result
 

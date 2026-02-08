@@ -196,7 +196,7 @@
       </thead>
       <tbody>
         {% for p in home_players %}
-        <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+        <tr class="{{ 'text-danger' if p.is_injured and p.play_probability < 0.3 else 'text-warning' if p.is_injured and p.play_probability < 0.7 else '' }}">
           <td class="player-photo-col">
             <img src="{{ player_photo_url(p.player_id) }}" width="28" height="28" class="player-photo" alt="" onerror="this.style.display='none'">
           </td>
@@ -210,7 +210,19 @@
           <td>{{ "%.1f"|format(p.ppg_away) }}</td>
           <td>{{ "%.1f"|format(p.ppg_vs_opp) if p.ppg_vs_opp else '--' }}</td>
           <td>{{ "%.1f"|format(p.projected) }}</td>
-          <td>{{ 'INJ' if p.is_injured else 'OK' }}</td>
+          <td>
+            {% if not p.is_injured %}
+              <span class="badge bg-success">OK</span>
+            {% elif p.play_probability <= 0 %}
+              <span class="badge bg-danger" title="{{ p.injury_status }}: {{ p.injury_keyword }}">OUT</span>
+            {% elif p.play_probability < 0.5 %}
+              <span class="badge bg-danger" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% elif p.play_probability < 0.8 %}
+              <span class="badge bg-warning text-dark" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% else %}
+              <span class="badge bg-info" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -246,7 +258,7 @@
       </thead>
       <tbody>
         {% for p in away_players %}
-        <tr class="{{ 'text-danger' if p.is_injured else '' }}">
+        <tr class="{{ 'text-danger' if p.is_injured and p.play_probability < 0.3 else 'text-warning' if p.is_injured and p.play_probability < 0.7 else '' }}">
           <td class="player-photo-col">
             <img src="{{ player_photo_url(p.player_id) }}" width="28" height="28" class="player-photo" alt="" onerror="this.style.display='none'">
           </td>
@@ -260,7 +272,19 @@
           <td>{{ "%.1f"|format(p.ppg_away) }}</td>
           <td>{{ "%.1f"|format(p.ppg_vs_opp) if p.ppg_vs_opp else '--' }}</td>
           <td>{{ "%.1f"|format(p.projected) }}</td>
-          <td>{{ 'INJ' if p.is_injured else 'OK' }}</td>
+          <td>
+            {% if not p.is_injured %}
+              <span class="badge bg-success">OK</span>
+            {% elif p.play_probability <= 0 %}
+              <span class="badge bg-danger" title="{{ p.injury_status }}: {{ p.injury_keyword }}">OUT</span>
+            {% elif p.play_probability < 0.5 %}
+              <span class="badge bg-danger" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% elif p.play_probability < 0.8 %}
+              <span class="badge bg-warning text-dark" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% else %}
+              <span class="badge bg-info" title="{{ p.injury_status }}: {{ p.injury_keyword }}">{{ p.injury_status }} {{ "%.0f"|format(p.play_probability * 100) }}%</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

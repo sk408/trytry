@@ -51,6 +51,10 @@ class PlayerStats:
     dreb_pg: float = 0.0  # defensive rebounds per game
     # Fouls
     pf_pg: float = 0.0    # personal fouls per game
+    # Injury intelligence
+    play_probability: float = 1.0   # 0.0 (definitely out) … 1.0 (healthy)
+    injury_keyword: str = ""        # normalised injury category
+    injury_status: str = ""         # raw status level (Out/Questionable/etc.)
 
 
 @dataclass
@@ -274,23 +278,60 @@ def get_team_matchup_stats(
             )
         
         players_rows = conn.execute(
-            "SELECT player_id, name, position, is_injured FROM players WHERE team_id = ?",
+            "SELECT player_id, name, position, is_injured, injury_note "
+            "FROM players WHERE team_id = ?",
             (team_id,)
         ).fetchall()
-    
+
+    # ── Compute play probabilities via Injury Intelligence ──
+    try:
+        from src.analytics.injury_intelligence import compute_play_probability
+        from src.data.sync_service import _normalise_status_level, _extract_injury_keyword
+        _has_intel = True
+    except Exception:
+        _has_intel = False
+
     players: List[PlayerStats] = []
-    for pid, pname, pos, injured in players_rows:
+    for row in players_rows:
+        pid, pname, pos, is_inj, inj_note = row
         pstats = get_player_comprehensive_stats(
-            pid, pname, pos or "", bool(injured), opponent_team_id
+            pid, pname, pos or "", bool(is_inj), opponent_team_id
         )
+
+        # Assign play probability
+        if not is_inj:
+            pstats.play_probability = 1.0
+        elif _has_intel and inj_note:
+            status_raw = inj_note.split(":")[0].strip() if ":" in inj_note else inj_note
+            injury_text = inj_note.split(":", 1)[1].strip() if ":" in inj_note else inj_note
+            if "(" in injury_text:
+                injury_text = injury_text[:injury_text.rfind("(")].strip()
+            status_level = _normalise_status_level(status_raw)
+            keyword = _extract_injury_keyword(injury_text)
+            pstats.injury_status = status_level
+            pstats.injury_keyword = keyword
+            prob = compute_play_probability(pid, pname, status_level, keyword)
+            pstats.play_probability = prob.composite_probability
+        else:
+            pstats.play_probability = 0.0  # injured with no note → assume out
+            pstats.injury_status = "Out"
+
         players.append(pstats)
-    
+
     # Sort by minutes played (most playing time first)
     players.sort(key=lambda p: p.mpg, reverse=True)
-    
-    # Separate active and injured players
-    active = [p for p in players if not p.is_injured]
-    injured = [p for p in players if p.is_injured]
+
+    # ── Probabilistic injury partitioning ──
+    # Instead of a hard active/injured split, each player now has a
+    # play_probability in [0,1].  The "absent fraction" of uncertain
+    # players is what generates minute/point redistribution.
+    #
+    # For backward compat we still create active/injured lists, but
+    # also track the fractional "absent weight" per injured player.
+    active = [p for p in players if p.play_probability >= 1.0]
+    injured = [p for p in players if p.play_probability < 1.0]
+    # absent_frac: how much of this player's production is "missing"
+    absent_frac = {p.player_id: (1.0 - p.play_probability) for p in injured}
     
     # A team plays 48 min * 5 players = 240 player-minutes per game
     TEAM_MINUTES_PER_GAME = 240.0
@@ -300,18 +341,27 @@ def get_team_matchup_stats(
         """Points per minute for a player."""
         return p.ppg / p.mpg if p.mpg > 0 else 0.0
     
-    # Group injured players by position
+    # Group injured players by position — weighted by absent fraction
     injured_by_pos: Dict[str, List[PlayerStats]] = {"G": [], "F": [], "C": []}
     for p in injured:
         pos_group = _get_position_group(p.position)
         injured_by_pos[pos_group].append(p)
-    
-    # Calculate injured minutes and points by position
-    injured_minutes_by_pos = {pos: sum(p.mpg for p in plist) for pos, plist in injured_by_pos.items()}
-    injured_ppg_by_pos = {pos: sum(p.ppg for p in plist) for pos, plist in injured_by_pos.items()}
-    
-    # High-scoring injured players (15+ PPG) create usage boost for remaining scorers
-    high_scorer_injured_ppg = sum(p.ppg for p in injured if p.ppg >= 15)
+
+    # Calculate injured minutes and points by position (scaled by absent fraction)
+    injured_minutes_by_pos = {
+        pos: sum(p.mpg * absent_frac.get(p.player_id, 1.0) for p in plist)
+        for pos, plist in injured_by_pos.items()
+    }
+    injured_ppg_by_pos = {
+        pos: sum(p.ppg * absent_frac.get(p.player_id, 1.0) for p in plist)
+        for pos, plist in injured_by_pos.items()
+    }
+
+    # High-scoring injured players (15+ PPG) create usage boost (scaled)
+    high_scorer_injured_ppg = sum(
+        p.ppg * absent_frac.get(p.player_id, 1.0)
+        for p in injured if p.ppg >= 15
+    )
     
     # ============ FT EFFICIENCY LOSS CALCULATION ============
     # When a high-FT% shooter is injured, their replacement may be worse at FTs
@@ -319,54 +369,47 @@ def get_team_matchup_stats(
     ft_efficiency_penalty = 0.0
     
     for inj_player in injured:
+        af = absent_frac.get(inj_player.player_id, 1.0)
+        if af <= 0:
+            continue  # player is expected to play fully
+
         # Only consider players with meaningful FT volume (2+ FTA/game)
         if inj_player.fta_pg < 2.0 or inj_player.ft_pct <= 0:
             continue
-        
+
         pos_group = _get_position_group(inj_player.position)
-        
+
         # Find the likely replacement at the same position
-        # Sort active players at this position by minutes (most likely to absorb minutes)
         position_replacements = sorted(
             [p for p in active if _get_position_group(p.position) == pos_group],
             key=lambda p: p.mpg,
             reverse=True
         )
-        
+
         if not position_replacements:
-            # No same-position replacement, look at adjacent positions
             adjacent = {"G": ["F"], "F": ["G", "C"], "C": ["F"]}
             for adj_pos in adjacent.get(pos_group, []):
                 adj_players = [p for p in active if _get_position_group(p.position) == adj_pos]
                 if adj_players:
                     position_replacements = sorted(adj_players, key=lambda p: p.mpg, reverse=True)
                     break
-        
+
         if position_replacements:
-            # Use top 1-2 replacements weighted by their likely minute share
             replacement_ft_pct = 0.0
             weight_sum = 0.0
-            
             for i, repl in enumerate(position_replacements[:2]):
-                # First replacement gets more weight
                 weight = 1.0 if i == 0 else 0.5
                 if repl.ft_pct > 0:
                     replacement_ft_pct += repl.ft_pct * weight
                     weight_sum += weight
-            
             if weight_sum > 0:
                 replacement_ft_pct /= weight_sum
             else:
-                # Fallback to league average FT% (~78%)
                 replacement_ft_pct = 78.0
-            
-            # Calculate the FT% differential
+
             ft_pct_diff = inj_player.ft_pct - replacement_ft_pct
-            
-            # If injured player was better at FTs, we lose expected points
-            # Loss = FTA_per_game * (FT%_injured - FT%_replacement) / 100
             if ft_pct_diff > 0:
-                expected_ft_loss = inj_player.fta_pg * (ft_pct_diff / 100.0)
+                expected_ft_loss = inj_player.fta_pg * (ft_pct_diff / 100.0) * af
                 ft_efficiency_penalty += expected_ft_loss
     
     # Group active players by position
@@ -392,58 +435,56 @@ def get_team_matchup_stats(
     total_oreb = 0.0
     total_dreb = 0.0
     projected = 0.0
-    
+
     # For team-level efficiency, we'll weight by minutes played
     weighted_ts_sum = 0.0
     weighted_fg3_rate_sum = 0.0
     weighted_ft_rate_sum = 0.0
     total_minutes_weight = 0.0
-    
+
+    # Helper: compute a single player's contribution
+    def _player_contribution(p: PlayerStats, extra_points: float = 0.0) -> float:
+        base = p.ppg * 0.4
+        loc_val = p.ppg_home if is_home else p.ppg_away
+        location = (loc_val if loc_val > 0 else p.ppg) * 0.3
+        vs_val = p.ppg_vs_opp if (p.games_vs_opp > 0 and p.ppg_vs_opp > 0) else p.ppg
+        vs_opp = vs_val * 0.3
+        return base + location + vs_opp + extra_points
+
+    # ── Active players (play_probability == 1.0): full contribution ──
     for p in active:
         pos_group = _get_position_group(p.position)
         pos_injured_minutes = injured_minutes_by_pos.get(pos_group, 0)
         pos_active_mpg = active_mpg_by_pos.get(pos_group, 0)
-        
+
         extra_minutes = 0.0
         extra_points = 0.0
-        
+
         # 1. Position-based minute redistribution
         if pos_active_mpg > 0 and pos_injured_minutes > 0:
-            # Player's share of position minutes
             pos_share = p.mpg / pos_active_mpg
-            # Extra minutes from injured players at same position
             extra_minutes = pos_injured_minutes * pos_share
-            # Cap at ~40 total minutes
             max_extra = max(0, 40 - p.mpg)
             extra_minutes = min(extra_minutes, max_extra)
-            # Points from extra minutes (with fatigue discount)
             extra_points = extra_minutes * get_ppm(p) * 0.85
-        
+
         # 2. Usage boost for high scorers when other high scorers are out
-        # When a 20 PPG player is out, other scorers get more touches
         if high_scorer_injured_ppg > 0 and p.ppg >= 12 and total_high_scorer_ppg > 0:
-            # This player's share of high-scorer production
             usage_share = p.ppg / total_high_scorer_ppg
-            # Redistribute ~30% of lost scoring (rest goes to role players, bench, etc.)
             usage_boost = high_scorer_injured_ppg * usage_share * 0.30
             extra_points += usage_boost
-        
+
         # 3. Adjacent position spillover
-        # If no guards available, forwards/wings might play some guard minutes
-        # And vice versa - this handles position flexibility
         adjacent_positions = {"G": ["F"], "F": ["G", "C"], "C": ["F"]}
         for adj_pos in adjacent_positions.get(pos_group, []):
             adj_injured_minutes = injured_minutes_by_pos.get(adj_pos, 0)
             adj_active_mpg = active_mpg_by_pos.get(adj_pos, 0)
-            
-            # If adjacent position has injuries and few active players there
             if adj_injured_minutes > 5 and adj_active_mpg < 50:
-                # This player might pick up some of those minutes (spillover)
-                spillover_minutes = min(3, adj_injured_minutes * 0.15)  # Small amount
-                spillover_points = spillover_minutes * get_ppm(p) * 0.75  # Lower efficiency
+                spillover_minutes = min(3, adj_injured_minutes * 0.15)
+                spillover_points = spillover_minutes * get_ppm(p) * 0.75
                 extra_points += spillover_points
-        
-        # Base stats (no change)
+
+        # Accumulate stats
         total_ppg += p.ppg
         total_rpg += p.rpg
         total_apg += p.apg
@@ -452,25 +493,48 @@ def get_team_matchup_stats(
         total_tpg += p.tpg
         total_oreb += p.oreb_pg
         total_dreb += p.dreb_pg
-        
-        # Weight efficiency metrics by minutes
+
         if p.mpg > 0:
             weighted_ts_sum += p.ts_pct * p.mpg
             weighted_fg3_rate_sum += p.fg3_rate * p.mpg
             weighted_ft_rate_sum += p.ft_rate * p.mpg
             total_minutes_weight += p.mpg
-        
-        # For projection, weight by context
-        base = p.ppg * 0.4
-        loc_val = p.ppg_home if is_home else p.ppg_away
-        location = (loc_val if loc_val > 0 else p.ppg) * 0.3
-        vs_val = p.ppg_vs_opp if (p.games_vs_opp > 0 and p.ppg_vs_opp > 0) else p.ppg
-        vs_opp = vs_val * 0.3
-        player_proj = base + location + vs_opp + extra_points
-        projected += player_proj
-    
+
+        projected += _player_contribution(p, extra_points)
+
+    # ── Uncertain players (0 < play_probability < 1): partial contribution ──
+    # For "Questionable" or "Day-to-Day" players, include their expected
+    # contribution proportional to their play probability.  This replaces
+    # the binary in/out model.
+    for p in injured:
+        pp = p.play_probability
+        if pp <= 0:
+            continue  # definitely out — already handled by redistribution above
+
+        # Add their proportional stats
+        total_ppg += p.ppg * pp
+        total_rpg += p.rpg * pp
+        total_apg += p.apg * pp
+        total_spg += p.spg * pp
+        total_bpg += p.bpg * pp
+        total_tpg += p.tpg * pp
+        total_oreb += p.oreb_pg * pp
+        total_dreb += p.dreb_pg * pp
+
+        if p.mpg > 0:
+            weighted_ts_sum += p.ts_pct * p.mpg * pp
+            weighted_fg3_rate_sum += p.fg3_rate * p.mpg * pp
+            weighted_ft_rate_sum += p.ft_rate * p.mpg * pp
+            total_minutes_weight += p.mpg * pp
+
+        projected += _player_contribution(p) * pp
+
     # Scale projection to realistic team total if needed
     total_active_mpg = sum(p.mpg for p in active) + sum(injured_minutes_by_pos.values())
+    # Add back the partial minutes from uncertain players
+    for p in injured:
+        if p.play_probability > 0:
+            total_active_mpg += p.mpg * p.play_probability
     if total_active_mpg > TEAM_MINUTES_PER_GAME:
         scale_factor = TEAM_MINUTES_PER_GAME / total_active_mpg
         projected *= scale_factor
@@ -482,52 +546,54 @@ def get_team_matchup_stats(
         total_tpg *= scale_factor
         total_oreb *= scale_factor
         total_dreb *= scale_factor
-    
+
     # Apply FT efficiency penalty from injuries
     if ft_efficiency_penalty > 0:
         projected -= ft_efficiency_penalty
         total_ppg -= ft_efficiency_penalty
-    
+
     # ============ DATA-DRIVEN INJURY IMPACT (on/off metrics) ============
     # Use player on/off net rating differential to quantify true impact.
-    # If on/off data unavailable, fall back to heuristic penalties.
+    # Scale penalty by absent_frac (so "Questionable" at 50% only gets 50% penalty).
     season = get_current_season()
     total_onoff_penalty = 0.0
     players_with_onoff = 0
-    
+
     with get_conn() as conn:
         for inj_player in injured:
+            af = absent_frac.get(inj_player.player_id, 1.0)
+            if af <= 0:
+                continue
             impact_row = conn.execute(
                 "SELECT net_rating_diff, on_court_minutes, e_usg_pct FROM player_impact "
                 "WHERE player_id = ? AND season = ?",
                 (inj_player.player_id, season),
             ).fetchone()
-            
+
             if impact_row and impact_row[0] is not None:
-                net_diff = float(impact_row[0])   # positive = team is better WITH this player
+                net_diff = float(impact_row[0])
                 on_minutes = float(impact_row[1] or inj_player.mpg)
-                # Convert net rating differential to expected point impact
-                # net_rating is per 100 possessions; scale by minutes played
-                # ~100 possessions per 48 minutes, so per-minute factor = poss/4800
                 minute_fraction = on_minutes / 48.0
-                # Expected point swing from losing this player
-                point_impact = net_diff * minute_fraction * 0.5  # 0.5 dampening
-                total_onoff_penalty += max(0, point_impact)  # only penalize for positive-impact players
+                point_impact = net_diff * minute_fraction * 0.5 * af
+                total_onoff_penalty += max(0, point_impact)
                 players_with_onoff += 1
-    
+
     if players_with_onoff > 0:
-        # Use data-driven penalty
         projected -= total_onoff_penalty
         total_ppg -= total_onoff_penalty
     else:
-        # Fallback: heuristic penalties for playmakers and rebounders
-        injured_assists = sum(p.apg for p in injured if p.apg >= 6.0)
+        # Fallback: heuristic penalties for playmakers and rebounders (scaled by absent frac)
+        injured_assists = sum(
+            p.apg * absent_frac.get(p.player_id, 1.0) for p in injured if p.apg >= 6.0
+        )
         if injured_assists > 0:
             playmaker_penalty = injured_assists * 0.5
             projected -= playmaker_penalty
             total_ppg -= playmaker_penalty
-        
-        injured_rebounds = sum(p.rpg for p in injured if p.rpg >= 8.0)
+
+        injured_rebounds = sum(
+            p.rpg * absent_frac.get(p.player_id, 1.0) for p in injured if p.rpg >= 8.0
+        )
         if injured_rebounds > 0:
             rebound_penalty = injured_rebounds * 0.2
             projected -= rebound_penalty

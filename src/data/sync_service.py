@@ -173,9 +173,10 @@ def sync_reference_data(
 ) -> pd.DataFrame:
     """Sync teams and players to DB, returns players_df for reuse.
 
-    Freshness: rosters rarely change mid-day.  If teams + players already
-    exist in the DB and were synced within the last 6 hours, skip the API
-    calls and return a DataFrame built from the DB instead.
+    Freshness: rosters change from trades/signings which are public well
+    in advance.  Injury status is handled by ``sync_injuries``.  If teams +
+    players already exist in the DB and were synced within the last 24 hours,
+    skip the API calls.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _msg: None)
@@ -185,11 +186,11 @@ def sync_reference_data(
     # ── Freshness check ──
     if not force:
         with get_conn() as conn:
-            if _is_step_fresh(conn, "reference_data", max_age_hours=6.0):
+            if _is_step_fresh(conn, "reference_data", max_age_hours=24.0):
                 team_count = conn.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
                 player_count = conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
                 if team_count >= 30 and player_count > 100:
-                    progress(f"Reference data fresh (synced <6 hrs ago, {player_count} players) — skipping API calls")
+                    progress(f"Reference data fresh (synced <24 hrs ago, {player_count} players) — skipping API calls")
                     # Build players_df from DB
                     players_df = pd.read_sql(
                         "SELECT player_id AS id, name AS full_name, team_id, position, "
@@ -431,62 +432,152 @@ def sync_player_logs(
             progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
 
 
+def _normalise_status_level(raw_status: str) -> str:
+    """Map raw injury status text to a canonical level."""
+    s = raw_status.strip().lower()
+    if s in ("out", "o"):
+        return "Out"
+    if s in ("doubtful", "d"):
+        return "Doubtful"
+    if s in ("questionable", "q"):
+        return "Questionable"
+    if s in ("probable", "p"):
+        return "Probable"
+    if "day" in s and "day" in s:
+        return "Day-To-Day"
+    if "gtd" in s or "game time" in s:
+        return "GTD"
+    # Fallback: anything else treat as the raw text title-cased
+    return raw_status.strip().title() or "Out"
+
+
+def _extract_injury_keyword(injury_text: str) -> str:
+    """Extract a normalised injury keyword for categorisation."""
+    t = injury_text.lower().strip()
+    # Ordered: check most specific first
+    keywords = [
+        ("rest", "rest"), ("load management", "rest"),
+        ("personal", "personal"), ("suspension", "suspension"),
+        ("illness", "illness"), ("flu", "illness"), ("sick", "illness"),
+        ("concussion", "concussion"), ("head", "head"),
+        ("hamstring", "hamstring"), ("quad", "quad"),
+        ("calf", "calf"), ("groin", "groin"),
+        ("ankle", "ankle"), ("foot", "foot"), ("toe", "toe"),
+        ("knee", "knee"), ("acl", "knee"), ("mcl", "knee"), ("meniscus", "knee"),
+        ("hip", "hip"), ("back", "back"), ("spine", "back"),
+        ("shoulder", "shoulder"), ("elbow", "elbow"),
+        ("wrist", "wrist"), ("hand", "hand"), ("finger", "finger"), ("thumb", "finger"),
+        ("achilles", "achilles"),
+        ("thigh", "thigh"), ("leg", "leg"),
+        ("rib", "rib"), ("chest", "chest"), ("abdomen", "abdomen"),
+        ("neck", "neck"),
+        ("eye", "eye"),
+        ("sprain", "sprain"), ("strain", "strain"), ("soreness", "soreness"),
+        ("contusion", "contusion"), ("bruise", "contusion"),
+        ("fracture", "fracture"), ("break", "fracture"),
+        ("surgery", "surgery"), ("rehab", "surgery"),
+    ]
+    for needle, category in keywords:
+        if needle in t:
+            return category
+    return "other"
+
+
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
     """
     Sync injury data from web sources.
+
+    In addition to the legacy ``is_injured`` / ``injury_note`` flags on the
+    ``players`` table, this now also **logs every observed status** into the
+    ``injury_status_log`` table.  Over time this builds up the history needed
+    for play-through rate analysis (see ``injury_intelligence.py``).
+
     Returns number of injuries updated.
     """
     progress = progress_cb or (lambda _: None)
-    
+
     # Fetch from multiple sources + manual entries
     data = get_all_injuries(progress_cb=progress)
     if not data:
         progress("No injury data retrieved")
         return 0
-    
+
+    today_iso = date.today().isoformat()
+
     with get_conn() as conn:
-        # First, clear all existing injuries
+        # First, clear all existing injury flags (they're refreshed each sync)
         progress("Clearing previous injury flags...")
         conn.execute("UPDATE players SET is_injured = 0, injury_note = NULL")
-        
+
         updated = 0
+        logged = 0
         for entry in data:
             player_name = entry["player"]
-            status = entry["status"]
+            raw_status = entry["status"]
             injury = entry["injury"]
-            note = f"{status}: {injury}".strip()
+            note = f"{raw_status}: {injury}".strip()
             if entry.get("update"):
                 note += f" ({entry['update']})"
-            
-            # Try exact name match first, then fuzzy match
+
+            status_level = _normalise_status_level(raw_status)
+            injury_keyword = _extract_injury_keyword(injury)
+
+            # ── Update legacy is_injured flag ──
             cursor = conn.execute(
-                """
-                UPDATE players
-                SET is_injured = 1, injury_note = ?
-                WHERE lower(name) = lower(?)
-                """,
+                "UPDATE players SET is_injured = 1, injury_note = ? "
+                "WHERE lower(name) = lower(?)",
                 (note, player_name),
             )
+            matched_pid: Optional[int] = None
+            matched_tid: Optional[int] = None
             if cursor.rowcount > 0:
                 updated += cursor.rowcount
+                row = conn.execute(
+                    "SELECT player_id, team_id FROM players WHERE lower(name) = lower(?)",
+                    (player_name,),
+                ).fetchone()
+                if row:
+                    matched_pid, matched_tid = row
             else:
                 # Try partial match (last name)
                 parts = player_name.split()
                 if len(parts) >= 2:
                     last_name = parts[-1]
                     cursor = conn.execute(
-                        """
-                        UPDATE players
-                        SET is_injured = 1, injury_note = ?
-                        WHERE name LIKE ?
-                        AND is_injured = 0
-                        """,
+                        "UPDATE players SET is_injured = 1, injury_note = ? "
+                        "WHERE name LIKE ? AND is_injured = 0",
                         (note, f"%{last_name}%"),
                     )
                     updated += cursor.rowcount
-        
+                    if cursor.rowcount > 0:
+                        row = conn.execute(
+                            "SELECT player_id, team_id FROM players "
+                            "WHERE name LIKE ? ORDER BY player_id LIMIT 1",
+                            (f"%{last_name}%",),
+                        ).fetchone()
+                        if row:
+                            matched_pid, matched_tid = row
+
+            # ── Log to injury_status_log ──
+            if matched_pid and matched_tid:
+                conn.execute(
+                    """
+                    INSERT INTO injury_status_log
+                        (player_id, team_id, log_date, status_level,
+                         injury_keyword, injury_detail)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(player_id, log_date, status_level) DO UPDATE SET
+                        injury_keyword = excluded.injury_keyword,
+                        injury_detail  = excluded.injury_detail,
+                        team_id        = excluded.team_id
+                    """,
+                    (matched_pid, matched_tid, today_iso,
+                     status_level, injury_keyword, note),
+                )
+                logged += 1
+
         conn.commit()
-        progress(f"Updated {updated} player injury records")
+        progress(f"Updated {updated} injury flags, logged {logged} status entries")
         return updated
 
 
@@ -879,6 +970,15 @@ def full_sync(
         progress("Current injuries synced")
     except Exception as exc:
         progress(f"Current injuries sync skipped: {exc}")
+
+    # 3b. Backfill injury status outcomes (cross-reference log with game logs)
+    progress("Backfilling injury play outcomes...")
+    try:
+        from src.analytics.injury_intelligence import backfill_play_outcomes
+        n = backfill_play_outcomes(progress_cb=progress)
+        progress(f"Injury backfill: {n} outcomes resolved")
+    except Exception as exc:
+        progress(f"Injury backfill skipped: {exc}")
 
     # 4. Historical injury inference (skip if game log count unchanged)
     progress("Building historical injury data...")
