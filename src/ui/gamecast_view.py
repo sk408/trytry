@@ -2,12 +2,16 @@
 
 Shows game selector, live score, blended prediction panel,
 odds, box score, and play-by-play feed.  Auto-refreshes via QTimer.
+
+All network I/O and heavy computation runs in a background thread to
+keep the UI responsive.
 """
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
@@ -41,6 +45,216 @@ from src.analytics.live_prediction import LivePrediction, live_predict
 from src.database.db import get_conn
 
 
+# ── background fetch result ───────────────────────────────────────────
+
+@dataclass
+class _PollResult:
+    """Data bundle returned by the background poll worker."""
+    game: Optional[GameInfo] = None
+    odds: Optional[GameOdds] = None
+    box: Optional[BoxScore] = None
+    plays: List[PlayEvent] = field(default_factory=list)
+    all_plays: List[PlayEvent] = field(default_factory=list)
+    prediction: Optional[LivePrediction] = None
+    prediction_error: str = ""
+    # For post-game analysis
+    postgame_data: Optional[dict] = None
+
+
+class _PollWorker(QObject):
+    """Fetches all gamecast data in a background thread."""
+    finished = Signal(object)  # _PollResult
+
+    def __init__(
+        self,
+        game: GameInfo,
+        last_play_id: str = "",
+    ):
+        super().__init__()
+        self.game = game
+        self.last_play_id = last_play_id
+
+    def run(self) -> None:
+        result = _PollResult(game=self.game)
+        game = self.game
+
+        # 1. Odds
+        try:
+            result.odds = get_game_odds(game.game_id)
+        except Exception:
+            pass
+
+        # 2. Box score
+        try:
+            result.box = get_box_score(game.game_id)
+        except Exception:
+            pass
+
+        # 3. Play-by-play (incremental)
+        try:
+            result.plays = get_play_by_play(game.game_id, self.last_play_id)
+        except Exception:
+            pass
+
+        # 4. All plays for bonus (only for live games)
+        if game.status == "in_progress" and result.plays:
+            try:
+                result.all_plays = get_play_by_play(game.game_id, "")
+            except Exception:
+                pass
+
+        # 5. Live prediction (DB queries + math)
+        home_id = _abbr_to_team_id(game.home_abbr)
+        away_id = _abbr_to_team_id(game.away_abbr)
+
+        if home_id and away_id:
+            game_date = game.start_time[:10] if game.start_time else ""
+
+            if game.status == "final":
+                # Post-game analysis data
+                try:
+                    from src.analytics.live_prediction import _cached_pregame
+                    pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
+                        home_id, away_id, game_date,
+                    )
+                    result.postgame_data = {
+                        "pg_home": pg_home, "pg_away": pg_away,
+                        "pg_total": pg_total, "pg_spread": pg_spread,
+                        "home_id": home_id, "away_id": away_id,
+                    }
+                except Exception:
+                    result.postgame_data = {
+                        "pg_home": 110.0, "pg_away": 110.0,
+                        "pg_total": 220.0, "pg_spread": 0.0,
+                        "home_id": home_id, "away_id": away_id,
+                    }
+            else:
+                try:
+                    result.prediction = live_predict(
+                        home_team_id=home_id,
+                        away_team_id=away_id,
+                        home_score=game.home_score,
+                        away_score=game.away_score,
+                        period=game.period,
+                        clock=game.clock,
+                        game_id=game.game_id,
+                        game_date_str=game_date,
+                    )
+                except Exception as exc:
+                    result.prediction_error = str(exc)
+        else:
+            result.prediction_error = "teams not in DB"
+
+        self.finished.emit(result)
+
+
+class _GamesListWorker(QObject):
+    """Fetches the ESPN scoreboard game list in a background thread."""
+    finished = Signal(list)  # List[GameInfo]
+
+    def run(self) -> None:
+        try:
+            games = get_live_games()
+        except Exception:
+            games = []
+        self.finished.emit(games)
+
+
+class _ScoreboardRefreshWorker(QObject):
+    """Fetches updated scoreboard + full game detail in one background pass."""
+    finished = Signal(object)  # _PollResult
+
+    def __init__(self, game_id: str, last_play_id: str):
+        super().__init__()
+        self.game_id = game_id
+        self.last_play_id = last_play_id
+
+    def run(self) -> None:
+        # 1. Get updated scoreboard to find the latest game state
+        try:
+            games = get_live_games()
+        except Exception:
+            self.finished.emit(_PollResult())
+            return
+
+        updated = next(
+            (g for g in games if g.game_id == self.game_id), None,
+        )
+        if not updated:
+            self.finished.emit(_PollResult())
+            return
+
+        # 2. Fetch all details in this same thread
+        result = _PollResult(game=updated)
+
+        # Odds
+        try:
+            result.odds = get_game_odds(updated.game_id)
+        except Exception:
+            pass
+
+        # Box score
+        try:
+            result.box = get_box_score(updated.game_id)
+        except Exception:
+            pass
+
+        # Play-by-play
+        try:
+            result.plays = get_play_by_play(updated.game_id, self.last_play_id)
+        except Exception:
+            pass
+
+        if updated.status == "in_progress" and result.plays:
+            try:
+                result.all_plays = get_play_by_play(updated.game_id, "")
+            except Exception:
+                pass
+
+        # Prediction
+        home_id = _abbr_to_team_id(updated.home_abbr)
+        away_id = _abbr_to_team_id(updated.away_abbr)
+
+        if home_id and away_id:
+            game_date = updated.start_time[:10] if updated.start_time else ""
+
+            if updated.status == "final":
+                try:
+                    from src.analytics.live_prediction import _cached_pregame
+                    pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
+                        home_id, away_id, game_date,
+                    )
+                    result.postgame_data = {
+                        "pg_home": pg_home, "pg_away": pg_away,
+                        "pg_total": pg_total, "pg_spread": pg_spread,
+                        "home_id": home_id, "away_id": away_id,
+                    }
+                except Exception:
+                    result.postgame_data = {
+                        "pg_home": 110.0, "pg_away": 110.0,
+                        "pg_total": 220.0, "pg_spread": 0.0,
+                        "home_id": home_id, "away_id": away_id,
+                    }
+            else:
+                try:
+                    result.prediction = live_predict(
+                        home_team_id=home_id,
+                        away_team_id=away_id,
+                        home_score=updated.home_score,
+                        away_score=updated.away_score,
+                        period=updated.period,
+                        clock=updated.clock,
+                        game_id=updated.game_id,
+                        game_date_str=game_date,
+                    )
+                except Exception as exc:
+                    result.prediction_error = str(exc)
+        else:
+            result.prediction_error = "teams not in DB"
+
+        self.finished.emit(result)
+
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 # ESPN uses shorter abbreviations for a few teams.  Map to the NBA-API
@@ -55,17 +269,28 @@ _ESPN_TO_NBA_ABBR = {
 }
 
 
+_ABBR_CACHE: dict[str, Optional[int]] = {}
+
+
 def _abbr_to_team_id(abbr: str) -> Optional[int]:
     """Resolve an ESPN abbreviation to our internal team_id.
 
     Handles known ESPN ↔ NBA-API abbreviation mismatches (e.g. GS → GSW).
+    Results are cached in-memory so the DB is only hit once per abbreviation.
     """
+    if abbr in _ABBR_CACHE:
+        return _ABBR_CACHE[abbr]
     canonical = _ESPN_TO_NBA_ABBR.get(abbr, abbr)
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT team_id FROM teams WHERE abbreviation = ?", (canonical,)
-        ).fetchone()
-    return int(row[0]) if row else None
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT team_id FROM teams WHERE abbreviation = ?", (canonical,)
+            ).fetchone()
+        result = int(row[0]) if row else None
+    except Exception:
+        result = None
+    _ABBR_CACHE[abbr] = result
+    return result
 
 
 def _bold(text: str) -> str:
@@ -86,6 +311,8 @@ class GamecastView(QWidget):
         # ── state ──
         self._current_game: Optional[GameInfo] = None
         self._last_play_id = ""
+        self._poll_thread: Optional[QThread] = None
+        self._poll_worker: Optional[_PollWorker] = None
 
         # ── game selector ──
         self.game_combo = QComboBox()
@@ -245,20 +472,27 @@ class GamecastView(QWidget):
     # ────────────────────────────────────────────────────────────────
 
     def _refresh_games(self) -> None:
-        """Reload game list from ESPN scoreboard.
+        """Reload game list from ESPN scoreboard in a background thread."""
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("Loading…")
 
-        Order: live games first, then upcoming (scheduled), then final.
-        """
+        self._games_thread = QThread()
+        self._games_worker = _GamesListWorker()
+        self._games_worker.moveToThread(self._games_thread)
+        self._games_thread.started.connect(self._games_worker.run)
+        self._games_worker.finished.connect(self._on_games_loaded)
+        self._games_worker.finished.connect(self._games_thread.quit)
+        self._games_thread.finished.connect(self._cleanup_games_thread)
+        self._games_thread.start()
+
+    def _on_games_loaded(self, games: list) -> None:
+        """Populate game combo from background-fetched list (main thread)."""
+        saved_game_id = self._current_game.game_id if self._current_game else None
+
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("-- Select a game --", None)
 
-        try:
-            games = get_live_games()
-        except Exception:
-            games = []
-
-        # Sort: in_progress → scheduled → final
         _status_order = {"in_progress": 0, "scheduled": 1, "final": 2}
         games.sort(key=lambda g: _status_order.get(g.status, 9))
 
@@ -274,14 +508,25 @@ class GamecastView(QWidget):
 
         self.game_combo.blockSignals(False)
 
-        # If we had a game selected, try to re-select it
-        if self._current_game:
+        self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText("Refresh")
+
+        # Re-select previously selected game
+        if saved_game_id:
             for i in range(self.game_combo.count()):
                 data = self.game_combo.itemData(i)
-                if data and getattr(data, "game_id", None) == self._current_game.game_id:
+                if data and getattr(data, "game_id", None) == saved_game_id:
                     self.game_combo.setCurrentIndex(i)
                     self._load_game_detail(data)
                     return
+
+    def _cleanup_games_thread(self) -> None:
+        if hasattr(self, "_games_worker") and self._games_worker:
+            self._games_worker.deleteLater()
+            self._games_worker = None
+        if hasattr(self, "_games_thread") and self._games_thread:
+            self._games_thread.deleteLater()
+            self._games_thread = None
 
     def _on_game_selected(self, index: int) -> None:
         if index <= 0:
@@ -299,16 +544,65 @@ class GamecastView(QWidget):
         self._load_game_detail(game)
 
     # ────────────────────────────────────────────────────────────────
-    # Detail loading
+    # Detail loading (background thread)
     # ────────────────────────────────────────────────────────────────
 
     def _load_game_detail(self, game: GameInfo) -> None:
         self._current_game = game
+        # Update score immediately (no I/O, just labels)
         self._update_score(game)
-        self._update_prediction(game)
-        self._update_odds(game.game_id)
-        self._update_box_score(game.game_id)
-        self._update_plays(game.game_id)
+        # Kick off background fetch for everything else
+        self._start_poll_worker(game)
+
+    def _start_poll_worker(self, game: GameInfo) -> None:
+        """Launch a background thread to fetch odds/box/plays/prediction."""
+        # Don't stack up workers
+        if self._poll_thread is not None and self._poll_thread.isRunning():
+            return
+
+        self._poll_thread = QThread()
+        self._poll_worker = _PollWorker(game, self._last_play_id)
+        self._poll_worker.moveToThread(self._poll_thread)
+        self._poll_thread.started.connect(self._poll_worker.run)
+        self._poll_worker.finished.connect(self._on_poll_result)
+        self._poll_worker.finished.connect(self._poll_thread.quit)
+        self._poll_thread.finished.connect(self._cleanup_poll)
+        self._poll_thread.start()
+
+    def _cleanup_poll(self) -> None:
+        if self._poll_worker:
+            self._poll_worker.deleteLater()
+            self._poll_worker = None
+        if self._poll_thread:
+            self._poll_thread.deleteLater()
+            self._poll_thread = None
+
+    def _on_poll_result(self, result: _PollResult) -> None:
+        """Apply fetched data to the UI (runs on main thread)."""
+        game = result.game
+        if not game:
+            return
+        # Update score from the freshest game data
+        self._update_score(game)
+        # Prediction
+        if result.prediction:
+            self._render_prediction(result.prediction, game)
+        elif result.postgame_data:
+            self._render_final_analysis_data(result.postgame_data, game)
+        elif result.prediction_error:
+            self.pregame_lbl.setText(f"Pre-game: {result.prediction_error}")
+        # Odds
+        self._apply_odds(result.odds, game)
+        # Box score
+        self._fill_box_table(self.home_box_table, result.box.home_players if result.box else [])
+        self._fill_box_table(self.away_box_table, result.box.away_players if result.box else [])
+        # Plays
+        self._apply_plays(result.plays, result.all_plays, game)
+        # Timer interval
+        if game.status == "in_progress":
+            self._timer.setInterval(self._POLL_LIVE_MS)
+        else:
+            self._timer.setInterval(self._POLL_IDLE_MS)
 
     def _update_score(self, game: GameInfo) -> None:
         self.away_name_lbl.setText(f"{game.away_abbr}\n{game.away_team}")
@@ -343,52 +637,14 @@ class GamecastView(QWidget):
         else:
             self.quarter_scores_lbl.setText("")
 
-    def _update_prediction(self, game: GameInfo) -> None:
-        home_id = _abbr_to_team_id(game.home_abbr)
-        away_id = _abbr_to_team_id(game.away_abbr)
-        if not home_id or not away_id:
-            self.pregame_lbl.setText("Pre-game: teams not in DB")
-            return
-
-        game_date = game.start_time[:10] if game.start_time else ""
-
-        # For final games, show post-game analysis instead of live prediction
-        if game.status == "final":
-            self._render_final_analysis(home_id, away_id, game_date, game)
-            return
-
-        try:
-            lp = live_predict(
-                home_team_id=home_id,
-                away_team_id=away_id,
-                home_score=game.home_score,
-                away_score=game.away_score,
-                period=game.period,
-                clock=game.clock,
-                game_id=game.game_id,
-                game_date_str=game_date,
-            )
-        except Exception as exc:
-            self.pregame_lbl.setText(f"Prediction error: {exc}")
-            return
-
-        self._render_prediction(lp, game)
-
-    def _render_final_analysis(
-        self, home_id: int, away_id: int, game_date: str, game: GameInfo
-    ) -> None:
-        """Show post-game comparison: our pre-game prediction vs actual result."""
+    def _render_final_analysis_data(self, pgdata: dict, game: GameInfo) -> None:
+        """Show post-game comparison using pre-fetched data (no I/O)."""
         ha = game.home_abbr
         aa = game.away_abbr
-
-        # Get cached pre-game prediction
-        from src.analytics.live_prediction import _cached_pregame
-        try:
-            pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
-                home_id, away_id, game_date,
-            )
-        except Exception:
-            pg_home, pg_away, pg_total, pg_spread = 110.0, 110.0, 220.0, 0.0
+        pg_home = pgdata["pg_home"]
+        pg_away = pgdata["pg_away"]
+        pg_total = pgdata["pg_total"]
+        pg_spread = pgdata["pg_spread"]
 
         actual_spread = game.home_score - game.away_score
         actual_total = game.home_score + game.away_score
@@ -419,7 +675,6 @@ class GamecastView(QWidget):
         )
         self.signal_lbl.setStyleSheet("color: gray;")
 
-        # Blend bar not applicable for final
         self.blend_bar.setValue(100)
         self.blend_bar.setFormat("Game Complete")
 
@@ -474,12 +729,8 @@ class GamecastView(QWidget):
             f"Pre-game {pg_pct}%  |  Pace {pace_pct}%  |  Quarter-Hist {qh_pct}%"
         )
 
-    def _update_odds(self, game_id: str) -> None:
-        try:
-            odds = get_game_odds(game_id)
-        except Exception:
-            odds = None
-
+    def _apply_odds(self, odds: Optional[GameOdds], game: GameInfo) -> None:
+        """Update odds labels from pre-fetched data (no I/O)."""
         if not odds:
             self.spread_lbl.setText("Spread: N/A")
             self.ou_lbl.setText("O/U: N/A")
@@ -487,9 +738,8 @@ class GamecastView(QWidget):
             self.win_pct_lbl.setText("Win%: N/A")
             return
 
-        g = self._current_game
-        ha = g.home_abbr if g else "HOME"
-        aa = g.away_abbr if g else "AWAY"
+        ha = game.home_abbr
+        aa = game.away_abbr
 
         self.spread_lbl.setText(
             f"Spread: {ha} {odds.spread:+.1f} ({odds.spread_odds})"
@@ -505,14 +755,6 @@ class GamecastView(QWidget):
         )
 
     # ── box score ──
-
-    def _update_box_score(self, game_id: str) -> None:
-        try:
-            box = get_box_score(game_id)
-        except Exception:
-            box = None
-        self._fill_box_table(self.home_box_table, box.home_players if box else [])
-        self._fill_box_table(self.away_box_table, box.away_players if box else [])
 
     @staticmethod
     def _fill_box_table(table: QTableWidget, players) -> None:
@@ -540,29 +782,19 @@ class GamecastView(QWidget):
 
     # ── play-by-play ──
 
-    def _update_plays(self, game_id: str) -> None:
+    def _apply_plays(
+        self, plays: List[PlayEvent], all_plays: List[PlayEvent], game: GameInfo,
+    ) -> None:
+        """Update play-by-play list from pre-fetched data (no I/O)."""
         from PySide6.QtGui import QColor
-
-        try:
-            plays = get_play_by_play(game_id, self._last_play_id)
-        except Exception:
-            plays = []
 
         if not plays:
             return
 
-        # Determine home/away abbreviations for coloring
-        game: GameInfo | None = self.game_combo.currentData()
-        home_abbr = game.home_abbr if game else ""
-        away_abbr = game.away_abbr if game else ""
+        home_abbr = game.home_abbr
+        away_abbr = game.away_abbr
 
-        # `plays` arrives **newest-first** from get_play_by_play().
-        # For incremental updates we prepend them at position 0 so they
-        # appear above the existing rows.  Because the list is already
-        # newest-first, we must iterate in *reverse* so that the newest
-        # play ends up at row 0.
         for play in reversed(plays):
-            # Build foul tag
             foul_tag = ""
             if play.is_foul:
                 if play.flagrant_foul:
@@ -584,7 +816,6 @@ class GamecastView(QWidget):
             )
             item = QListWidgetItem(text)
 
-            # Color by event type and team
             if play.is_foul:
                 if play.flagrant_foul:
                     item.setForeground(QColor("#e74c3c"))
@@ -601,13 +832,11 @@ class GamecastView(QWidget):
 
             self.play_list.insertItem(0, item)
 
-        # The newest play is plays[0]; remember it for incremental polling
         self._last_play_id = plays[0].event_id
 
-        # Update bonus status from all plays in this game
-        if game and game.status == "in_progress":
+        # Bonus status from pre-fetched all_plays
+        if all_plays and game.status == "in_progress":
             try:
-                all_plays = get_play_by_play(game_id, "")
                 bonus = compute_bonus_status(
                     all_plays, home_abbr, away_abbr, game.period,
                 )
@@ -615,7 +844,6 @@ class GamecastView(QWidget):
             except Exception:
                 pass
 
-        # Cap at 200 items to keep all quarters visible
         while self.play_list.count() > 200:
             self.play_list.takeItem(self.play_list.count() - 1)
 
@@ -669,24 +897,37 @@ class GamecastView(QWidget):
     # ── polling ──
 
     def _poll(self) -> None:
-        """Called by QTimer – refresh the current game if one is selected."""
+        """Called by QTimer – refresh the current game in a background thread."""
         if not self._current_game:
             return
 
-        # Re-fetch the games list to get updated scores
-        try:
-            games = get_live_games()
-        except Exception:
+        # If a background fetch is already running, skip this tick
+        if self._poll_thread is not None and self._poll_thread.isRunning():
             return
 
-        updated = next(
-            (g for g in games if g.game_id == self._current_game.game_id),
-            None,
+        # Launch a lightweight thread to get the updated scoreboard entry
+        # then fetch full game detail in the same thread
+        self._refresh_thread = QThread()
+        self._refresh_worker = _ScoreboardRefreshWorker(
+            self._current_game.game_id, self._last_play_id,
         )
-        if updated:
-            self._load_game_detail(updated)
-            # Switch interval based on status
-            if updated.status == "in_progress":
-                self._timer.setInterval(self._POLL_LIVE_MS)
-            else:
-                self._timer.setInterval(self._POLL_IDLE_MS)
+        self._refresh_worker.moveToThread(self._refresh_thread)
+        self._refresh_thread.started.connect(self._refresh_worker.run)
+        self._refresh_worker.finished.connect(self._on_scoreboard_refresh)
+        self._refresh_worker.finished.connect(self._refresh_thread.quit)
+        self._refresh_thread.finished.connect(self._cleanup_refresh)
+        self._refresh_thread.start()
+
+    def _on_scoreboard_refresh(self, result: _PollResult) -> None:
+        """Handle scoreboard + detail refresh from background thread."""
+        if result.game:
+            self._current_game = result.game
+            self._on_poll_result(result)
+
+    def _cleanup_refresh(self) -> None:
+        if hasattr(self, "_refresh_worker") and self._refresh_worker:
+            self._refresh_worker.deleteLater()
+            self._refresh_worker = None
+        if hasattr(self, "_refresh_thread") and self._refresh_thread:
+            self._refresh_thread.deleteLater()
+            self._refresh_thread = None

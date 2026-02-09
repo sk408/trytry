@@ -100,10 +100,10 @@ def predict_matchup(
         home_court = get_home_court_advantage(home_team_id)
 
     # ============ 3. OPPONENT DEFENSIVE ADJUSTMENT ============
-    away_def_factor = get_opponent_defensive_factor(away_team_id)
-    home_def_factor = get_opponent_defensive_factor(home_team_id)
-    away_def_factor = 1.0 + (away_def_factor - 1.0) * w.def_factor_dampening
-    home_def_factor = 1.0 + (home_def_factor - 1.0) * w.def_factor_dampening
+    away_def_factor_raw = get_opponent_defensive_factor(away_team_id)
+    home_def_factor_raw = get_opponent_defensive_factor(home_team_id)
+    away_def_factor = 1.0 + (away_def_factor_raw - 1.0) * w.def_factor_dampening
+    home_def_factor = 1.0 + (home_def_factor_raw - 1.0) * w.def_factor_dampening
 
     home_base_pts = home_proj["points"] * away_def_factor
     away_base_pts = away_proj["points"] * home_def_factor
@@ -150,11 +150,11 @@ def predict_matchup(
     four_factors_adj = _compute_four_factors_spread(home_ff, away_ff, w)
     spread += four_factors_adj
 
-    # Clutch (projected close games only)
+    # Clutch (projected close games only, but always fetch for feature capture)
+    home_clutch = get_clutch_stats(home_team_id)
+    away_clutch = get_clutch_stats(away_team_id)
     clutch_adj = 0.0
     if abs(spread) < w.clutch_threshold:
-        home_clutch = get_clutch_stats(home_team_id)
-        away_clutch = get_clutch_stats(away_team_id)
         clutch_adj = _compute_clutch_adjustment(home_clutch, away_clutch, w)
         spread += clutch_adj
 
@@ -199,11 +199,38 @@ def predict_matchup(
             spread, espn_home_win_pct, espn_away_win_pct, w
         )
 
+    # ============ 8. ML ENSEMBLE BLENDING ============
+    if w.ml_ensemble_weight > 0:
+        try:
+            from src.analytics.ml_model import predict_ml, is_ml_available
+            if is_ml_available():
+                # Build a PrecomputedGame-like feature dict for ML model
+                _ml_feats = _build_ml_features_live(
+                    home_proj, away_proj, home_off, away_off, home_def, away_def,
+                    home_pace, away_pace, home_court,
+                    home_fatigue["fatigue_penalty"], away_fatigue["fatigue_penalty"],
+                    home_def_factor_raw, away_def_factor_raw,
+                    home_ff, away_ff, home_clutch, away_clutch,
+                    home_hustle, away_hustle,
+                )
+                ml_spread, ml_total, ml_conf = predict_ml(_ml_feats)
+                if ml_conf > 0.3:
+                    base_weight = 1.0 - w.ml_ensemble_weight
+                    ml_wt = w.ml_ensemble_weight
+                    # Dampen ML when it disagrees strongly with base
+                    if abs(ml_spread - spread) > w.ml_disagree_threshold:
+                        ml_wt *= w.ml_disagree_damp
+                        base_weight = 1.0 - ml_wt
+                    spread = base_weight * spread + ml_wt * ml_spread
+                    total = base_weight * total + ml_wt * ml_total
+        except Exception:
+            pass  # Graceful fallback: use base model only
+
     # ============ SANITY CLAMPS ============
     spread = max(-w.spread_clamp, min(w.spread_clamp, spread))
     total = max(w.total_min, min(w.total_max, total))
 
-    # ============ 8. RESIDUAL CALIBRATION ============
+    # ============ 9. RESIDUAL CALIBRATION ============
     spread = _apply_calibration(spread)
 
     # ============ DERIVE INDIVIDUAL SCORES ============
@@ -212,29 +239,139 @@ def predict_matchup(
 
     # ============ FEATURE CAPTURE (for ML analysis) ============
     if _collect_features is not None:
-        _collect_features["scoring_diff"] = home_base_pts - away_base_pts
-        _collect_features["home_court_adv"] = home_court
-        _collect_features["turnover_margin_diff"] = (
+        f = _collect_features  # shorthand
+
+        # ── Original model-level features ──
+        f["scoring_diff"] = home_base_pts - away_base_pts
+        f["home_court_adv"] = home_court
+        f["turnover_margin_diff"] = (
             home_proj.get("turnover_margin", 0) - away_proj.get("turnover_margin", 0)
         )
-        _collect_features["rebound_diff"] = (
+        f["rebound_diff"] = (
             home_proj.get("rebounds", 0) - away_proj.get("rebounds", 0)
         )
-        _collect_features["rating_matchup_diff"] = home_matchup_edge - away_matchup_edge
-        _collect_features["four_factors_adj"] = four_factors_adj
-        _collect_features["clutch_adj"] = clutch_adj
-        _collect_features["hustle_spread_adj"] = hustle_spread_adj
-        _collect_features["pace_factor"] = pace_factor
+        f["rating_matchup_diff"] = home_matchup_edge - away_matchup_edge
+        f["four_factors_adj"] = four_factors_adj
+        f["clutch_adj"] = clutch_adj
+        f["hustle_spread_adj"] = hustle_spread_adj
+        f["pace_factor"] = pace_factor
         _s = home_proj.get("steals", 0) + away_proj.get("steals", 0)
         _b = home_proj.get("blocks", 0) + away_proj.get("blocks", 0)
-        _collect_features["combined_steals_excess"] = max(0, _s - w.steals_threshold)
-        _collect_features["combined_blocks_excess"] = max(0, _b - w.blocks_threshold)
-        _collect_features["oreb_excess"] = (
+        f["combined_steals_excess"] = max(0, _s - w.steals_threshold)
+        f["combined_blocks_excess"] = max(0, _b - w.blocks_threshold)
+        f["oreb_excess"] = (
             home_proj.get("oreb", 0) + away_proj.get("oreb", 0) - w.oreb_baseline
         )
-        _collect_features["fatigue_diff"] = fatigue_adj
-        _collect_features["home_fatigue_penalty"] = home_fatigue["fatigue_penalty"]
-        _collect_features["away_fatigue_penalty"] = away_fatigue["fatigue_penalty"]
+        f["fatigue_diff"] = fatigue_adj
+        f["home_fatigue_penalty"] = home_fatigue["fatigue_penalty"]
+        f["away_fatigue_penalty"] = away_fatigue["fatigue_penalty"]
+
+        # ── RAW TEAM PROJECTIONS (individual, not just diff) ──
+        f["home_raw_points"] = home_proj.get("points", 0)
+        f["away_raw_points"] = away_proj.get("points", 0)
+        f["home_raw_rebounds"] = home_proj.get("rebounds", 0)
+        f["away_raw_rebounds"] = away_proj.get("rebounds", 0)
+        f["home_raw_assists"] = home_proj.get("assists", 0)
+        f["away_raw_assists"] = away_proj.get("assists", 0)
+        f["assists_diff"] = (
+            home_proj.get("assists", 0) - away_proj.get("assists", 0)
+        )
+        f["home_raw_steals"] = home_proj.get("steals", 0)
+        f["away_raw_steals"] = away_proj.get("steals", 0)
+        f["home_raw_blocks"] = home_proj.get("blocks", 0)
+        f["away_raw_blocks"] = away_proj.get("blocks", 0)
+        f["home_raw_turnovers"] = home_proj.get("turnovers", 0)
+        f["away_raw_turnovers"] = away_proj.get("turnovers", 0)
+        f["home_raw_oreb"] = home_proj.get("oreb", 0)
+        f["away_raw_oreb"] = away_proj.get("oreb", 0)
+
+        # ── SHOOTING EFFICIENCY DIFFERENTIALS ──
+        f["home_ts_pct"] = home_proj.get("ts_pct", 0)
+        f["away_ts_pct"] = away_proj.get("ts_pct", 0)
+        f["ts_pct_diff"] = (
+            home_proj.get("ts_pct", 0) - away_proj.get("ts_pct", 0)
+        )
+        f["home_fg3_rate"] = home_proj.get("fg3_rate", 0)
+        f["away_fg3_rate"] = away_proj.get("fg3_rate", 0)
+        f["fg3_rate_diff"] = (
+            home_proj.get("fg3_rate", 0) - away_proj.get("fg3_rate", 0)
+        )
+        f["home_ft_rate"] = home_proj.get("ft_rate", 0)
+        f["away_ft_rate"] = away_proj.get("ft_rate", 0)
+        f["ft_rate_diff"] = (
+            home_proj.get("ft_rate", 0) - away_proj.get("ft_rate", 0)
+        )
+
+        # ── OFFENSIVE / DEFENSIVE RATINGS (raw) ──
+        f["home_off_rating"] = home_off
+        f["away_off_rating"] = away_off
+        f["home_def_rating"] = home_def
+        f["away_def_rating"] = away_def
+        f["off_rating_diff"] = home_off - away_off
+        f["def_rating_diff"] = home_def - away_def
+        f["home_net_rating"] = home_off - home_def
+        f["away_net_rating"] = away_off - away_def
+        f["net_rating_diff"] = (home_off - home_def) - (away_off - away_def)
+
+        # ── DEFENSIVE FACTORS (raw, before dampening) ──
+        f["home_def_factor_raw"] = get_opponent_defensive_factor(home_team_id)
+        f["away_def_factor_raw"] = get_opponent_defensive_factor(away_team_id)
+
+        # ── PACE (raw values) ──
+        f["home_pace"] = home_pace
+        f["away_pace"] = away_pace
+        f["pace_diff"] = home_pace - away_pace
+
+        # ── FOUR FACTORS COMPONENTS (individual edges, not just blended) ──
+        h_efg = home_ff.get("efg_pct") or 0
+        a_efg = away_ff.get("efg_pct") or 0
+        h_opp_efg = home_ff.get("opp_efg_pct") or 0
+        a_opp_efg = away_ff.get("opp_efg_pct") or 0
+        f["ff_efg_edge"] = (h_efg - a_opp_efg) - (a_efg - h_opp_efg)
+        h_tov = home_ff.get("tm_tov_pct") or 0
+        a_tov = away_ff.get("tm_tov_pct") or 0
+        h_opp_tov = home_ff.get("opp_tm_tov_pct") or 0
+        a_opp_tov = away_ff.get("opp_tm_tov_pct") or 0
+        f["ff_tov_edge"] = (a_tov - h_opp_tov) - (h_tov - a_opp_tov)
+        h_oreb_ff = home_ff.get("oreb_pct") or 0
+        a_oreb_ff = away_ff.get("oreb_pct") or 0
+        h_opp_oreb = home_ff.get("opp_oreb_pct") or 0
+        a_opp_oreb = away_ff.get("opp_oreb_pct") or 0
+        f["ff_oreb_edge"] = (h_oreb_ff - a_opp_oreb) - (a_oreb_ff - h_opp_oreb)
+        h_fta = home_ff.get("fta_rate") or 0
+        a_fta = away_ff.get("fta_rate") or 0
+        h_opp_fta = home_ff.get("opp_fta_rate") or 0
+        a_opp_fta = away_ff.get("opp_fta_rate") or 0
+        f["ff_fta_edge"] = (h_fta - a_opp_fta) - (a_fta - h_opp_fta)
+
+        # ── CLUTCH SUB-METRICS ──
+        f["home_clutch_net"] = home_clutch.get("clutch_net_rating") or 0
+        f["away_clutch_net"] = away_clutch.get("clutch_net_rating") or 0
+        f["clutch_net_diff"] = f["home_clutch_net"] - f["away_clutch_net"]
+
+        # ── HUSTLE SUB-METRICS ──
+        f["home_deflections"] = home_hustle.get("deflections") or 0
+        f["away_deflections"] = away_hustle.get("deflections") or 0
+        f["home_contested"] = home_hustle.get("contested_shots") or 0
+        f["away_contested"] = away_hustle.get("contested_shots") or 0
+        f["deflection_diff"] = f["home_deflections"] - f["away_deflections"]
+
+        # ── INJURY IMPACT ──
+        # Count injured players and estimate lost PPG for each side
+        try:
+            from src.database.db import get_conn as _gc
+            with _gc() as _conn:
+                for prefix, tid in [("home", home_team_id), ("away", away_team_id)]:
+                    inj_rows = _conn.execute(
+                        "SELECT COUNT(*), is_injured FROM players WHERE team_id = ? GROUP BY is_injured",
+                        (tid,),
+                    ).fetchall()
+                    inj_count = sum(r[0] for r in inj_rows if r[1])
+                    f[f"{prefix}_injured_count"] = inj_count
+        except Exception:
+            f["home_injured_count"] = 0
+            f["away_injured_count"] = 0
+        f["injured_count_diff"] = f.get("home_injured_count", 0) - f.get("away_injured_count", 0)
 
     return MatchupPrediction(
         home_team_id=home_team_id,
@@ -283,6 +420,111 @@ def predict_matchup_detailed(
 
 
 # ============ HELPER FUNCTIONS ============
+
+
+def _build_ml_features_live(
+    home_proj: dict, away_proj: dict,
+    home_off: float, away_off: float,
+    home_def: float, away_def: float,
+    home_pace: float, away_pace: float,
+    home_court: float,
+    home_fatigue: float, away_fatigue: float,
+    home_def_factor_raw: float, away_def_factor_raw: float,
+    home_ff: dict, away_ff: dict,
+    home_clutch: dict, away_clutch: dict,
+    home_hustle: dict, away_hustle: dict,
+) -> dict:
+    """Build a feature dict compatible with ml_model.extract_features
+    from live prediction data.  This mirrors the feature extraction in
+    ml_model.py so the same trained model can be used at inference time."""
+    _s = lambda v, d=0.0: float(v) if v is not None else d
+    f: dict[str, float] = {}
+    hp, ap = home_proj, away_proj
+
+    for key in ("points", "rebounds", "assists", "steals", "blocks",
+                "turnovers", "oreb", "dreb"):
+        f[f"home_{key}"] = _s(hp.get(key))
+        f[f"away_{key}"] = _s(ap.get(key))
+        f[f"diff_{key}"] = f[f"home_{key}"] - f[f"away_{key}"]
+
+    for key in ("ts_pct", "fg3_rate", "ft_rate"):
+        f[f"home_{key}"] = _s(hp.get(key))
+        f[f"away_{key}"] = _s(ap.get(key))
+        f[f"diff_{key}"] = f[f"home_{key}"] - f[f"away_{key}"]
+
+    f["home_to_margin"] = _s(hp.get("turnover_margin"))
+    f["away_to_margin"] = _s(ap.get("turnover_margin"))
+    f["diff_to_margin"] = f["home_to_margin"] - f["away_to_margin"]
+
+    f["home_off_rating"] = _s(home_off)
+    f["away_off_rating"] = _s(away_off)
+    f["home_def_rating"] = _s(home_def)
+    f["away_def_rating"] = _s(away_def)
+    f["home_net_rating"] = f["home_off_rating"] - f["home_def_rating"]
+    f["away_net_rating"] = f["away_off_rating"] - f["away_def_rating"]
+    f["diff_net_rating"] = f["home_net_rating"] - f["away_net_rating"]
+    f["home_matchup_edge"] = f["home_off_rating"] - f["away_def_rating"]
+    f["away_matchup_edge"] = f["away_off_rating"] - f["home_def_rating"]
+    f["diff_matchup_edge"] = f["home_matchup_edge"] - f["away_matchup_edge"]
+
+    f["home_def_factor_raw"] = _s(home_def_factor_raw, 1.0)
+    f["away_def_factor_raw"] = _s(away_def_factor_raw, 1.0)
+
+    f["home_pace"] = _s(home_pace, 98.0)
+    f["away_pace"] = _s(away_pace, 98.0)
+    f["avg_pace"] = (f["home_pace"] + f["away_pace"]) / 2
+    f["diff_pace"] = f["home_pace"] - f["away_pace"]
+
+    f["home_court"] = _s(home_court, 3.0)
+
+    f["home_fatigue"] = _s(home_fatigue)
+    f["away_fatigue"] = _s(away_fatigue)
+    f["diff_fatigue"] = f["home_fatigue"] - f["away_fatigue"]
+    f["combined_fatigue"] = f["home_fatigue"] + f["away_fatigue"]
+
+    hff = home_ff or {}
+    aff = away_ff or {}
+    h_efg = _s(hff.get("efg_pct"))
+    a_efg = _s(aff.get("efg_pct"))
+    h_opp_efg = _s(hff.get("opp_efg_pct"))
+    a_opp_efg = _s(aff.get("opp_efg_pct"))
+    f["ff_efg_edge"] = (h_efg - a_opp_efg) - (a_efg - h_opp_efg)
+    h_tov = _s(hff.get("tm_tov_pct"))
+    a_tov = _s(aff.get("tm_tov_pct"))
+    h_opp_tov = _s(hff.get("opp_tm_tov_pct"))
+    a_opp_tov = _s(aff.get("opp_tm_tov_pct"))
+    f["ff_tov_edge"] = (a_tov - h_opp_tov) - (h_tov - a_opp_tov)
+    h_oreb_ff = _s(hff.get("oreb_pct"))
+    a_oreb_ff = _s(aff.get("oreb_pct"))
+    h_opp_oreb = _s(hff.get("opp_oreb_pct"))
+    a_opp_oreb = _s(aff.get("opp_oreb_pct"))
+    f["ff_oreb_edge"] = (h_oreb_ff - a_opp_oreb) - (a_oreb_ff - h_opp_oreb)
+    h_fta = _s(hff.get("fta_rate"))
+    a_fta = _s(aff.get("fta_rate"))
+    h_opp_fta = _s(hff.get("opp_fta_rate"))
+    a_opp_fta = _s(aff.get("opp_fta_rate"))
+    f["ff_fta_edge"] = (h_fta - a_opp_fta) - (a_fta - h_opp_fta)
+
+    hc = home_clutch or {}
+    ac = away_clutch or {}
+    f["home_clutch_net"] = _s(hc.get("clutch_net_rating"))
+    f["away_clutch_net"] = _s(ac.get("clutch_net_rating"))
+    f["diff_clutch_net"] = f["home_clutch_net"] - f["away_clutch_net"]
+    f["home_clutch_efg"] = _s(hc.get("clutch_efg_pct"))
+    f["away_clutch_efg"] = _s(ac.get("clutch_efg_pct"))
+
+    hh = home_hustle or {}
+    ah = away_hustle or {}
+    f["home_deflections"] = _s(hh.get("deflections"))
+    f["away_deflections"] = _s(ah.get("deflections"))
+    f["diff_deflections"] = f["home_deflections"] - f["away_deflections"]
+    f["home_contested"] = _s(hh.get("contested_shots"))
+    f["away_contested"] = _s(ah.get("contested_shots"))
+    f["home_loose_balls"] = _s(hh.get("loose_balls_recovered"))
+    f["away_loose_balls"] = _s(ah.get("loose_balls_recovered"))
+
+    return f
+
 
 # Cache for residual calibration (loaded once, refreshed on demand)
 _calibration_cache: list | None = None
@@ -691,6 +933,23 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
     # Fatigue total
     combined_fatigue = g.home_fatigue_penalty + g.away_fatigue_penalty
     total -= combined_fatigue * w.fatigue_total_mult
+
+    # ML Ensemble blending (in fast path)
+    if w.ml_ensemble_weight > 0:
+        try:
+            from src.analytics.ml_model import predict_ml_from_precomputed, is_ml_available
+            if is_ml_available():
+                ml_spread, ml_total, ml_conf = predict_ml_from_precomputed(g)
+                if ml_conf > 0.3:
+                    base_weight = 1.0 - w.ml_ensemble_weight
+                    ml_wt = w.ml_ensemble_weight
+                    if abs(ml_spread - spread) > w.ml_disagree_threshold:
+                        ml_wt *= w.ml_disagree_damp
+                        base_weight = 1.0 - ml_wt
+                    spread = base_weight * spread + ml_wt * ml_spread
+                    total = base_weight * total + ml_wt * ml_total
+        except Exception:
+            pass
 
     # Clamp total
     total = max(w.total_min, min(w.total_max, total))

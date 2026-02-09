@@ -209,6 +209,7 @@
     <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
     <button id="btn-team-refine" onclick="startTeamRefinement()">Per-Team Refinement</button>
     <button id="btn-optimize-all" onclick="startOptimizeAll()" style="background:#2563eb; color:#fff; font-weight:600;">Optimize All</button>
+    <button id="btn-ml-train" onclick="startMLTrain()" style="background:#2563eb; color:#fff; font-weight:600;">Train ML Model</button>
     <label for="opt-trials" style="margin-left: 2px; font-size: 13px; color: #94a3b8;">Trials:</label>
     <input type="number" id="opt-trials" value="200" min="50" max="2000" step="50"
            title="Number of weight combinations to evaluate. More = better but slower. 200 default, 500+ for thorough."
@@ -219,12 +220,14 @@
   <!-- Row 2: Pipeline + analysis buttons -->
   <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
     <button id="btn-pipeline" onclick="startFullPipeline()" style="background:#2563eb; color:#fff; font-weight:600;">Full Pipeline</button>
-    <button id="btn-cancel-pipeline" onclick="cancelPipeline()" style="background:#991b1b; color:#fecaca; display:none;">Cancel</button>
+    <button id="btn-continuous" onclick="startContinuousOpt()" style="background:#059669; color:#fff; font-weight:600;">Continuous Optimize</button>
+    <button id="btn-cancel-pipeline" onclick="cancelRunning()" style="background:#991b1b; color:#fecaca; display:none;">Cancel</button>
     <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:13px; color:#94a3b8;">
       <input type="checkbox" id="force-rerun" style="width:14px; height:14px;"> Force re-run
     </label>
     <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
     <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
+    <button id="btn-grouped" onclick="startGroupedImportance()">Grouped Importance</button>
     <button id="btn-ml-features" onclick="startMLFeatureImportance()">ML Feature Importance</button>
     <button id="btn-fft" onclick="startFFTAnalysis()">Error Patterns (FFT)</button>
   </div>
@@ -234,7 +237,7 @@
 
 <script>
 function _disableOptButtons(disabled) {
-  ['btn-optimize','btn-calibrate','btn-features','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights','btn-optimize-all','btn-pipeline'].forEach(id => {
+  ['btn-optimize','btn-calibrate','btn-features','btn-grouped','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights','btn-optimize-all','btn-pipeline','btn-ml-train','btn-continuous'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = disabled;
   });
@@ -390,6 +393,51 @@ function showFeatureResults(results) {
   container.innerHTML = html;
 }
 
+function startGroupedImportance() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Running grouped feature importance (interaction effects)...');
+
+  const results = [];
+  const es = new EventSource('/api/grouped-feature-importance');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg === '[DONE]') {
+      es.close();
+      _disableOptButtons(false);
+      showGroupedResults(results);
+    } else if (msg.startsWith('[RESULT]')) {
+      results.push(msg.replace('[RESULT] ', ''));
+      _appendLog(msg);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showGroupedResults(results) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Grouped Feature Importance</h3><div class="scroll-x"><table><thead><tr><th>Group</th><th>Weights</th><th>Impact</th><th>Impact %</th><th>Verdict</th></tr></thead><tbody>';
+  results.forEach(r => {
+    const parts = {};
+    r.split(',').forEach(p => { const [k,...v] = p.split('='); parts[k.trim()] = v.join('='); });
+    const verdict = parts.verdict || 'neutral';
+    const cls = verdict === 'HELPS' ? 'text-success' : (verdict === 'HURTS' ? 'text-danger' : '');
+    html += '<tr><td>' + (parts.group||'') + '</td><td style="font-size:11px">' + (parts.weights||'') + '</td><td>' + (parts.impact||'') + '</td><td>' + (parts.impact_pct||'') + '</td><td class="' + cls + '">' + verdict + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
 function startMLFeatureImportance() {
   _disableOptButtons(true);
   const log = document.getElementById('opt-log');
@@ -465,6 +513,92 @@ function startFFTAnalysis() {
     }
   };
   es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function startMLTrain() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Training ML ensemble models (XGBoost spread + total)...');
+
+  const metrics = {};
+  const shapSpread = [];
+  const shapTotal = [];
+  const gainSpread = [];
+  const gainTotal = [];
+  const es = new EventSource('/api/ml-train');
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+      showMLTrainResults(metrics, shapSpread, shapTotal, gainSpread, gainTotal);
+    } else if (msg.startsWith('[METRIC]')) {
+      const raw = msg.replace('[METRIC] ', '');
+      raw.split(',').forEach(p => { const [k,...v] = p.split('='); metrics[k.trim()] = v.join('='); });
+      _appendLog(msg);
+    } else if (msg.startsWith('[SHAP_SPREAD]')) {
+      const raw = msg.replace('[SHAP_SPREAD] ', '');
+      const [name,...v] = raw.split('=');
+      shapSpread.push({name: name.trim(), imp: v.join('=')});
+    } else if (msg.startsWith('[SHAP_TOTAL]')) {
+      const raw = msg.replace('[SHAP_TOTAL] ', '');
+      const [name,...v] = raw.split('=');
+      shapTotal.push({name: name.trim(), imp: v.join('=')});
+    } else if (msg.startsWith('[GAIN_SPREAD]')) {
+      const raw = msg.replace('[GAIN_SPREAD] ', '');
+      const [name,...v] = raw.split('=');
+      gainSpread.push({name: name.trim(), gain: v.join('=')});
+    } else if (msg.startsWith('[GAIN_TOTAL]')) {
+      const raw = msg.replace('[GAIN_TOTAL] ', '');
+      const [name,...v] = raw.split('=');
+      gainTotal.push({name: name.trim(), gain: v.join('=')});
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showMLTrainResults(metrics, shapSpread, shapTotal, gainSpread, gainTotal) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>ML Ensemble Training Results</h3>';
+
+  // Metrics summary
+  html += '<div class="stats-grid" style="margin-bottom:16px;">';
+  html += '<div class="stat-card"><div class="stat-value">' + (metrics.spread_val_mae || '--') + '</div><div class="stat-label">Spread Val MAE</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (metrics.total_val_mae || '--') + '</div><div class="stat-label">Total Val MAE</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (metrics.n_train || '--') + '</div><div class="stat-label">Train Games</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (metrics.n_val || '--') + '</div><div class="stat-label">Val Games</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (metrics.n_features || '--') + '</div><div class="stat-label">Features</div></div>';
+  html += '</div>';
+
+  // SHAP features table (prefer SHAP, fallback to gain)
+  const hasShap = shapSpread.length > 0;
+  const features = hasShap ? shapSpread : gainSpread;
+  const featureLabel = hasShap ? 'SHAP Importance' : 'Gain Importance';
+  const totalMap = {};
+  (hasShap ? shapTotal : gainTotal).forEach(f => { totalMap[f.name] = hasShap ? f.imp : f.gain; });
+
+  if (features.length > 0) {
+    html += '<h4>Top Features (' + featureLabel + ')</h4>';
+    html += '<div class="scroll-x"><table><thead><tr><th>Feature</th><th>Spread ' + featureLabel + '</th><th>Total ' + featureLabel + '</th></tr></thead><tbody>';
+    features.forEach(f => {
+      const totalVal = totalMap[f.name] || '0.0';
+      html += '<tr><td>' + f.name + '</td><td>' + (hasShap ? f.imp : f.gain) + '</td><td>' + totalVal + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  container.innerHTML = html;
 }
 
 function startTeamRefinement() {
@@ -607,12 +741,63 @@ function startFullPipeline() {
   es.onerror = function() { es.close(); _disableOptButtons(false); };
 }
 
-function cancelPipeline() {
-  fetch('/api/pipeline/cancel', {method: 'POST'}).then(r => r.json()).then(d => {
-    _appendLog('Cancellation requested...');
-    const cancelBtn = document.getElementById('btn-cancel-pipeline');
-    if (cancelBtn) cancelBtn.disabled = true;
-  });
+function cancelRunning() {
+  // Cancel both pipeline and continuous — whichever is active
+  fetch('/api/pipeline/cancel', {method: 'POST'}).catch(() => {});
+  fetch('/api/continuous-optimize/cancel', {method: 'POST'}).catch(() => {});
+  _appendLog('Cancellation requested — will stop after current round...');
+  const cancelBtn = document.getElementById('btn-cancel-pipeline');
+  if (cancelBtn) cancelBtn.disabled = true;
+}
+
+function startContinuousOpt() {
+  _disableOptButtons(true);
+  const log = document.getElementById('opt-log');
+  log.innerHTML = '';
+  log.style.display = 'block';
+  document.getElementById('opt-results').style.display = 'none';
+  _appendLog('Starting continuous optimisation (loops until cancelled)...');
+  _appendLog('Click Cancel to stop — best results are always kept.\n');
+
+  const trials = parseInt(document.getElementById('opt-trials').value) || 200;
+  const es = new EventSource('/api/continuous-optimize?trials=' + trials);
+  es.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[DONE]')) {
+      _appendLog(msg);
+      es.close();
+      _disableOptButtons(false);
+    } else if (msg.startsWith('[RESULT]')) {
+      const parts = {};
+      msg.replace('[RESULT] ', '').split(',').forEach(p => {
+        const [k,...v] = p.split('=');
+        parts[k.trim()] = v.join('=');
+      });
+      showContinuousResults(parts);
+    } else if (msg.startsWith('[ERROR]')) {
+      _appendLog('ERROR: ' + msg);
+      es.close();
+      _disableOptButtons(false);
+    } else {
+      _appendLog(msg);
+    }
+  };
+  es.onerror = function() { es.close(); _disableOptButtons(false); };
+}
+
+function showContinuousResults(parts) {
+  const container = document.getElementById('opt-results');
+  container.style.display = 'block';
+  let html = '<h3>Continuous Optimisation Results</h3>';
+  html += '<div class="stats-grid" style="margin-bottom:16px;">';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.rounds || '--') + '</div><div class="stat-label">Rounds</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.improvements || '--') + '</div><div class="stat-label">Improvements</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.starting_loss || '--') + '</div><div class="stat-label">Starting Loss</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.best_loss || '--') + '</div><div class="stat-label">Best Loss</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.teams_refined || '--') + '</div><div class="stat-label">Teams Refined</div></div>';
+  html += '<div class="stat-card"><div class="stat-value">' + (parts.seconds || '--') + 's</div><div class="stat-label">Total Time</div></div>';
+  html += '</div>';
+  container.innerHTML = html;
 }
 
 function showPipelineResults(steps) {

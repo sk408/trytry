@@ -1091,6 +1091,55 @@ async def stream_feature_importance() -> StreamingResponse:
     )
 
 
+@app.get("/api/grouped-feature-importance")
+async def stream_grouped_feature_importance() -> StreamingResponse:
+    """Stream grouped feature importance analysis via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_gfi() -> None:
+            try:
+                from src.analytics.weight_optimizer import run_grouped_feature_importance
+                results = run_grouped_feature_importance(progress_cb=progress_cb)
+                for g in results:
+                    verdict = "HELPS" if g.impact > 0.1 else ("HURTS" if g.impact < -0.1 else "neutral")
+                    weights_str = " | ".join(g.features_disabled)
+                    msg_queue.put(
+                        f"[RESULT] group={g.group_name},"
+                        f"weights={weights_str},"
+                        f"impact={g.impact:+.3f},"
+                        f"impact_pct={g.impact_pct:+.2f}%,"
+                        f"verdict={verdict}"
+                    )
+                msg_queue.put("[DONE] Grouped importance complete")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_gfi, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/ml-feature-importance")
 async def stream_ml_feature_importance() -> StreamingResponse:
     """Stream ML (XGBoost + SHAP) feature importance analysis via SSE."""
@@ -1182,6 +1231,80 @@ async def stream_fft_analysis() -> StreamingResponse:
     )
 
 
+@app.get("/api/ml-train")
+async def stream_ml_train() -> StreamingResponse:
+    """Stream ML ensemble model training via SSE."""
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_train() -> None:
+            try:
+                from src.analytics.prediction import precompute_game_data
+                from src.analytics.ml_model import train_models, reload_models
+
+                games = precompute_game_data(progress_cb=progress_cb)
+                if not games:
+                    msg_queue.put("[ERROR] No precomputed games. Run a data sync first.")
+                    return
+                result = train_models(games, progress_cb=progress_cb)
+                reload_models()
+
+                # Send structured results
+                msg_queue.put(
+                    f"[METRIC] spread_train_mae={result.spread_train_mae:.3f},"
+                    f"spread_val_mae={result.spread_val_mae:.3f},"
+                    f"total_train_mae={result.total_train_mae:.3f},"
+                    f"total_val_mae={result.total_val_mae:.3f},"
+                    f"n_train={result.n_train},"
+                    f"n_val={result.n_val},"
+                    f"n_features={result.n_features}"
+                )
+
+                # Send SHAP features
+                for name, imp in result.shap_spread_features:
+                    msg_queue.put(f"[SHAP_SPREAD] {name}={imp:.4f}")
+                for name, imp in result.shap_total_features:
+                    msg_queue.put(f"[SHAP_TOTAL] {name}={imp:.4f}")
+
+                # Send gain-based features
+                for name, gain in result.top_spread_features:
+                    msg_queue.put(f"[GAIN_SPREAD] {name}={gain:.2f}")
+                for name, gain in result.top_total_features:
+                    msg_queue.put(f"[GAIN_TOTAL] {name}={gain:.2f}")
+
+                msg_queue.put(
+                    f"[DONE] ML models trained — "
+                    f"spread val MAE={result.spread_val_mae:.2f}, "
+                    f"total val MAE={result.total_val_mae:.2f}"
+                )
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_train, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/team-refinement")
 async def stream_team_refinement(trials: int = 100) -> StreamingResponse:
     """Stream per-team weight refinement progress via SSE."""
@@ -1237,8 +1360,71 @@ async def stream_team_refinement(trials: int = 100) -> StreamingResponse:
     )
 
 
-# --- Pipeline cancel flag (shared across requests) ---
+# --- Cancel flags (shared across requests) ---
 _pipeline_cancel_flag = threading.Event()
+_continuous_cancel_flag = threading.Event()
+
+
+@app.get("/api/continuous-optimize")
+async def stream_continuous_optimize(trials: int = 200) -> StreamingResponse:
+    """Stream continuous optimisation (loops until cancelled) via SSE."""
+    n_trials = max(50, min(2000, trials))
+    _continuous_cancel_flag.clear()
+
+    async def generate() -> AsyncGenerator[str, None]:
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
+        def progress_cb(msg: str) -> None:
+            msg_queue.put(msg)
+
+        def run_continuous() -> None:
+            try:
+                from src.analytics.weight_optimizer import run_continuous_optimiser
+                result = run_continuous_optimiser(
+                    n_trials=n_trials,
+                    team_trials=n_trials,
+                    progress_cb=progress_cb,
+                    cancel_check=lambda: _continuous_cancel_flag.is_set(),
+                )
+                msg_queue.put(
+                    f"[RESULT] rounds={result.rounds_completed},"
+                    f"improvements={result.global_improvements},"
+                    f"starting_loss={result.starting_loss:.2f},"
+                    f"best_loss={result.best_global_loss:.2f},"
+                    f"teams_refined={result.teams_refined}/{result.total_teams},"
+                    f"seconds={result.total_seconds:.0f}"
+                )
+                msg_queue.put("[DONE] Continuous optimisation stopped")
+            except Exception as exc:
+                msg_queue.put(f"[ERROR] {exc}")
+            finally:
+                msg_queue.put(None)
+
+        thread = threading.Thread(target=run_continuous, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                msg = await asyncio.to_thread(msg_queue.get, timeout=0.5)
+                if msg is None:
+                    break
+                yield f"data: {msg}\n\n"
+            except Exception:
+                if not thread.is_alive():
+                    break
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/continuous-optimize/cancel")
+async def api_continuous_cancel() -> dict:
+    """Signal the continuous optimiser to stop after the current round."""
+    _continuous_cancel_flag.set()
+    return {"status": "cancel_requested"}
 
 
 @app.get("/api/optimize-all")

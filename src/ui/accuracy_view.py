@@ -143,6 +143,21 @@ class MLFeatureImportanceWorker(QObject):
             self.error.emit(f"{exc}\n{traceback.format_exc()}")
 
 
+class GroupedImportanceWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # List[GroupedFeatureImportance]
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            from src.analytics.weight_optimizer import run_grouped_feature_importance
+            result = run_grouped_feature_importance(progress_cb=self.progress.emit)
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
 class FFTAnalysisWorker(QObject):
     progress = Signal(str)
     finished = Signal(object)  # List[FFTPattern]
@@ -201,6 +216,35 @@ class ComboOptimiserWorker(QObject):
             self.error.emit(f"{exc}\n{traceback.format_exc()}")
 
 
+class ContinuousOptWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # ContinuousOptResult
+    error = Signal(str)
+
+    def __init__(self, n_trials: int = 200, team_trials: int = 100):
+        super().__init__()
+        self.n_trials = n_trials
+        self.team_trials = team_trials
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            from src.analytics.weight_optimizer import run_continuous_optimiser
+            result = run_continuous_optimiser(
+                n_trials=self.n_trials,
+                team_trials=self.team_trials,
+                progress_cb=self.progress.emit,
+                cancel_check=lambda: self._cancel,
+            )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
 class FullPipelineWorker(QObject):
     progress = Signal(str)
     finished = Signal(object)  # dict summary
@@ -236,6 +280,27 @@ class FullPipelineWorker(QObject):
                 cancel_check=lambda: self._cancel,
                 force_rerun=self.force_rerun,
             )
+            self.finished.emit(result)
+        except Exception as exc:
+            import traceback
+            self.error.emit(f"{exc}\n{traceback.format_exc()}")
+
+
+class MLTrainWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)  # MLTrainingResult
+    error = Signal(str)
+
+    def run(self) -> None:
+        try:
+            from src.analytics.prediction import precompute_game_data
+            from src.analytics.ml_model import train_models, reload_models
+            games = precompute_game_data(progress_cb=self.progress.emit)
+            if not games:
+                self.error.emit("No precomputed games available. Run a data sync first.")
+                return
+            result = train_models(games, progress_cb=self.progress.emit)
+            reload_models()
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -382,12 +447,29 @@ class AccuracyView(QWidget):
         )
         self.team_refine_btn.clicked.connect(self._run_team_refinement)  # type: ignore[arg-type]
 
+        self.grouped_feature_btn = QPushButton("  Grouped Importance")
+        self.grouped_feature_btn.setToolTip(
+            "Test groups of related features together.\n"
+            "Catches interaction effects that single-feature\n"
+            "disruption misses."
+        )
+        self.grouped_feature_btn.clicked.connect(self._run_grouped_importance)  # type: ignore[arg-type]
+
         self.fft_btn = QPushButton("  Error Patterns (FFT)")
         self.fft_btn.setToolTip(
             "Detect periodic patterns in prediction errors\n"
             "using Fourier analysis on league-wide data."
         )
         self.fft_btn.clicked.connect(self._run_fft_analysis)  # type: ignore[arg-type]
+
+        self.ml_train_btn = QPushButton("  Train ML Model")
+        self.ml_train_btn.setProperty("cssClass", "primary")
+        self.ml_train_btn.setToolTip(
+            "Train XGBoost spread/total models on historical game features.\n"
+            "The ML model is blended with the base model for ensemble predictions.\n"
+            "Shows training/validation MAE and top SHAP features."
+        )
+        self.ml_train_btn.clicked.connect(self._run_ml_train)  # type: ignore[arg-type]
 
         self.combo_opt_btn = QPushButton("  Optimize All")
         self.combo_opt_btn.setProperty("cssClass", "primary")
@@ -396,6 +478,16 @@ class AccuracyView(QWidget):
             "in a single pass with shared precomputed data."
         )
         self.combo_opt_btn.clicked.connect(self._run_combo_optimiser)  # type: ignore[arg-type]
+
+        self.continuous_opt_btn = QPushButton("  Continuous Optimize")
+        self.continuous_opt_btn.setProperty("cssClass", "primary")
+        self.continuous_opt_btn.setToolTip(
+            "Loop global + per-team optimisation indefinitely.\n"
+            "Each round explores new weight combinations (random seed).\n"
+            "Only saves when it finds improvements.\n"
+            "Click Cancel to stop — best results are kept."
+        )
+        self.continuous_opt_btn.clicked.connect(self._run_continuous_opt)  # type: ignore[arg-type]
 
         self.pipeline_btn = QPushButton("  Full Pipeline")
         self.pipeline_btn.setProperty("cssClass", "primary")
@@ -483,6 +575,7 @@ class AccuracyView(QWidget):
         opt_row1.addWidget(self.optimise_btn)
         opt_row1.addWidget(self.team_refine_btn)
         opt_row1.addWidget(self.combo_opt_btn)
+        opt_row1.addWidget(self.ml_train_btn)
         opt_row1.addWidget(QLabel("Trials:"))
         opt_row1.addWidget(self.trials_spin)
         opt_row1.addWidget(self.clear_weights_btn)
@@ -491,10 +584,12 @@ class AccuracyView(QWidget):
         # Row 2: Pipeline + analysis buttons
         opt_row2 = QHBoxLayout()
         opt_row2.addWidget(self.pipeline_btn)
+        opt_row2.addWidget(self.continuous_opt_btn)
         opt_row2.addWidget(self.cancel_btn)
         opt_row2.addWidget(self.force_rerun_checkbox)
         opt_row2.addWidget(self.calibrate_btn)
         opt_row2.addWidget(self.feature_btn)
+        opt_row2.addWidget(self.grouped_feature_btn)
         opt_row2.addWidget(self.ml_feature_btn)
         opt_row2.addWidget(self.fft_btn)
         opt_row2.addStretch()
@@ -762,6 +857,49 @@ class AccuracyView(QWidget):
             self._thread.quit()
             self._thread.wait()
 
+    # ──── Grouped Feature Importance ────
+
+    def _run_grouped_importance(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Running grouped feature importance (interaction effects)...")
+        self.status.setText("Testing feature groups...")
+
+        self._thread = QThread()
+        self._worker = GroupedImportanceWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_grouped_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_grouped_done(self, groups: list) -> None:
+        self.log.append(f"\nGrouped importance complete: {len(groups)} groups analysed")
+        self.status.setText("Grouped importance done!")
+        self._set_buttons_enabled(True)
+        headers = ["Group", "Weights Disabled", "Baseline Loss", "Disabled Loss",
+                    "Impact", "Impact %", "Verdict"]
+        rows = []
+        for g in groups:
+            verdict = "HELPS" if g.impact > 0.1 else ("HURTS" if g.impact < -0.1 else "neutral")
+            rows.append([
+                g.group_name,
+                ", ".join(g.features_disabled),
+                f"{g.baseline_loss:.2f}",
+                f"{g.disabled_loss:.2f}",
+                f"{g.impact:+.3f}",
+                f"{g.impact_pct:+.2f}%",
+                verdict,
+            ])
+        self._show_list_table(headers, rows)
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
     # ──── ML Feature Importance ────
 
     def _run_ml_feature_importance(self) -> None:
@@ -843,6 +981,75 @@ class AccuracyView(QWidget):
                 "Result", "Value",
                 {"Status": "No significant periodic error patterns detected (good)"},
             )
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
+    # ──── Train ML Model ────
+
+    def _run_ml_train(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.log.clear()
+        self.log.append("Training ML ensemble models (XGBoost spread + total)...")
+        self.status.setText("Training ML models...")
+
+        self._thread = QThread()
+        self._worker = MLTrainWorker()
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_ml_train_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_ml_train_done(self, result) -> None:
+        self.log.append(
+            f"\nML training complete!\n"
+            f"  Spread: train MAE={result.spread_train_mae:.2f}, "
+            f"val MAE={result.spread_val_mae:.2f}\n"
+            f"  Total:  train MAE={result.total_train_mae:.2f}, "
+            f"val MAE={result.total_val_mae:.2f}\n"
+            f"  {result.n_train} train / {result.n_val} validation games, "
+            f"{result.n_features} features"
+        )
+        self.status.setText("ML training done!")
+        self._set_buttons_enabled(True)
+
+        # Show SHAP features if available, otherwise gain-based
+        if result.shap_spread_features:
+            headers = ["Feature", "SHAP Spread", "SHAP Total"]
+            rows = []
+            shap_total_map = {name: imp for name, imp in result.shap_total_features}
+            for name, imp in result.shap_spread_features:
+                rows.append([
+                    name,
+                    f"{imp:.4f}",
+                    f"{shap_total_map.get(name, 0.0):.4f}",
+                ])
+            self._show_list_table(headers, rows)
+        elif result.top_spread_features:
+            headers = ["Feature", "Spread Gain", "Total Gain"]
+            rows = []
+            total_map = {name: gain for name, gain in result.top_total_features}
+            for name, gain in result.top_spread_features:
+                rows.append([
+                    name,
+                    f"{gain:.2f}",
+                    f"{total_map.get(name, 0.0):.2f}",
+                ])
+            self._show_list_table(headers, rows)
+        else:
+            self._show_dict_table("Metric", "Value", {
+                "Spread Val MAE": f"{result.spread_val_mae:.2f}",
+                "Total Val MAE": f"{result.total_val_mae:.2f}",
+                "Training Samples": str(result.n_train),
+                "Validation Samples": str(result.n_val),
+                "Features": str(result.n_features),
+            })
+
         if self._thread:
             self._thread.quit()
             self._thread.wait()
@@ -944,6 +1151,60 @@ class AccuracyView(QWidget):
             self._thread.quit()
             self._thread.wait()
 
+    # ──── Continuous optimiser ────
+
+    def _run_continuous_opt(self) -> None:
+        if self._thread is not None and self._thread.isRunning():
+            return
+        self._set_buttons_enabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.log.clear()
+        self.log.append("Starting continuous optimisation (runs until cancelled)...")
+        self.log.append("Click Cancel to stop — best results are always kept.\n")
+        self.status.setText("Continuous optimisation running...")
+
+        self._thread = QThread()
+        self._worker = ContinuousOptWorker(
+            n_trials=self.trials_spin.value(),
+            team_trials=self.trials_spin.value(),
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)  # type: ignore
+        self._worker.progress.connect(self._on_progress)  # type: ignore
+        self._worker.finished.connect(self._on_continuous_done)  # type: ignore
+        self._worker.error.connect(self._on_error)  # type: ignore
+        self._thread.finished.connect(self._cleanup_thread)  # type: ignore
+        self._thread.start()
+
+    def _on_continuous_done(self, result) -> None:
+        self.cancel_btn.setEnabled(False)
+        self.log.append(
+            f"\nContinuous optimisation stopped.\n"
+            f"  Rounds completed: {result.rounds_completed}\n"
+            f"  Global improvements saved: {result.global_improvements}\n"
+            f"  Loss: {result.starting_loss:.2f} → {result.best_global_loss:.2f}\n"
+            f"  Teams refined: {result.teams_refined}/{result.total_teams}\n"
+            f"  Total time: {result.total_seconds:.0f}s"
+        )
+        self.status.setText(
+            f"Continuous opt done: {result.rounds_completed} rounds, "
+            f"loss {result.starting_loss:.2f} → {result.best_global_loss:.2f}"
+        )
+        self._set_buttons_enabled(True)
+
+        self._show_dict_table("Metric", "Value", {
+            "Rounds Completed": str(result.rounds_completed),
+            "Global Improvements": str(result.global_improvements),
+            "Starting Loss": f"{result.starting_loss:.2f}",
+            "Best Global Loss": f"{result.best_global_loss:.2f}",
+            "Teams Refined": f"{result.teams_refined}/{result.total_teams}",
+            "Total Time": f"{result.total_seconds:.0f}s",
+        })
+
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+
     # ──── Full pipeline ────
 
     def _run_full_pipeline(self) -> None:
@@ -982,6 +1243,12 @@ class AccuracyView(QWidget):
             details = ""
             if "improvement_pct" in info:
                 details = f"{info['improvement_pct']:+.1f}% improvement"
+            elif "spread_val_mae" in info:
+                details = (
+                    f"spread MAE={info['spread_val_mae']:.2f}, "
+                    f"total MAE={info['total_val_mae']:.2f}, "
+                    f"{info.get('n_features', '?')} features"
+                )
             elif "adopted" in info:
                 details = f"{info['adopted']} teams refined"
             elif "games" in info:
@@ -1031,9 +1298,12 @@ class AccuracyView(QWidget):
         self.feature_btn.setEnabled(enabled)
         self.clear_weights_btn.setEnabled(enabled)
         self.ml_feature_btn.setEnabled(enabled)
+        self.ml_train_btn.setEnabled(enabled)
         self.team_refine_btn.setEnabled(enabled)
         self.fft_btn.setEnabled(enabled)
+        self.grouped_feature_btn.setEnabled(enabled)
         self.combo_opt_btn.setEnabled(enabled)
+        self.continuous_opt_btn.setEnabled(enabled)
         self.pipeline_btn.setEnabled(enabled)
         if enabled:
             self.cancel_btn.setEnabled(False)

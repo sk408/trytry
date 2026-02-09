@@ -61,6 +61,11 @@ class WeightConfig:
     fatigue_3in4: float = 1.0
     fatigue_4in6: float = 1.5
 
+    # --- ML Ensemble blending ---
+    ml_ensemble_weight: float = 0.4       # weight for ML model (0 = disabled)
+    ml_disagree_damp: float = 0.7         # dampen ML when it disagrees with base by >8 pts
+    ml_disagree_threshold: float = 8.0    # spread disagreement threshold (points)
+
     # --- Sanity clamps ---
     spread_clamp: float = 18.0
     total_min: float = 195.0

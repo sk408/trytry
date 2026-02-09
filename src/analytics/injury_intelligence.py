@@ -30,7 +30,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.database.db import get_conn
+from src.database.db import get_conn, connect
 from src.database import migrations
 
 
@@ -205,7 +205,7 @@ def get_league_play_through_rates(conn=None) -> Dict[str, PlayThroughRate]:
     """
     own_conn = conn is None
     if own_conn:
-        conn = get_conn().__enter__()
+        conn = connect()
 
     try:
         rows = conn.execute(
@@ -240,7 +240,7 @@ def get_player_tendency(
     """Return the player's historical tendency for a given status level."""
     own_conn = conn is None
     if own_conn:
-        conn = get_conn().__enter__()
+        conn = connect()
 
     try:
         row = conn.execute(
@@ -282,7 +282,7 @@ def get_keyword_play_rates(conn=None) -> Dict[str, float]:
     """
     own_conn = conn is None
     if own_conn:
-        conn = get_conn().__enter__()
+        conn = connect()
 
     try:
         rows = conn.execute(
@@ -329,7 +329,7 @@ def compute_play_probability(
     """
     own_conn = conn is None
     if own_conn:
-        conn = get_conn().__enter__()
+        conn = connect()
 
     try:
         # 1. League rate
@@ -406,7 +406,7 @@ def get_team_injury_probabilities(
     """
     own_conn = conn is None
     if own_conn:
-        conn = get_conn().__enter__()
+        conn = connect()
 
     try:
         rows = conn.execute(

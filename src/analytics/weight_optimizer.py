@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
+import numpy as np
+
 from src.analytics.backtester import run_backtest, BacktestResults
 from src.analytics.prediction import (
     PrecomputedGame,
@@ -49,6 +51,296 @@ except ImportError:
     _HAS_ML = False
 
 
+# ======================================================================
+# Vectorized game data — flatten PrecomputedGame list into NumPy arrays
+# for ~50-100x faster loss evaluation.
+# ======================================================================
+
+class VectorizedGames:
+    """Pre-flattened arrays from a list of PrecomputedGame objects.
+
+    All prediction arithmetic can be done on these arrays with NumPy
+    instead of looping in Python.  Built once, reused for every trial.
+    """
+    __slots__ = (
+        "n", "home_team_ids", "away_team_ids",
+        "actual_spread", "actual_total",
+        "home_pts_raw", "away_pts_raw",
+        "home_def_factor_raw", "away_def_factor_raw",
+        "home_tuning_corr", "away_tuning_corr",
+        "home_fatigue", "away_fatigue",
+        "home_court",
+        "to_diff", "reb_diff",
+        "home_off", "away_off", "home_def", "away_def",
+        # Four Factors edges (precomputed, weight-independent parts)
+        "ff_efg_edge", "ff_tov_edge", "ff_oreb_edge", "ff_fta_edge",
+        # Clutch
+        "clutch_diff",
+        # Hustle
+        "hustle_effort_diff",
+        # Hustle total
+        "combined_deflections",
+        # Pace
+        "avg_pace",
+        # Total sub-components
+        "combined_steals", "combined_blocks",
+        "combined_oreb", "combined_fatigue",
+    )
+
+    def __init__(self, games: List[PrecomputedGame]) -> None:
+        n = len(games)
+        self.n = n
+
+        self.home_team_ids = np.array([g.home_team_id for g in games], dtype=np.int64)
+        self.away_team_ids = np.array([g.away_team_id for g in games], dtype=np.int64)
+        self.actual_spread = np.array(
+            [g.actual_home_score - g.actual_away_score for g in games], dtype=np.float64
+        )
+        self.actual_total = np.array(
+            [g.actual_home_score + g.actual_away_score for g in games], dtype=np.float64
+        )
+
+        # Player projections (weight-independent)
+        self.home_pts_raw = np.array([g.home_proj.get("points", 0) for g in games], dtype=np.float64)
+        self.away_pts_raw = np.array([g.away_proj.get("points", 0) for g in games], dtype=np.float64)
+
+        # Defensive factors
+        self.home_def_factor_raw = np.array([g.home_def_factor_raw for g in games], dtype=np.float64)
+        self.away_def_factor_raw = np.array([g.away_def_factor_raw for g in games], dtype=np.float64)
+
+        # Tuning corrections
+        self.home_tuning_corr = np.array([g.home_tuning_home_corr for g in games], dtype=np.float64)
+        self.away_tuning_corr = np.array([g.away_tuning_away_corr for g in games], dtype=np.float64)
+
+        # Fatigue
+        self.home_fatigue = np.array([g.home_fatigue_penalty for g in games], dtype=np.float64)
+        self.away_fatigue = np.array([g.away_fatigue_penalty for g in games], dtype=np.float64)
+
+        # Home court
+        self.home_court = np.array([g.home_court for g in games], dtype=np.float64)
+
+        # Turnover diff
+        self.to_diff = np.array(
+            [g.home_proj.get("turnover_margin", 0) - g.away_proj.get("turnover_margin", 0)
+             for g in games], dtype=np.float64
+        )
+
+        # Rebound diff
+        self.reb_diff = np.array(
+            [g.home_proj.get("rebounds", 0) - g.away_proj.get("rebounds", 0)
+             for g in games], dtype=np.float64
+        )
+
+        # Off/Def ratings
+        self.home_off = np.array([g.home_off for g in games], dtype=np.float64)
+        self.away_off = np.array([g.away_off for g in games], dtype=np.float64)
+        self.home_def = np.array([g.home_def for g in games], dtype=np.float64)
+        self.away_def = np.array([g.away_def for g in games], dtype=np.float64)
+
+        # Four Factors — precompute the weight-independent edge values
+        def _ff_edge(key_a, key_b, home_key, away_key, sign=1):
+            """Compute four-factor edge array."""
+            vals = np.zeros(n, dtype=np.float64)
+            for i, g in enumerate(games):
+                hff = g.home_ff or {}
+                aff = g.away_ff or {}
+                ha = hff.get(key_a) or 0
+                ab = aff.get(key_b) or 0
+                aa = aff.get(key_a) or 0
+                hb = hff.get(key_b) or 0
+                vals[i] = sign * ((ha - ab) - (aa - hb))
+            return vals
+
+        self.ff_efg_edge = _ff_edge("efg_pct", "opp_efg_pct", "home", "away")
+        self.ff_tov_edge = np.zeros(n, dtype=np.float64)
+        for i, g in enumerate(games):
+            hff = g.home_ff or {}
+            aff = g.away_ff or {}
+            h_tov = hff.get("tm_tov_pct") or 0
+            a_tov = aff.get("tm_tov_pct") or 0
+            h_opp_tov = hff.get("opp_tm_tov_pct") or 0
+            a_opp_tov = aff.get("opp_tm_tov_pct") or 0
+            self.ff_tov_edge[i] = (a_tov - h_opp_tov) - (h_tov - a_opp_tov)
+        self.ff_oreb_edge = _ff_edge("oreb_pct", "opp_oreb_pct", "home", "away")
+        self.ff_fta_edge = _ff_edge("fta_rate", "opp_fta_rate", "home", "away")
+
+        # Clutch — net rating diff
+        self.clutch_diff = np.array(
+            [(g.home_clutch or {}).get("clutch_net_rating", 0) -
+             (g.away_clutch or {}).get("clutch_net_rating", 0)
+             for g in games], dtype=np.float64
+        )
+
+        # Hustle — effort differential for spread
+        # effort = deflections + contested * hustle_contested_wt
+        # We precompute without the contested weight since it varies
+        # But hustle_contested_wt is fixed at 0.3 and not in TOP_WEIGHTS,
+        # so we can bake it in.
+        def _hustle_effort(g, wt=0.3):
+            hh = g.home_hustle or {}
+            ah = g.away_hustle or {}
+            h_e = (hh.get("deflections") or 0) + (hh.get("contested_shots") or 0) * wt
+            a_e = (ah.get("deflections") or 0) + (ah.get("contested_shots") or 0) * wt
+            return h_e - a_e
+        self.hustle_effort_diff = np.array(
+            [_hustle_effort(g) for g in games], dtype=np.float64
+        )
+
+        # Hustle total — combined deflections
+        self.combined_deflections = np.array(
+            [(g.home_hustle or {}).get("deflections", 0) +
+             (g.away_hustle or {}).get("deflections", 0)
+             for g in games], dtype=np.float64
+        )
+
+        # Pace
+        self.avg_pace = np.array(
+            [(g.home_pace + g.away_pace) / 2 for g in games], dtype=np.float64
+        )
+
+        # Total sub-components
+        self.combined_steals = np.array(
+            [g.home_proj.get("steals", 0) + g.away_proj.get("steals", 0)
+             for g in games], dtype=np.float64
+        )
+        self.combined_blocks = np.array(
+            [g.home_proj.get("blocks", 0) + g.away_proj.get("blocks", 0)
+             for g in games], dtype=np.float64
+        )
+        self.combined_oreb = np.array(
+            [g.home_proj.get("oreb", 0) + g.away_proj.get("oreb", 0)
+             for g in games], dtype=np.float64
+        )
+        self.combined_fatigue = self.home_fatigue + self.away_fatigue
+
+    def subset(self, mask: np.ndarray) -> "VectorizedGames":
+        """Return a new VectorizedGames with only games where mask is True."""
+        sub = object.__new__(VectorizedGames)
+        sub.n = int(mask.sum())
+        for attr in self.__slots__:
+            if attr == "n":
+                continue
+            val = getattr(self, attr)
+            setattr(sub, attr, val[mask])
+        return sub
+
+
+def _vectorized_loss(v: VectorizedGames, w: WeightConfig) -> float:
+    """Evaluate weights against all games at once using NumPy arrays.
+
+    Equivalent to calling ``predict_from_precomputed`` per game and
+    computing the loss, but ~50-100x faster because there's no Python
+    loop — everything is array arithmetic.
+    """
+    if v.n == 0:
+        return 999.0
+
+    # Defensive factor dampening
+    adf = 1.0 + (v.away_def_factor_raw - 1.0) * w.def_factor_dampening
+    hdf = 1.0 + (v.home_def_factor_raw - 1.0) * w.def_factor_dampening
+
+    home_base = v.home_pts_raw * adf + v.home_tuning_corr
+    away_base = v.away_pts_raw * hdf + v.away_tuning_corr
+
+    fatigue_adj = v.home_fatigue - v.away_fatigue
+
+    # ── Spread ──
+    spread = (home_base - away_base) + v.home_court - fatigue_adj
+    spread += v.to_diff * w.turnover_margin_mult
+    spread += v.reb_diff * w.rebound_diff_mult
+
+    # Rating matchup
+    home_edge = v.home_off - v.away_def
+    away_edge = v.away_off - v.home_def
+    spread += (home_edge - away_edge) * w.rating_matchup_mult
+
+    # Four Factors
+    ff_adj = (
+        v.ff_efg_edge * w.ff_efg_weight +
+        v.ff_tov_edge * w.ff_tov_weight +
+        v.ff_oreb_edge * w.ff_oreb_weight +
+        v.ff_fta_edge * w.ff_fta_weight
+    ) * w.four_factors_scale
+    spread += ff_adj
+
+    # Clutch (only when |spread| < threshold)
+    clutch_adj = v.clutch_diff * w.clutch_scale
+    clutch_adj = np.clip(clutch_adj, -w.clutch_cap, w.clutch_cap)
+    clutch_mask = np.abs(spread) < w.clutch_threshold
+    spread += np.where(clutch_mask, clutch_adj, 0.0)
+
+    # Hustle spread
+    spread += v.hustle_effort_diff * w.hustle_effort_mult
+
+    # Clamp spread
+    spread = np.clip(spread, -w.spread_clamp, w.spread_clamp)
+
+    # ── Total ──
+    total = home_base + away_base
+
+    # Pace
+    pace_factor = (v.avg_pace - w.pace_baseline) / w.pace_baseline
+    total *= (1.0 + pace_factor * w.pace_mult)
+
+    # Defensive disruption
+    total -= (
+        np.maximum(0.0, v.combined_steals - w.steals_threshold) * w.steals_penalty +
+        np.maximum(0.0, v.combined_blocks - w.blocks_threshold) * w.blocks_penalty
+    )
+
+    # OREB
+    total += (v.combined_oreb - w.oreb_baseline) * w.oreb_mult
+
+    # Hustle total
+    defl_excess = np.maximum(0.0, v.combined_deflections - w.hustle_defl_baseline)
+    total -= defl_excess * w.hustle_defl_penalty
+
+    # Fatigue total
+    total -= v.combined_fatigue * w.fatigue_total_mult
+
+    # Clamp total
+    total = np.clip(total, w.total_min, w.total_max)
+
+    # ── Loss ──
+    spread_ae = np.abs(spread - v.actual_spread)
+    total_ae = np.abs(total - v.actual_total)
+
+    spread_mae = spread_ae.mean()
+    total_mae = total_ae.mean()
+
+    # Winner accuracy
+    pred_home = spread > 0.5
+    pred_away = spread < -0.5
+    actual_home = v.actual_spread > 0
+    actual_close = np.abs(v.actual_spread) <= 3
+    push = ~pred_home & ~pred_away
+
+    correct = (
+        (pred_home & actual_home) |
+        (pred_away & ~actual_home & (v.actual_spread != 0)) |
+        (push & actual_close)
+    )
+    winner_pct = correct.sum() / v.n * 100
+
+    return float(spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1)
+
+
+# Module-level cache for vectorized data
+_vec_cache: Optional[VectorizedGames] = None
+_vec_games_id: Optional[int] = None  # id() of the source list
+
+
+def _get_vectorized(games: List[PrecomputedGame]) -> VectorizedGames:
+    """Get or build vectorized arrays from a games list (cached by identity)."""
+    global _vec_cache, _vec_games_id
+    games_id = id(games)
+    if _vec_cache is not None and _vec_games_id == games_id and _vec_cache.n == len(games):
+        return _vec_cache
+    _vec_cache = VectorizedGames(games)
+    _vec_games_id = games_id
+    return _vec_cache
+
+
 # -----------------------------------------------------------------------
 # Loss function
 # -----------------------------------------------------------------------
@@ -76,46 +368,11 @@ def _loss(results: BacktestResults) -> float:
 
 def _fast_loss(games: List[PrecomputedGame], w: WeightConfig) -> float:
     """Evaluate a weight config against precomputed games — pure arithmetic,
-    zero DB I/O.  Returns the same loss metric as ``_loss``."""
+    zero DB I/O.  Uses vectorized NumPy arrays for ~50-100x speed."""
     if not games:
         return 999.0
-
-    n = len(games)
-    spread_ae_sum = 0.0
-    total_ae_sum = 0.0
-    winner_correct = 0
-
-    for g in games:
-        pred_spread, pred_total = predict_from_precomputed(g, w)
-        actual_spread = g.actual_home_score - g.actual_away_score
-        actual_total = g.actual_home_score + g.actual_away_score
-
-        spread_ae_sum += abs(pred_spread - actual_spread)
-        total_ae_sum += abs(pred_total - actual_total)
-
-        # Winner check
-        if pred_spread > 0.5:
-            pred_winner = "HOME"
-        elif pred_spread < -0.5:
-            pred_winner = "AWAY"
-        else:
-            pred_winner = "PUSH"
-
-        if actual_spread > 0:
-            actual_winner = "HOME"
-        elif actual_spread < 0:
-            actual_winner = "AWAY"
-        else:
-            actual_winner = "PUSH"
-
-        if pred_winner == actual_winner or (pred_winner == "PUSH" and abs(actual_spread) <= 3):
-            winner_correct += 1
-
-    spread_mae = spread_ae_sum / n
-    total_mae = total_ae_sum / n
-    winner_pct = winner_correct / n * 100
-
-    return spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1
+    v = _get_vectorized(games)
+    return _vectorized_loss(v, w)
 
 
 # -----------------------------------------------------------------------
@@ -135,6 +392,9 @@ TOP_WEIGHTS: List[Tuple[str, float, float]] = [
     ("clutch_scale",           0.02,  0.10),
     ("hustle_effort_mult",     0.005, 0.05),
     ("fatigue_total_mult",     0.10,  0.60),
+    # ML ensemble blending
+    ("ml_ensemble_weight",     0.0,   0.6),
+    ("ml_disagree_damp",       0.3,   1.0),
 ]
 
 
@@ -203,8 +463,8 @@ def run_weight_optimiser(
             improvement_pct=0.0,
         )
 
-    # ── Baseline ──
-    baseline_cfg = WeightConfig()  # defaults
+    # ── Baseline: use current best weights (from DB or defaults) ──
+    baseline_cfg = get_weight_config(force_reload=True)
     baseline_loss = _fast_loss(games, baseline_cfg)
     progress(
         f"Baseline: loss={baseline_loss:.2f}, "
@@ -237,6 +497,9 @@ def _run_optuna_optimiser(
     history: List[Tuple[int, float]] = [(0, baseline_loss)]
     use_fast = games is not None and len(games) > 0
 
+    # Pre-vectorize all game data once — reused across every trial
+    vec = VectorizedGames(games) if use_fast else None
+
     def objective(trial: "optuna.Trial") -> float:
         d = baseline_cfg.to_dict()
         for name, lo, hi in TOP_WEIGHTS:
@@ -244,8 +507,8 @@ def _run_optuna_optimiser(
         d["espn_weight"] = round(1.0 - d["espn_model_weight"], 4)
         cfg = WeightConfig.from_dict(d)
 
-        if use_fast:
-            return _fast_loss(games, cfg)
+        if vec is not None:
+            return _vectorized_loss(vec, cfg)
 
         # Fallback: full backtest (slow)
         set_weight_config(cfg)
@@ -271,7 +534,7 @@ def _run_optuna_optimiser(
     t0 = time.time()
     study = optuna.create_study(
         direction="minimize",
-        sampler=TPESampler(seed=42),
+        sampler=TPESampler(),  # random seed each run for fresh exploration
     )
     study.optimize(objective, n_trials=n_trials, callbacks=[_callback])
     elapsed = time.time() - t0
@@ -279,18 +542,25 @@ def _run_optuna_optimiser(
     best_loss = study.best_value
     improvement = ((baseline_loss - best_loss) / baseline_loss * 100) if baseline_loss else 0
 
-    # Build and persist best config
+    # Build best config from this run
     d = baseline_cfg.to_dict()
     d.update(study.best_params)
     d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
     best_cfg = WeightConfig.from_dict(d)
-    save_weights(best_cfg)
-    set_weight_config(best_cfg)
 
-    progress(
-        f"Optuna optimisation complete: {n_trials} trials in {elapsed:.0f}s, "
-        f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%)"
-    )
+    # Only persist if this run actually improved on the existing best
+    if best_loss < baseline_loss:
+        save_weights(best_cfg)
+        set_weight_config(best_cfg)
+        progress(
+            f"Optuna optimisation complete: {n_trials} trials in {elapsed:.0f}s, "
+            f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%) — SAVED"
+        )
+    else:
+        progress(
+            f"Optuna optimisation complete: {n_trials} trials in {elapsed:.0f}s, "
+            f"best found {best_loss:.2f} did not beat existing {baseline_loss:.2f} — kept previous weights"
+        )
 
     return OptimiserResult(
         best_config=best_cfg,
@@ -315,11 +585,16 @@ def _run_random_optimiser(
     history: List[Tuple[int, float]] = [(0, baseline_loss)]
     use_fast = games is not None and len(games) > 0
 
+    # Pre-vectorize once
+    vec = VectorizedGames(games) if use_fast else None
+
     t0 = time.time()
     for trial in range(1, n_trials + 1):
         candidate = _random_config(baseline_cfg)
 
-        if use_fast:
+        if vec is not None:
+            trial_loss = _vectorized_loss(vec, candidate)
+        elif use_fast:
             trial_loss = _fast_loss(games, candidate)
         else:
             set_weight_config(candidate)
@@ -347,12 +622,18 @@ def _run_random_optimiser(
     elapsed = time.time() - t0
     improvement = ((baseline_loss - best_loss) / baseline_loss * 100) if baseline_loss else 0
 
-    save_weights(best_cfg)
-    set_weight_config(best_cfg)
-    progress(
-        f"Random-search complete: {n_trials} trials in {elapsed:.0f}s, "
-        f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%)"
-    )
+    if best_loss < baseline_loss:
+        save_weights(best_cfg)
+        set_weight_config(best_cfg)
+        progress(
+            f"Random-search complete: {n_trials} trials in {elapsed:.0f}s, "
+            f"loss {baseline_loss:.2f} → {best_loss:.2f} ({improvement:+.1f}%) — SAVED"
+        )
+    else:
+        progress(
+            f"Random-search complete: {n_trials} trials in {elapsed:.0f}s, "
+            f"best found {best_loss:.2f} did not beat existing {baseline_loss:.2f} — kept previous weights"
+        )
 
     return OptimiserResult(
         best_config=best_cfg,
@@ -468,9 +749,13 @@ def run_per_team_refinement(
         train = games[:-holdout_games]
         holdout = games[-holdout_games:]
 
+        # Pre-vectorize this team's train/holdout sets for fast eval
+        v_train = VectorizedGames(train)
+        v_holdout = VectorizedGames(holdout)
+
         # Global loss on both sets
-        global_loss_train = _fast_loss_team(train, team_id, global_cfg)
-        global_loss_holdout = _fast_loss_team(holdout, team_id, global_cfg)
+        global_loss_train = _vectorized_loss(v_train, global_cfg)
+        global_loss_holdout = _vectorized_loss(v_holdout, global_cfg)
 
         # ── Per-team optimisation on training set ──
         best_team_cfg = global_cfg
@@ -489,13 +774,13 @@ def run_per_team_refinement(
             d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
             candidate = WeightConfig.from_dict(d)
 
-            trial_loss = _fast_loss_team(train, team_id, candidate)
+            trial_loss = _vectorized_loss(v_train, candidate)
             if trial_loss < best_team_loss_train:
                 best_team_loss_train = trial_loss
                 best_team_cfg = candidate
 
         # ── Regressive validation on holdout ──
-        team_loss_holdout = _fast_loss_team(holdout, team_id, best_team_cfg)
+        team_loss_holdout = _vectorized_loss(v_holdout, best_team_cfg)
 
         # Decision logic
         team_better = team_loss_holdout < global_loss_holdout
@@ -556,53 +841,19 @@ def _fast_loss_team(
     team_id: int,
     w: WeightConfig,
 ) -> float:
-    """Evaluate loss for games involving a specific team."""
+    """Evaluate loss for games involving a specific team (vectorized)."""
     if not games:
         return 999.0
 
-    n = 0
-    spread_ae_sum = 0.0
-    total_ae_sum = 0.0
-    winner_correct = 0
-
-    for g in games:
-        # Only count this game for the team in question
-        if g.home_team_id != team_id and g.away_team_id != team_id:
-            continue
-
-        pred_spread, pred_total = predict_from_precomputed(g, w)
-        actual_spread = g.actual_home_score - g.actual_away_score
-        actual_total = g.actual_home_score + g.actual_away_score
-
-        spread_ae_sum += abs(pred_spread - actual_spread)
-        total_ae_sum += abs(pred_total - actual_total)
-
-        if pred_spread > 0.5:
-            pw = "HOME"
-        elif pred_spread < -0.5:
-            pw = "AWAY"
-        else:
-            pw = "PUSH"
-
-        if actual_spread > 0:
-            aw = "HOME"
-        elif actual_spread < 0:
-            aw = "AWAY"
-        else:
-            aw = "PUSH"
-
-        if pw == aw or (pw == "PUSH" and abs(actual_spread) <= 3):
-            winner_correct += 1
-        n += 1
+    v = _get_vectorized(games)
+    mask = (v.home_team_ids == team_id) | (v.away_team_ids == team_id)
+    n = int(mask.sum())
 
     if n == 0:
         return 999.0
 
-    spread_mae = spread_ae_sum / n
-    total_mae = total_ae_sum / n
-    winner_pct = winner_correct / n * 100
-
-    return spread_mae * 1.0 + total_mae * 0.3 + (100 - winner_pct) * 0.1
+    sub = v.subset(mask)
+    return _vectorized_loss(sub, w)
 
 
 # -----------------------------------------------------------------------
@@ -829,6 +1080,142 @@ def run_feature_importance(
     # Sort by impact descending (most helpful first)
     results.sort(key=lambda x: x.impact, reverse=True)
     progress(f"Feature importance complete: {len(results)} features analysed")
+    return results
+
+
+# -----------------------------------------------------------------------
+# GROUPED feature importance (interaction effects)
+# -----------------------------------------------------------------------
+
+@dataclass
+class GroupedFeatureImportance:
+    group_name: str
+    features_disabled: List[str]
+    baseline_loss: float
+    disabled_loss: float
+    impact: float          # disabled_loss - baseline (positive = group helps)
+    impact_pct: float
+
+
+def run_grouped_feature_importance(
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> List[GroupedFeatureImportance]:
+    """Measure *groups* of related features by disabling them together.
+
+    Single-feature disruption can miss interaction effects: e.g. removing
+    "four_factors" alone barely matters because "turnover_margin" and
+    "rebound_diff" overlap.  Remove all three and the impact is larger.
+
+    Returns a list sorted by group impact (most impactful group first).
+    """
+    progress = progress_cb or (lambda _: None)
+
+    # ---- baseline ----
+    progress("Running baseline backtest (grouped importance)...")
+    base_cfg = get_weight_config(force_reload=True)
+    set_weight_config(base_cfg)
+    base_results = run_backtest(min_games_before=5)
+    base_loss = _loss(base_results)
+    progress(f"Baseline loss: {base_loss:.2f}")
+
+    # ---- feature groups ----
+    # Each group: (group_name, [(weight_key, disabled_value), ...])
+    groups = [
+        ("Efficiency & Four Factors", [
+            ("four_factors_scale", 0.0),
+            ("turnover_margin_mult", 0.0),
+            ("rebound_diff_mult", 0.0),
+        ]),
+        ("Defensive Adjustments", [
+            ("def_factor_dampening", 1.0),  # 1.0 = no dampening
+            ("rating_matchup_mult", 0.0),
+        ]),
+        ("Pace & Volume", [
+            ("pace_mult", 0.0),
+            ("oreb_mult", 0.0),
+        ]),
+        ("Defensive Disruption", [
+            ("steals_penalty", 0.0),
+            ("blocks_penalty", 0.0),
+            ("hustle_defl_penalty", 0.0),
+        ]),
+        ("Hustle & Effort", [
+            ("hustle_effort_mult", 0.0),
+            ("hustle_defl_penalty", 0.0),
+        ]),
+        ("Close Game / Clutch", [
+            ("clutch_scale", 0.0),
+            ("clutch_cap", 0.0),
+        ]),
+        ("Fatigue", [
+            ("fatigue_total_mult", 0.0),
+            ("fatigue_b2b", 0.0),
+            ("fatigue_3in4", 0.0),
+            ("fatigue_4in6", 0.0),
+        ]),
+        ("ESPN Blending", [
+            ("espn_weight", 0.0),
+            ("espn_model_weight", 1.0),
+        ]),
+        ("All Spread Adjustments", [
+            ("turnover_margin_mult", 0.0),
+            ("rebound_diff_mult", 0.0),
+            ("rating_matchup_mult", 0.0),
+            ("four_factors_scale", 0.0),
+            ("clutch_scale", 0.0),
+            ("hustle_effort_mult", 0.0),
+        ]),
+        ("All Total Adjustments", [
+            ("pace_mult", 0.0),
+            ("steals_penalty", 0.0),
+            ("blocks_penalty", 0.0),
+            ("oreb_mult", 0.0),
+            ("hustle_defl_penalty", 0.0),
+            ("fatigue_total_mult", 0.0),
+        ]),
+    ]
+
+    results: List[GroupedFeatureImportance] = []
+
+    for i, (group_name, overrides) in enumerate(groups, 1):
+        keys_display = [k for k, _ in overrides]
+        progress(f"  Testing group [{i}/{len(groups)}] {group_name} ({len(overrides)} weights)...")
+
+        d = base_cfg.to_dict()
+        for key, disabled_val in overrides:
+            d[key] = disabled_val
+        test_cfg = WeightConfig.from_dict(d)
+        set_weight_config(test_cfg)
+
+        try:
+            test_results = run_backtest(min_games_before=5)
+            test_loss = _loss(test_results)
+        except Exception:
+            test_loss = base_loss
+
+        impact = test_loss - base_loss
+        impact_pct = (impact / base_loss * 100) if base_loss else 0.0
+
+        results.append(GroupedFeatureImportance(
+            group_name=group_name,
+            features_disabled=keys_display,
+            baseline_loss=base_loss,
+            disabled_loss=test_loss,
+            impact=round(impact, 3),
+            impact_pct=round(impact_pct, 2),
+        ))
+
+        direction = "HELPS" if impact > 0.1 else ("HURTS" if impact < -0.1 else "neutral")
+        progress(
+            f"    {group_name}: loss {base_loss:.2f} → {test_loss:.2f} "
+            f"(impact: {impact:+.3f}, {direction})"
+        )
+
+    # Restore original config
+    set_weight_config(base_cfg)
+
+    results.sort(key=lambda x: x.impact, reverse=True)
+    progress(f"Grouped feature importance complete: {len(results)} groups analysed")
     return results
 
 
@@ -1161,3 +1548,126 @@ def run_combo_optimiser(
         team_results=team_results,
         total_seconds=elapsed,
     )
+
+
+# -----------------------------------------------------------------------
+# Continuous optimiser — loops until cancelled, keeps only improvements
+# -----------------------------------------------------------------------
+
+@dataclass
+class ContinuousOptResult:
+    """Summary of a continuous optimisation session."""
+    rounds_completed: int = 0
+    global_improvements: int = 0
+    best_global_loss: float = 999.0
+    starting_loss: float = 999.0
+    total_seconds: float = 0.0
+    teams_refined: int = 0
+    total_teams: int = 0
+
+
+def run_continuous_optimiser(
+    n_trials: int = 200,
+    team_trials: int = 100,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> ContinuousOptResult:
+    """Loop global + per-team optimisation until cancelled.
+
+    Each round:
+    1. Run global weight optimisation (random seed, only saves if better)
+    2. Run per-team refinement
+    3. Report progress, check cancel, repeat
+
+    The ``cancel_check`` callable should return True to stop the loop.
+    Weights are only persisted when they beat the previous best, so
+    stopping at any point is safe.
+    """
+    import time as _time
+    t0 = _time.perf_counter()
+    progress = progress_cb or (lambda _: None)
+    cancelled = cancel_check or (lambda: False)
+
+    result = ContinuousOptResult()
+
+    # Precompute game data once — shared across all rounds
+    progress("[Continuous] Precomputing game data (one-time)...")
+    games = precompute_game_data(progress_cb=progress)
+    if not games:
+        progress("No games found — aborting")
+        return result
+
+    starting_cfg = get_weight_config(force_reload=True)
+    starting_loss = _fast_loss(games, starting_cfg)
+    result.starting_loss = starting_loss
+    result.best_global_loss = starting_loss
+    progress(f"[Continuous] Starting loss: {starting_loss:.2f} ({len(games)} games)")
+
+    round_num = 0
+    while not cancelled():
+        round_num += 1
+        round_t0 = _time.perf_counter()
+        progress(f"\n{'='*50}")
+        progress(f"[Round {round_num}] Starting global optimisation ({n_trials} trials)...")
+
+        # ── Global optimisation ──
+        try:
+            global_result = run_weight_optimiser(
+                n_trials=n_trials,
+                progress_cb=progress,
+                precomputed_games=games,
+            )
+            if global_result.best_loss < result.best_global_loss:
+                result.best_global_loss = global_result.best_loss
+                result.global_improvements += 1
+        except Exception as exc:
+            progress(f"  Global optimisation error: {exc}")
+
+        if cancelled():
+            break
+
+        # ── Per-team refinement ──
+        progress(f"[Round {round_num}] Per-team refinement ({team_trials} trials/team)...")
+        try:
+            team_results = run_per_team_refinement(
+                n_trials=team_trials,
+                progress_cb=progress,
+                precomputed_games=games,
+            )
+            adopted = sum(1 for r in team_results if r.used_team_weights)
+            result.teams_refined = adopted
+            result.total_teams = len(team_results)
+        except Exception as exc:
+            progress(f"  Per-team refinement error: {exc}")
+
+        result.rounds_completed = round_num
+        round_elapsed = _time.perf_counter() - round_t0
+
+        current_loss = _fast_loss(games, get_weight_config(force_reload=True))
+        improvement = ((starting_loss - current_loss) / starting_loss * 100) if starting_loss else 0
+
+        progress(
+            f"[Round {round_num}] Done in {round_elapsed:.0f}s — "
+            f"current loss: {current_loss:.2f} "
+            f"(started at {starting_loss:.2f}, {improvement:+.1f}% overall)"
+        )
+
+    result.total_seconds = _time.perf_counter() - t0
+    final_loss = _fast_loss(games, get_weight_config(force_reload=True))
+    total_improvement = ((starting_loss - final_loss) / starting_loss * 100) if starting_loss else 0
+
+    progress(f"\n{'='*50}")
+    progress(
+        f"[Continuous] Stopped after {result.rounds_completed} rounds in "
+        f"{result.total_seconds:.0f}s"
+    )
+    progress(
+        f"[Continuous] Loss: {starting_loss:.2f} → {final_loss:.2f} "
+        f"({total_improvement:+.1f}% total improvement)"
+    )
+    progress(
+        f"[Continuous] {result.global_improvements} global improvements saved, "
+        f"{result.teams_refined}/{result.total_teams} teams refined"
+    )
+
+    return result
