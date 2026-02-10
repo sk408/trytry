@@ -44,8 +44,8 @@
           <td><strong>{{ rec.home_score }} - {{ rec.away_score }}</strong></td>
           <td>{{ rec.period }}</td>
           <td>{{ rec.clock }}</td>
-          <td class="{{ 'spread-home' if rec.projected_spread < -3 else 'spread-away' if rec.projected_spread > 3 else '' }}">
-            {{ "%+.1f"|format(rec.projected_spread) }}
+          <td class="{{ 'spread-home' if rec.projected_spread > 3 else 'spread-away' if rec.projected_spread < -3 else '' }}">
+            {{ "%+.1f"|format(-rec.projected_spread) }}
           </td>
           <td>{{ "%.1f"|format(rec.projected_total) }}</td>
         </tr>

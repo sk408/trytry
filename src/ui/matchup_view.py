@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.analytics.stats_engine import get_team_matchup_stats, get_scheduled_games, TeamMatchupStats
+from src.analytics.stats_engine import get_team_matchup_stats, TeamMatchupStats
 from src.analytics.prediction import predict_matchup
 from src.data.image_cache import get_team_logo_pixmap, get_player_photo_pixmap
+from src.data.sync_service import sync_schedule
 from src.database.db import get_conn
 
 
@@ -289,19 +290,42 @@ class MatchupView(QWidget):
             self.home_combo.addItem(label, int(row["team_id"]))
             self.away_combo.addItem(label, int(row["team_id"]))
         
-        # Load scheduled games
+        # Load scheduled games (today + 14 days, sorted chronologically)
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("-- Select a game --", None)
         
+        self._games_data = []
         try:
-            self._games_data = get_scheduled_games()
+            from datetime import date as _date
+            sched_df = sync_schedule(include_future_days=14)
+            if not sched_df.empty:
+                sched_df = sched_df.copy()
+                sched_df["game_date"] = pd.to_datetime(sched_df["game_date"]).dt.date
+                today = _date.today()
+                sched_df = sched_df[sched_df["game_date"] >= today]
+                sort_cols = ["game_date", "game_time"] if "game_time" in sched_df.columns else ["game_date"]
+                sched_df = sched_df.sort_values(sort_cols)
+                sched_df = sched_df.drop_duplicates(subset=["game_date", "home_team_id", "away_team_id"])
+                for _, r in sched_df.iterrows():
+                    game = {
+                        "game_date": r["game_date"],
+                        "home_team_id": int(r["home_team_id"]),
+                        "away_team_id": int(r["away_team_id"]),
+                        "home_abbr": r.get("home_abbr", ""),
+                        "away_abbr": r.get("away_abbr", ""),
+                        "game_time": str(r.get("game_time", "") or ""),
+                    }
+                    self._games_data.append(game)
         except Exception:
-            self._games_data = []
+            pass
         
         for game in self._games_data:
-            date_str = str(game.get("game_date", ""))
-            label = f"{date_str}: {game['away_abbr']} @ {game['home_abbr']}"
+            gd = game["game_date"]
+            date_fmt = gd.strftime("%a %m/%d") if hasattr(gd, "strftime") else str(gd)
+            time_str = game.get("game_time", "")
+            time_part = f" - {time_str}" if time_str and time_str != "TBD" else ""
+            label = f"{date_fmt}: {game['away_abbr']} @ {game['home_abbr']}{time_part}"
             self.game_combo.addItem(label, game)
         
         self.game_combo.blockSignals(False)
@@ -379,8 +403,10 @@ class MatchupView(QWidget):
         home_proj = pred.predicted_home_score
         away_proj = pred.predicted_away_score
         
-        # Update summary labels
-        self.spread_label.setText(f"{spread:+.1f}")
+        # Update summary labels (negate spread for betting convention:
+        # negative = home favored, positive = home underdog)
+        display_spread = -spread
+        self.spread_label.setText(f"{display_spread:+.1f}")
         self.total_label.setText(f"{total:.1f}")
         self.home_proj_label.setText(f"{home_proj:.1f}")
         self.away_proj_label.setText(f"{away_proj:.1f}")
@@ -389,10 +415,10 @@ class MatchupView(QWidget):
         self.home_logo_lbl.setPixmap(get_team_logo_pixmap(home_id, 44))
         self.away_logo_lbl.setPixmap(get_team_logo_pixmap(away_id, 44))
 
-        # Color the spread: green if home favored, red if away favored
-        if spread < -2:
+        # Color the spread: green if home favored (negative), red if away favored (positive)
+        if display_spread < -2:
             self.spread_label.setStyleSheet("color: #10b981; font-size: 24px; font-weight: 700;")
-        elif spread > 2:
+        elif display_spread > 2:
             self.spread_label.setStyleSheet("color: #ef4444; font-size: 24px; font-weight: 700;")
         else:
             self.spread_label.setStyleSheet("color: #f59e0b; font-size: 24px; font-weight: 700;")

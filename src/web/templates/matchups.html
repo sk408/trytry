@@ -11,13 +11,13 @@
 </div>
 
 <!-- Game Selector Dropdown -->
-{% if games %}
+{% if upcoming_games %}
 <div class="card">
   <h2>Quick Select Game</h2>
   <div class="game-selector">
     <select onchange="if(this.value) window.location=this.value;">
       <option value="">-- Select a game --</option>
-      {% for g in games[:60] %}
+      {% for g in upcoming_games[:40] %}
       <option value="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}"
         {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}selected{% endif %}>
         {{ g.date_label }} ({{ g.game_date_fmt }}): {{ g.away_abbr }} @ {{ g.home_abbr }}{% if g.game_time and g.game_time != 'TBD' %} - {{ g.game_time }}{% endif %}
@@ -67,7 +67,7 @@
   <h2>Prediction Summary</h2>
   <div class="stats-grid">
     <div class="stat-item" data-accent="blue">
-      <div class="stat-value">{{ "%+.1f"|format(prediction.predicted_spread) }}</div>
+      <div class="stat-value">{{ "%+.1f"|format(-prediction.predicted_spread) }}</div>
       <div class="stat-label">Spread (Home)</div>
     </div>
     <div class="stat-item" data-accent="amber">
@@ -298,7 +298,7 @@
 <div class="card">
   <h2>Upcoming Games</h2>
   <p class="text-muted">Tap a game to analyze</p>
-  {% if games %}
+  {% if upcoming_games %}
   <div class="scroll-x">
     <table class="clickable-table">
       <thead>
@@ -312,7 +312,7 @@
         </tr>
       </thead>
       <tbody>
-        {% for g in games[:100] %}
+        {% for g in upcoming_games[:80] %}
         <tr onclick="window.location='/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}'"
             style="cursor: pointer;"
             class="{{ 'highlight-today' if g.date_label == 'Today' else 'highlight-tomorrow' if g.date_label == 'Tomorrow' else '' }} {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active-row{% endif %}">
@@ -340,6 +340,50 @@
   </div>
   {% endif %}
 </div>
+
+<!-- Recent Results -->
+{% if past_games %}
+<div class="card">
+  <h2>Recent Results</h2>
+  <p class="text-muted">Tap a game to see how the prediction would have compared</p>
+  <div class="scroll-x">
+    <table class="clickable-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Away</th>
+          <th></th>
+          <th>Home</th>
+          <th>Score</th>
+          <th>Total</th>
+          <th>Winner</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in past_games[:60] %}
+        <tr onclick="window.location='/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}'"
+            style="cursor: pointer;"
+            class="{% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active-row{% endif %}">
+          <td>{{ g.game_date_fmt }}</td>
+          <td>
+            <img src="{{ team_logo_url(g.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ g.away_abbr }}</strong>
+          </td>
+          <td class="text-muted">@</td>
+          <td>
+            <img src="{{ team_logo_url(g.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ g.home_abbr }}</strong>
+          </td>
+          <td>{{ g.away_score }}-{{ g.home_score }}</td>
+          <td>{{ g.total }}</td>
+          <td><strong>{{ g.winner }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 {% if game_start_iso %}
 <script>

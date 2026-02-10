@@ -891,7 +891,7 @@ def build_residual_calibration(
     progress = progress_cb or (lambda _: None)
 
     progress("Running backtest for calibration data...")
-    results = run_backtest(min_games_before=5)
+    results = run_backtest(min_games_before=5, progress_cb=progress_cb)
     if results.total_games == 0:
         progress("No games to calibrate")
         return {}
@@ -1012,7 +1012,7 @@ def run_feature_importance(
     progress("Running baseline backtest...")
     base_cfg = get_weight_config(force_reload=True)
     set_weight_config(base_cfg)
-    base_results = run_backtest(min_games_before=5)
+    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb)
     base_loss = _loss(base_results)
     progress(f"Baseline loss: {base_loss:.2f}")
 
@@ -1114,7 +1114,7 @@ def run_grouped_feature_importance(
     progress("Running baseline backtest (grouped importance)...")
     base_cfg = get_weight_config(force_reload=True)
     set_weight_config(base_cfg)
-    base_results = run_backtest(min_games_before=5)
+    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb)
     base_loss = _loss(base_results)
     progress(f"Baseline loss: {base_loss:.2f}")
 
@@ -1386,7 +1386,7 @@ def run_fft_error_analysis(
 
     # Step 1 – run backtest
     progress("Running backtest for error analysis...")
-    results = run_backtest(min_games_before=5)
+    results = run_backtest(min_games_before=5, progress_cb=progress_cb)
 
     if results.total_games < 50:
         progress(f"Not enough games ({results.total_games}), need at least 50 for FFT")

@@ -655,6 +655,7 @@ def sync_team_metrics(
 
     # 1. TeamEstimatedMetrics
     _check_cancel(cancel_check)
+    progress("Team metrics [1/8] Estimated metrics...")
     df = fetch_team_estimated_metrics(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -679,6 +680,7 @@ def sync_team_metrics(
 
     # 2. LeagueDashTeamStats (Advanced)
     _check_cancel(cancel_check)
+    progress("Team metrics [2/8] Advanced stats...")
     df = fetch_league_dash_team_stats(season=season, measure_type="Advanced", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -703,6 +705,7 @@ def sync_team_metrics(
 
     # 3. Four Factors
     _check_cancel(cancel_check)
+    progress("Team metrics [3/8] Four factors...")
     df = fetch_league_dash_team_stats(season=season, measure_type="Four Factors", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -722,6 +725,7 @@ def sync_team_metrics(
 
     # 4. Opponent stats
     _check_cancel(cancel_check)
+    progress("Team metrics [4/8] Opponent stats...")
     df = fetch_league_dash_team_stats(season=season, measure_type="Opponent", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -737,6 +741,7 @@ def sync_team_metrics(
 
     # 5. Home splits
     _check_cancel(cancel_check)
+    progress("Team metrics [5/8] Home splits...")
     df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Home", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -756,6 +761,7 @@ def sync_team_metrics(
 
     # 6. Road splits
     _check_cancel(cancel_check)
+    progress("Team metrics [6/8] Road splits...")
     df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Road", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -774,6 +780,7 @@ def sync_team_metrics(
 
     # 7. Clutch stats
     _check_cancel(cancel_check)
+    progress("Team metrics [7/8] Clutch stats...")
     df = fetch_team_clutch_stats(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -791,6 +798,7 @@ def sync_team_metrics(
 
     # 8. Hustle stats
     _check_cancel(cancel_check)
+    progress("Team metrics [8/8] Hustle stats...")
     df = fetch_team_hustle_stats(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():

@@ -377,9 +377,12 @@ async def stream_backtest(
     home_team_id: str | None = None,
     away_team_id: str | None = None,
     use_injuries: str | None = None,
+    use_cache: str | None = None,
     max_workers: int = 4,
 ) -> StreamingResponse:
     """Stream backtest progress via SSE."""
+    from src.analytics.backtester import load_backtest_cache
+
     # Convert empty strings to None
     _home_tid: int | None = None
     _away_tid: int | None = None
@@ -397,6 +400,7 @@ async def stream_backtest(
     use_injuries_flag = True
     if use_injuries is not None:
         use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
+    want_cache = str(use_cache).lower() in {"1", "true"} if use_cache is not None else False
 
     async def generate() -> AsyncGenerator[str, None]:
         msg_queue: queue.Queue[str | None] = queue.Queue()
@@ -406,14 +410,54 @@ async def stream_backtest(
 
         def run_bt() -> None:
             try:
-                results = run_backtest(
-                    5, home_team_id_int, away_team_id_int, progress_cb, use_injuries_flag,
-                    max(1, min(16, max_workers)),
+                # Try cache first if requested
+                results = None
+                if want_cache:
+                    results = load_backtest_cache(
+                        home_team_id_int, away_team_id_int,
+                        use_injuries_flag, 1440,
+                    )
+                    if results is not None:
+                        msg_queue.put("Loaded results from cache (instant)")
+
+                if results is None:
+                    results = run_backtest(
+                        5, home_team_id_int, away_team_id_int, progress_cb, use_injuries_flag,
+                        max(1, min(16, max_workers)),
+                    )
+                # Send full results as JSON so the UI can build tables
+                preds = _format_predictions(results) if results.predictions else []
+                avg_spread_err = (
+                    sum(abs(p.spread_error) for p in results.predictions) / len(results.predictions)
+                    if results.predictions else 0.0
                 )
-                # Send results summary
-                msg_queue.put(f"[RESULT] games={results.total_games}")
-                msg_queue.put(f"[RESULT] spread_acc={results.overall_spread_accuracy:.1f}")
-                msg_queue.put(f"[RESULT] total_acc={results.overall_total_accuracy:.1f}")
+                avg_total_err = (
+                    sum(abs(p.total_error) for p in results.predictions) / len(results.predictions)
+                    if results.predictions else 0.0
+                )
+                teams_data = []
+                for ta in sorted(results.team_accuracy.values(),
+                                 key=lambda x: x.spread_accuracy, reverse=True):
+                    if ta.games_analyzed > 0:
+                        teams_data.append({
+                            "team_abbr": ta.team_abbr,
+                            "record": f"{ta.wins}-{ta.losses}",
+                            "games": ta.games_analyzed,
+                            "spread_acc": round(ta.spread_accuracy, 1),
+                            "avg_spread_err": round(ta.avg_spread_error, 1),
+                            "total_acc": round(ta.total_accuracy, 1),
+                            "avg_total_err": round(ta.avg_total_error, 1),
+                        })
+                payload = json.dumps({
+                    "total_games": results.total_games,
+                    "spread_acc": round(results.overall_spread_accuracy, 1),
+                    "total_acc": round(results.overall_total_accuracy, 1),
+                    "avg_spread_err": round(avg_spread_err, 1),
+                    "avg_total_err": round(avg_total_err, 1),
+                    "teams": teams_data,
+                    "predictions": preds,
+                })
+                msg_queue.put(f"[RESULTS_JSON] {payload}")
                 msg_queue.put("[DONE] Backtest complete")
             except Exception as exc:
                 msg_queue.put(f"[ERROR] {exc}")
@@ -532,7 +576,7 @@ async def remove_manual_injury_endpoint(
 
 
 def _format_relative_date(game_date, today) -> str:
-    """Format date as Today, Tomorrow, or +X days."""
+    """Format date as Today, Tomorrow, Yesterday, or +/-X days."""
     if game_date == today:
         return "Today"
     
@@ -541,8 +585,10 @@ def _format_relative_date(game_date, today) -> str:
         return "Tomorrow"
     elif days_diff > 0:
         return f"+{days_diff} days"
+    elif days_diff == -1:
+        return "Yesterday"
     else:
-        return str(game_date)
+        return f"{abs(days_diff)}d ago"
 
 
 def _format_time_short(time_str: str) -> str:
@@ -728,25 +774,71 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
     from datetime import datetime, date as date_type
     
     teams = _team_list()
-    games = await asyncio.to_thread(get_scheduled_games, 14)
-
-    # Add relative date labels (Today, Tomorrow, +X days) and formatted dates
     today = date_type.today()
-    for g in games:
-        gd = g.get("game_date")
-        if gd:
-            if hasattr(gd, "date"):
-                gd = gd.date() if callable(getattr(gd, "date")) else gd
-            elif isinstance(gd, str):
+
+    # ── Upcoming games: fetch schedule directly and filter to today+ ──
+    upcoming_games: list[dict] = []
+    try:
+        sched_df = await asyncio.to_thread(sync_schedule, include_future_days=14)
+        if not sched_df.empty:
+            sched_df = sched_df.copy()
+            sched_df["game_date"] = pd.to_datetime(sched_df["game_date"]).dt.date
+            sched_df = sched_df[sched_df["game_date"] >= today]
+            sort_cols = ["game_date", "game_time"] if "game_time" in sched_df.columns else ["game_date"]
+            sched_df = sched_df.sort_values(sort_cols)
+            # Deduplicate by date + teams
+            seen: set[tuple] = set()
+            for _, r in sched_df.iterrows():
+                h_id = int(r["home_team_id"])
+                a_id = int(r["away_team_id"])
+                key = (r["game_date"], min(h_id, a_id), max(h_id, a_id))
+                if key in seen:
+                    continue
+                seen.add(key)
+                game_time = str(r.get("game_time", "") or "")
+                upcoming_games.append({
+                    "game_date": r["game_date"],
+                    "date_label": _format_relative_date(r["game_date"], today),
+                    "game_date_fmt": r["game_date"].strftime("%a %m/%d"),
+                    "home_team_id": h_id,
+                    "away_team_id": a_id,
+                    "home_abbr": r.get("home_abbr", ""),
+                    "away_abbr": r.get("away_abbr", ""),
+                    "game_time": _format_time_short(game_time),
+                })
+    except Exception:
+        pass
+
+    # ── Past results: actual scores from player_stats (most recent first) ──
+    past_games: list[dict] = []
+    try:
+        results_df = await asyncio.to_thread(get_actual_game_results)
+        if not results_df.empty:
+            results_df = results_df.sort_values("game_date", ascending=False).head(60)
+            for _, row in results_df.iterrows():
+                gd_str = str(row["game_date"])
                 try:
-                    gd = date_type.fromisoformat(str(gd)[:10])
+                    gd = date_type.fromisoformat(gd_str[:10])
                 except ValueError:
-                    pass
-            g["date_label"] = _format_relative_date(gd, today) if isinstance(gd, date_type) else str(gd)
-            g["game_date_fmt"] = gd.strftime("%a %m/%d") if hasattr(gd, "strftime") else str(gd)
-        else:
-            g["date_label"] = ""
-            g["game_date_fmt"] = ""
+                    gd = None
+                home_score = int(row["home_score"])
+                away_score = int(row["away_score"])
+                winner_abbr = row["home_abbr"] if home_score > away_score else row["away_abbr"]
+                past_games.append({
+                    "game_date": gd_str,
+                    "game_date_fmt": gd.strftime("%a %m/%d") if gd else gd_str,
+                    "date_label": _format_relative_date(gd, today) if gd else gd_str,
+                    "home_team_id": int(row["home_team_id"]),
+                    "away_team_id": int(row["away_team_id"]),
+                    "home_abbr": row["home_abbr"],
+                    "away_abbr": row["away_abbr"],
+                    "home_score": home_score,
+                    "away_score": away_score,
+                    "total": home_score + away_score,
+                    "winner": winner_abbr,
+                })
+    except Exception:
+        pass
 
     prediction = None
     home_stats = None
@@ -846,7 +938,8 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
         {
             "request": request,
             "teams": teams,
-            "games": games,
+            "upcoming_games": upcoming_games,
+            "past_games": past_games,
             "prediction": prediction,
             "home_stats": home_stats,
             "away_stats": away_stats,
@@ -931,98 +1024,14 @@ async def backtest_cache_age(
 
 
 @app.get("/accuracy", response_class=HTMLResponse)
-async def accuracy(
-    request: Request,
-    run: str | None = None,
-    home_team_id: str | None = None,
-    away_team_id: str | None = None,
-    use_injuries: str | None = None,
-    use_cache: str | None = None,
-    max_workers: int = 4,
-) -> HTMLResponse:
+async def accuracy(request: Request) -> HTMLResponse:
+    """Serve the accuracy page.  Backtest runs via SSE (/api/backtest)."""
     teams = _team_list()
-    progress: List[str] = []
-
-    # Convert team_id strings: empty → None, otherwise int
-    home_tid: int | None = None
-    away_tid: int | None = None
-    if home_team_id and home_team_id.strip():
-        try:
-            home_tid = int(home_team_id)
-        except ValueError:
-            pass
-    if away_team_id and away_team_id.strip():
-        try:
-            away_tid = int(away_team_id)
-        except ValueError:
-            pass
-
-    use_injuries_flag = True
-    if use_injuries is not None:
-        use_injuries_flag = str(use_injuries).lower() not in {"0", "false", "off"}
-
-    n_workers = max(1, min(16, max_workers))
-
-    # Determine if cache should be used (checkbox present = "1")
-    want_cache = use_cache == "1"
-
-    results: BacktestResults | None = None
-    predictions: List[dict] = []
-    avg_spread_err = 0.0
-    avg_total_err = 0.0
-    error = None
-
-    # Only run backtest if explicitly requested via the run parameter
-    if run == "1":
-        # Try cache first
-        if want_cache:
-            from src.analytics.backtester import load_backtest_cache
-            results = await asyncio.to_thread(
-                load_backtest_cache,
-                home_tid,
-                away_tid,
-                use_injuries_flag,
-                1440,  # 24-hour max age
-            )
-            if results is not None:
-                progress.append("Loaded results from cache (instant)")
-
-        if results is None:
-            def _cb(msg: str) -> None:
-                progress.append(msg)
-
-            try:
-                results = await asyncio.to_thread(
-                    run_backtest,
-                    5,
-                    home_tid,
-                    away_tid,
-                    _cb,
-                    use_injuries_flag,
-                    n_workers,
-                )
-            except Exception as exc:  # pragma: no cover - heavy computation
-                error = str(exc)
-
-        if results and results.predictions:
-            predictions = _format_predictions(results)
-            avg_spread_err = sum(abs(p.spread_error) for p in results.predictions) / len(results.predictions)
-            avg_total_err = sum(abs(p.total_error) for p in results.predictions) / len(results.predictions)
-
     return templates.TemplateResponse(
         "accuracy.html",
         {
             "request": request,
             "teams": teams,
-            "home_team_id": home_tid,
-            "away_team_id": away_tid,
-            "results": results,
-            "predictions": predictions,
-            "avg_spread_err": avg_spread_err,
-            "avg_total_err": avg_total_err,
-            "progress": progress,
-            "error": error,
-            "use_injuries": use_injuries_flag,
         },
     )
 

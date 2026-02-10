@@ -531,6 +531,24 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
     plays_data = data.get("plays", [])
     # ESPN returns plays in chronological order (oldest first).
 
+    # Build team-ID → abbreviation map from header metadata.
+    # The plays array only includes {"id": "8"} without abbreviation,
+    # so we need the header's competitor list to resolve abbreviations.
+    team_id_to_abbr: dict[str, str] = {}
+    try:
+        competitors = (
+            data.get("header", {})
+            .get("competitions", [{}])[0]
+            .get("competitors", [])
+        )
+        for c in competitors:
+            tid = str(c.get("id", ""))
+            abbr = c.get("team", {}).get("abbreviation", "")
+            if tid and abbr:
+                team_id_to_abbr[tid] = abbr
+    except (IndexError, AttributeError):
+        pass
+
     # When last_event_id is given, skip everything up to and including
     # that event so we only return *newer* plays.
     if last_event_id:
@@ -548,7 +566,8 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
     parsed: List[PlayEvent] = []
     for play in plays_data:
         team = play.get("team", {})
-        team_abbr = team.get("abbreviation", "") if team else ""
+        team_id = str(team.get("id", "")) if team else ""
+        team_abbr = team_id_to_abbr.get(team_id, "") if team_id else ""
 
         play_type = play.get("type", {})
         type_text = play_type.get("text", "") if play_type else ""

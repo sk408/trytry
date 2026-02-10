@@ -225,6 +225,7 @@ def build_injury_history(
     # ------------------------------------------------------------------ #
     # 2.  Build in-memory lookup structures
     # ------------------------------------------------------------------ #
+    progress("[Injury History] Building lookup structures...")
 
     # player_id -> current team_id
     player_team: Dict[int, int] = dict(
@@ -268,6 +269,7 @@ def build_injury_history(
     #   cum_mins[i] – total minutes through their (i+1)-th game
     # To find stats *before* a query date gd  we binary-search dates and
     # use the cumulative value at the insertion point.
+    progress("[Injury History] Building per-player cumulative stats...")
     player_cum: Dict[int, Tuple[List[str], List[float]]] = {}
     for pid, grp in stats_df.groupby("player_id"):
         pid = int(pid)
@@ -299,16 +301,20 @@ def build_injury_history(
     total_below_minutes = 0
     injury_records: List[Tuple[int, int, str, float]] = []
 
+    n_teams = len(teams_df)
+    progress(f"[Injury History] Scanning {n_teams} teams for missing players...")
+
     for t_idx, t_row in teams_df.iterrows():
         team_id = int(t_row["team_id"])
         team_abbr = str(t_row["abbreviation"])
+        team_num = int(t_idx) + 1 if isinstance(t_idx, int) else t_idx
 
         team_roster = [pid for pid, tid in player_team.items() if tid == team_id]
         game_dates = team_game_dates.get(team_id, [])
 
         if not game_dates:
             progress(
-                f"  {team_abbr}: 0 game dates in player_stats – skipping"
+                f"  [{team_num}/{n_teams}] {team_abbr}: 0 game dates – skipping"
             )
             continue
 
@@ -333,7 +339,7 @@ def build_injury_history(
 
         total_injuries += team_out
         progress(
-            f"  {team_abbr}: {len(game_dates)} games, "
+            f"  [{team_num}/{n_teams}] {team_abbr}: {len(game_dates)} games, "
             f"{len(team_roster)} roster, {team_out} inferred out"
         )
 

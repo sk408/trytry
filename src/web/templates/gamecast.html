@@ -173,7 +173,7 @@ function toggleGameSelector() {
   <div class="pred-summary">
     <div class="pred-item" style="border-left: 3px solid var(--accent);">
       <span class="pred-label">LIVE SPREAD</span>
-      <span class="pred-value" style="font-size: 1.3rem;">{{ selected_game.home_abbr }} {{ "%+.1f"|format(live_pred.projected_spread) }}</span>
+      <span class="pred-value" style="font-size: 1.3rem;">{{ selected_game.home_abbr }} {{ "%+.1f"|format(-live_pred.projected_spread) }}</span>
     </div>
     <div class="pred-item" style="border-left: 3px solid var(--accent);">
       <span class="pred-label">LIVE TOTAL</span>
@@ -211,7 +211,7 @@ function toggleGameSelector() {
   <div class="pred-summary" style="margin-top: 12px;">
     <div class="pred-item">
       <span class="pred-label">Pre-game Spread</span>
-      <span class="pred-value">{{ selected_game.home_abbr }} {{ "%+.1f"|format(live_pred.pregame_spread) }}</span>
+      <span class="pred-value">{{ selected_game.home_abbr }} {{ "%+.1f"|format(-live_pred.pregame_spread) }}</span>
     </div>
     <div class="pred-item">
       <span class="pred-label">Pre-game Total</span>
@@ -253,7 +253,7 @@ function toggleGameSelector() {
       <span class="pred-label">Current Spread</span>
       {% set actual_spread = selected_game.home_score - selected_game.away_score %}
       <span class="pred-value {% if (actual_spread > 0) == (live_pred.pregame_spread > 0) %}text-success{% else %}text-danger{% endif %}">
-        {{ selected_game.home_abbr }} {{ "%+d"|format(actual_spread) }}
+        {{ selected_game.home_abbr }} {{ "%+d"|format(-actual_spread) }}
       </span>
     </div>
     <div class="pred-item">
@@ -313,11 +313,11 @@ function toggleGameSelector() {
   <div class="pred-summary" style="margin-top: 12px;">
     <div class="pred-item">
       <span class="pred-label">Pred Spread</span>
-      <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(our_prediction.predicted_spread) }}</span>
+      <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(-our_prediction.predicted_spread) }}</span>
     </div>
     <div class="pred-item">
       <span class="pred-label">Actual Spread</span>
-      <span class="pred-value">{{ selected_game.home_abbr }} {{ "%+d"|format(actual_spread) }}</span>
+      <span class="pred-value">{{ selected_game.home_abbr }} {{ "%+d"|format(-actual_spread) }}</span>
     </div>
     <div class="pred-item">
       <span class="pred-label">Spread Error</span>
@@ -379,7 +379,7 @@ function toggleGameSelector() {
     <div class="pred-summary">
       <div class="pred-item">
         <span class="pred-label">Pred Spread</span>
-        <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(our_prediction.predicted_spread) }}</span>
+        <span class="pred-value">{{ our_prediction.home_abbr }} {{ "%+.1f"|format(-our_prediction.predicted_spread) }}</span>
       </div>
       <div class="pred-item">
         <span class="pred-label">Pred Total</span>
@@ -576,6 +576,8 @@ function toggleGameSelector() {
 {% if selected_game.status == 'in_progress' %}
 <script>
 const gameId = "{{ game_id }}";
+const homeAbbr = "{{ selected_game.home_abbr }}";
+const awayAbbr = "{{ selected_game.away_abbr }}";
 let eventSource = null;
 
 function startStream() {
@@ -621,15 +623,20 @@ function addPlay(play) {
   }
   
   const playEl = document.createElement('div');
-  playEl.className = 'play-item new';
+  const isHome = play.team === homeAbbr;
+  const isAway = play.team === awayAbbr;
+  playEl.className = 'play-item new' + (isHome ? ' play-home' : isAway ? ' play-away' : '');
+  const badgeClass = isHome ? 'play-team-badge badge-home' : isAway ? 'play-team-badge badge-away' : 'play-team-badge';
   playEl.innerHTML = `
     <div class="play-meta">
       <span class="play-period">Q${play.period}</span>
       <span class="play-clock">${play.clock}</span>
-      ${play.team ? `<span class="play-team">${play.team}</span>` : ''}
     </div>
-    <div class="play-text">${play.text}</div>
-    <div class="play-score">${play.score_away} - ${play.score_home}</div>
+    <div class="play-body">
+      ${play.team ? `<span class="${badgeClass}">${play.team}</span>` : ''}
+      <span class="play-text">${play.text}</span>
+    </div>
+    <div class="play-score">${awayAbbr} ${play.score_away} - ${play.score_home} ${homeAbbr}</div>
   `;
   
   feed.insertBefore(playEl, feed.firstChild);
@@ -912,11 +919,11 @@ window.addEventListener('beforeunload', function() {
 .play-team-badge {
   display: inline-block;
   flex-shrink: 0;
-  min-width: 36px;
+  min-width: 38px;
   text-align: center;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 800;
-  padding: 2px 6px;
+  padding: 3px 6px;
   border-radius: 4px;
   letter-spacing: 0.3px;
   background: var(--bg-dark);

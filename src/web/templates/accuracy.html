@@ -4,196 +4,70 @@
 
 <div class="card">
   <h2>Backtest Settings</h2>
-  <form method="get" action="/accuracy">
-    <input type="hidden" name="run" value="1" />
-    <div class="form-group">
-      <label for="home">Home Team (optional)</label>
-      <select name="home_team_id" id="home">
-        <option value="">Any</option>
-        {% for t in teams %}
-        <option value="{{ t.id }}" {% if home_team_id == t.id %}selected{% endif %}>
-          {{ t.abbr }} - {{ t.name }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label for="away">Away Team (optional)</label>
-      <select name="away_team_id" id="away">
-        <option value="">Any</option>
-        {% for t in teams %}
-        <option value="{{ t.id }}" {% if away_team_id == t.id %}selected{% endif %}>
-          {{ t.abbr }} - {{ t.name }}
-        </option>
-        {% endfor %}
-      </select>
-    </div>
-    
-    <div class="form-group">
-      <label for="injuries">Injury Adjustments</label>
-      <select name="use_injuries" id="injuries">
-        <option value="true" {% if use_injuries %}selected{% endif %}>On</option>
-        <option value="false" {% if not use_injuries %}selected{% endif %}>Off</option>
-      </select>
-    </div>
+  <div class="form-group">
+    <label for="home">Home Team (optional)</label>
+    <select id="home">
+      <option value="">Any</option>
+      {% for t in teams %}
+      <option value="{{ t.id }}">{{ t.abbr }} - {{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
 
-    <div class="form-group">
-      <label class="opt-checkbox-label">
-        <input type="checkbox" id="use-cache" name="use_cache" value="1" checked>
-        Use cached results
-        <span id="cache-age" class="text-muted" style="font-size: 0.8rem;"></span>
-      </label>
-    </div>
+  <div class="form-group">
+    <label for="away">Away Team (optional)</label>
+    <select id="away">
+      <option value="">Any</option>
+      {% for t in teams %}
+      <option value="{{ t.id }}">{{ t.abbr }} - {{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
 
-    <div class="form-group">
-      <label for="workers">Workers</label>
-      <input type="number" id="workers" name="max_workers" value="4" min="1" max="16" step="1"
-             title="Number of parallel threads. More = faster but more CPU. 4 is a good default.">
-    </div>
-    
-    <button type="submit">Run Backtest</button>
-  </form>
+  <div class="form-group">
+    <label for="injuries">Injury Adjustments</label>
+    <select id="injuries">
+      <option value="true">On</option>
+      <option value="false">Off</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label class="opt-checkbox-label">
+      <input type="checkbox" id="use-cache" checked>
+      Use cached results
+      <span id="cache-age" class="text-muted" style="font-size: 0.8rem;"></span>
+    </label>
+  </div>
+
+  <div class="form-group">
+    <label for="workers">Workers</label>
+    <input type="number" id="workers" value="4" min="1" max="16" step="1"
+           title="Number of parallel threads. More = faster but more CPU. 4 is a good default.">
+  </div>
+
+  <button id="btn-run-backtest" onclick="startBacktest()">Run Backtest</button>
 </div>
 
-{% if progress %}
-<div class="card">
+<!-- Progress log (hidden until backtest runs) -->
+<div id="bt-progress-card" class="card" style="display:none;">
   <h2>Progress</h2>
-  <div class="log">
-    {% for line in progress %}
-    <div>{{ line }}</div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-{% if error %}
-<div class="error-box">{{ error }}</div>
-{% endif %}
-
-{% if results and results.total_games > 0 %}
-<!-- Overall Accuracy -->
-<div class="card">
-  <h2>Overall Accuracy</h2>
-  <div class="stats-grid">
-    <div class="stat-item">
-      <div class="stat-value">{{ results.total_games }}</div>
-      <div class="stat-label">Games Analyzed</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value {% if results.overall_spread_accuracy >= 55 %}text-success{% elif results.overall_spread_accuracy < 50 %}text-danger{% else %}text-warning{% endif %}">
-        {{ "%.1f"|format(results.overall_spread_accuracy) }}%
-      </div>
-      <div class="stat-label">Winner Correct</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value {% if results.overall_total_accuracy >= 55 %}text-success{% elif results.overall_total_accuracy < 50 %}text-danger{% else %}text-warning{% endif %}">
-        {{ "%.1f"|format(results.overall_total_accuracy) }}%
-      </div>
-      <div class="stat-label">Total Within 10</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(avg_spread_err) }}</div>
-      <div class="stat-label">Avg Spread Error</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value">{{ "%.1f"|format(avg_total_err) }}</div>
-      <div class="stat-label">Avg Total Error</div>
-    </div>
-  </div>
+  <div id="bt-log" class="log" style="max-height: 200px; overflow-y: auto;"></div>
 </div>
 
-<!-- Team Accuracy Table -->
-<div class="card">
-  <h2>Accuracy by Team</h2>
-  <div class="scroll-x">
-    <table>
-      <thead>
-        <tr>
-          <th>Team</th>
-          <th>Record</th>
-          <th>Games</th>
-          <th>Spread %</th>
-          <th>Avg Spread Err</th>
-          <th>Total %</th>
-          <th>Avg Total Err</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for team in results.team_accuracy.values()|list|sort(attribute='spread_accuracy', reverse=True) if team.games_analyzed > 0 %}
-        <tr>
-          <td>{{ team.team_abbr }}</td>
-          <td>{{ team.wins }}-{{ team.losses }}</td>
-          <td>{{ team.games_analyzed }}</td>
-          <td class="{% if team.spread_accuracy >= 60 %}text-success{% elif team.spread_accuracy < 45 %}text-danger{% endif %}">
-            {{ "%.1f"|format(team.spread_accuracy) }}%
-          </td>
-          <td>{{ "%.1f"|format(team.avg_spread_error) }}</td>
-          <td class="{% if team.total_accuracy >= 60 %}text-success{% elif team.total_accuracy < 45 %}text-danger{% endif %}">
-            {{ "%.1f"|format(team.total_accuracy) }}%
-          </td>
-          <td>{{ "%.1f"|format(team.avg_total_error) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+<!-- Error box -->
+<div id="bt-error" class="error-box" style="display:none;"></div>
 
-<!-- Recent Predictions vs Actual -->
-<div class="card">
-  <h2>Recent Predictions vs Actual</h2>
-  <div class="scroll-x">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Matchup</th>
-          <th>Final</th>
-          <th>Pred</th>
-          <th>Actual</th>
-          <th>OK?</th>
-          <th>Pred Score</th>
-          <th>Score Diff</th>
-          <th>Pred Tot</th>
-          <th>Act Tot</th>
-          <th>Tot Diff</th>
-          <th>Injuries</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for p in predictions %}
-        <tr>
-          <td>{{ p.game_date }}</td>
-          <td>{{ p.matchup }}</td>
-          <td>{{ p.final_score }}</td>
-          <td>{{ p.pred_winner }}</td>
-          <td>{{ p.actual_winner }}</td>
-          <td class="{% if p.winner_correct %}text-success{% else %}text-danger{% endif %}">
-            {{ 'Y' if p.winner_correct else 'N' }}
-          </td>
-          <td>{{ p.pred_score }}</td>
-          <td>{{ p.score_diff }}</td>
-          <td>{{ p.pred_total }}</td>
-          <td>{{ p.actual_total }}</td>
-          <td class="{% if p.total_diff|abs <= 10 %}text-success{% elif p.total_diff|abs <= 20 %}text-warning{% else %}text-danger{% endif %}">
-            {{ "%+.0f"|format(p.total_diff) }}
-          </td>
-          <td class="{% if p.has_injuries %}text-danger{% endif %}">{{ p.injuries }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% elif not error and not progress %}
-<div class="card">
+<!-- Results container (populated by JS) -->
+<div id="bt-results"></div>
+
+<!-- Empty state (shown when no results) -->
+<div id="bt-empty" class="card">
   <div class="empty-state">
     <p>No results yet</p>
     <p class="text-muted">Run a backtest to see accuracy metrics</p>
   </div>
 </div>
-{% endif %}
 
 <!-- Model Optimisation -->
 <div class="card">
@@ -243,6 +117,154 @@
 </div>
 
 <script>
+/* ── Backtest via SSE (non-blocking) ── */
+let backtestES = null;
+
+function startBacktest() {
+  // Gather params
+  const home = document.getElementById('home').value;
+  const away = document.getElementById('away').value;
+  const inj = document.getElementById('injuries').value;
+  const cache = document.getElementById('use-cache').checked ? '1' : '0';
+  const workers = document.getElementById('workers').value || '4';
+
+  // Reset UI
+  const btn = document.getElementById('btn-run-backtest');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+
+  const logCard = document.getElementById('bt-progress-card');
+  const logEl = document.getElementById('bt-log');
+  logCard.style.display = 'block';
+  logEl.innerHTML = '';
+
+  document.getElementById('bt-error').style.display = 'none';
+  document.getElementById('bt-results').innerHTML = '';
+  document.getElementById('bt-empty').style.display = 'none';
+
+  // Close any existing connection
+  if (backtestES) { backtestES.close(); backtestES = null; }
+
+  const url = '/api/backtest?home_team_id=' + encodeURIComponent(home) +
+    '&away_team_id=' + encodeURIComponent(away) +
+    '&use_injuries=' + encodeURIComponent(inj) +
+    '&use_cache=' + encodeURIComponent(cache) +
+    '&max_workers=' + encodeURIComponent(workers);
+
+  backtestES = new EventSource(url);
+
+  backtestES.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.startsWith('[RESULTS_JSON] ')) {
+      try {
+        const data = JSON.parse(msg.substring(15));
+        renderBacktestResults(data);
+      } catch (err) {
+        console.error('Failed to parse backtest results', err);
+      }
+    } else if (msg.startsWith('[DONE]')) {
+      backtestES.close();
+      backtestES = null;
+      btn.disabled = false;
+      btn.textContent = 'Run Backtest';
+      // Append done message
+      const div = document.createElement('div');
+      div.textContent = msg;
+      div.style.fontWeight = '700';
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+      updateCacheAge();
+    } else if (msg.startsWith('[ERROR]')) {
+      backtestES.close();
+      backtestES = null;
+      btn.disabled = false;
+      btn.textContent = 'Run Backtest';
+      const errBox = document.getElementById('bt-error');
+      errBox.textContent = msg.substring(8);
+      errBox.style.display = 'block';
+    } else {
+      // Progress message
+      const div = document.createElement('div');
+      div.textContent = msg;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  };
+
+  backtestES.onerror = function() {
+    backtestES.close();
+    backtestES = null;
+    btn.disabled = false;
+    btn.textContent = 'Run Backtest';
+  };
+}
+
+function _accClass(val, goodThresh, badThresh) {
+  if (val >= goodThresh) return 'text-success';
+  if (val < badThresh) return 'text-danger';
+  return 'text-warning';
+}
+
+function renderBacktestResults(data) {
+  const container = document.getElementById('bt-results');
+  let html = '';
+
+  // Overall Accuracy card
+  html += '<div class="card"><h2>Overall Accuracy</h2><div class="stats-grid">';
+  html += '<div class="stat-item"><div class="stat-value">' + data.total_games + '</div><div class="stat-label">Games Analyzed</div></div>';
+  html += '<div class="stat-item"><div class="stat-value ' + _accClass(data.spread_acc, 55, 50) + '">' + data.spread_acc.toFixed(1) + '%</div><div class="stat-label">Winner Correct</div></div>';
+  html += '<div class="stat-item"><div class="stat-value ' + _accClass(data.total_acc, 55, 50) + '">' + data.total_acc.toFixed(1) + '%</div><div class="stat-label">Total Within 10</div></div>';
+  html += '<div class="stat-item"><div class="stat-value">' + data.avg_spread_err.toFixed(1) + '</div><div class="stat-label">Avg Spread Error</div></div>';
+  html += '<div class="stat-item"><div class="stat-value">' + data.avg_total_err.toFixed(1) + '</div><div class="stat-label">Avg Total Error</div></div>';
+  html += '</div></div>';
+
+  // Team Accuracy table
+  if (data.teams && data.teams.length > 0) {
+    html += '<div class="card"><h2>Accuracy by Team</h2><div class="scroll-x"><table>';
+    html += '<thead><tr><th>Team</th><th>Record</th><th>Games</th><th>Spread %</th><th>Avg Spread Err</th><th>Total %</th><th>Avg Total Err</th></tr></thead><tbody>';
+    data.teams.forEach(function(t) {
+      html += '<tr>';
+      html += '<td>' + t.team_abbr + '</td>';
+      html += '<td>' + t.record + '</td>';
+      html += '<td>' + t.games + '</td>';
+      html += '<td class="' + (t.spread_acc >= 60 ? 'text-success' : (t.spread_acc < 45 ? 'text-danger' : '')) + '">' + t.spread_acc.toFixed(1) + '%</td>';
+      html += '<td>' + t.avg_spread_err.toFixed(1) + '</td>';
+      html += '<td class="' + (t.total_acc >= 60 ? 'text-success' : (t.total_acc < 45 ? 'text-danger' : '')) + '">' + t.total_acc.toFixed(1) + '%</td>';
+      html += '<td>' + t.avg_total_err.toFixed(1) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  // Predictions table
+  if (data.predictions && data.predictions.length > 0) {
+    html += '<div class="card"><h2>Recent Predictions vs Actual</h2><div class="scroll-x"><table>';
+    html += '<thead><tr><th>Date</th><th>Matchup</th><th>Final</th><th>Pred</th><th>Actual</th><th>OK?</th><th>Pred Score</th><th>Score Diff</th><th>Pred Tot</th><th>Act Tot</th><th>Tot Diff</th><th>Injuries</th></tr></thead><tbody>';
+    data.predictions.forEach(function(p) {
+      const diffAbs = Math.abs(p.total_diff);
+      const diffCls = diffAbs <= 10 ? 'text-success' : (diffAbs <= 20 ? 'text-warning' : 'text-danger');
+      const diffStr = (p.total_diff >= 0 ? '+' : '') + Math.round(p.total_diff);
+      html += '<tr>';
+      html += '<td>' + p.game_date + '</td>';
+      html += '<td>' + p.matchup + '</td>';
+      html += '<td>' + p.final_score + '</td>';
+      html += '<td>' + p.pred_winner + '</td>';
+      html += '<td>' + p.actual_winner + '</td>';
+      html += '<td class="' + (p.winner_correct ? 'text-success' : 'text-danger') + '">' + (p.winner_correct ? 'Y' : 'N') + '</td>';
+      html += '<td>' + p.pred_score + '</td>';
+      html += '<td>' + p.score_diff + '</td>';
+      html += '<td>' + p.pred_total + '</td>';
+      html += '<td>' + p.actual_total + '</td>';
+      html += '<td class="' + diffCls + '">' + diffStr + '</td>';
+      html += '<td class="' + (p.has_injuries ? 'text-danger' : '') + '">' + p.injuries + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+  }
+
+  container.innerHTML = html;
+}
+
 function _disableOptButtons(disabled) {
   ['btn-optimize','btn-calibrate','btn-features','btn-grouped','btn-ml-features','btn-team-refine','btn-fft','btn-clear-weights','btn-optimize-all','btn-pipeline','btn-ml-train','btn-continuous'].forEach(id => {
     const el = document.getElementById(id);
