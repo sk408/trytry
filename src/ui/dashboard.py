@@ -16,6 +16,8 @@ from src.ui.workers import (
     start_sync_worker,
     start_injury_sync_worker,
     start_injury_history_worker,
+    start_team_metrics_worker,
+    start_player_impact_worker,
     start_image_sync_worker,
 )
 
@@ -55,6 +57,10 @@ class Dashboard(QWidget):
         self._injury_worker = None
         self._history_thread = None
         self._history_worker = None
+        self._metrics_thread = None
+        self._metrics_worker = None
+        self._impact_thread = None
+        self._impact_worker = None
         self._image_thread = None
         self._image_worker = None
 
@@ -96,17 +102,41 @@ class Dashboard(QWidget):
         history_button.clicked.connect(self._build_injury_history)  # type: ignore[arg-type]
         self.history_button = history_button
 
+        metrics_button = QPushButton("  Sync Team Metrics")
+        metrics_button.setToolTip("Fetch team advanced metrics (four factors, clutch, hustle)")
+        metrics_button.clicked.connect(self._sync_team_metrics)  # type: ignore[arg-type]
+        self.metrics_button = metrics_button
+
+        impact_button = QPushButton("  Sync Player Impact")
+        impact_button.setToolTip("Fetch player on/off and estimated impact metrics")
+        impact_button.clicked.connect(self._sync_player_impact)  # type: ignore[arg-type]
+        self.impact_button = impact_button
+
         image_button = QPushButton("  Sync Images")
         image_button.setToolTip("Download team logos and player headshots (runs in background)")
         image_button.clicked.connect(self._sync_images)  # type: ignore[arg-type]
         self.image_button = image_button
+
+        stop_button = QPushButton("  Stop Sync")
+        stop_button.setToolTip("Stop the current sync after the current step completes")
+        stop_button.setStyleSheet(
+            "QPushButton { background: #ef4444; color: white; font-weight: 600; }"
+            "QPushButton:hover { background: #dc2626; }"
+            "QPushButton:disabled { background: #555; color: #888; }"
+        )
+        stop_button.clicked.connect(self._stop_sync)  # type: ignore[arg-type]
+        stop_button.setVisible(False)
+        self.stop_button = stop_button
 
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
         button_row.addWidget(sync_button)
         button_row.addWidget(injury_button)
         button_row.addWidget(history_button)
+        button_row.addWidget(metrics_button)
+        button_row.addWidget(impact_button)
         button_row.addWidget(image_button)
+        button_row.addWidget(stop_button)
         button_row.addStretch()
 
         # ── Log header ──
@@ -135,6 +165,7 @@ class Dashboard(QWidget):
     def _sync_data(self) -> None:
         if self._thread:
             return
+        self._set_syncing(True)
         self.sync_button.setEnabled(False)
         self.status.setText("Starting sync...")
         self.log.clear()
@@ -142,6 +173,7 @@ class Dashboard(QWidget):
             on_progress=self._on_progress,
             on_finished=self._on_finished,
             on_error=self._on_error,
+            on_cancelled=self._on_cancelled,
         )
         self._thread.start()
 
@@ -153,6 +185,19 @@ class Dashboard(QWidget):
         self.status.setText(msg)
         self._log_success(msg)
         self.sync_button.setEnabled(True)
+        self._set_syncing(False)
+        self._update_stat_cards()
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+        self._thread = None
+        self._worker = None
+
+    def _on_cancelled(self, msg: str) -> None:
+        self.status.setText(msg)
+        self._log_warning(msg)
+        self.sync_button.setEnabled(True)
+        self._set_syncing(False)
         self._update_stat_cards()
         if self._thread:
             self._thread.quit()
@@ -164,6 +209,7 @@ class Dashboard(QWidget):
         self.status.setText(f"Sync failed: {msg}")
         self._log_error(msg)
         self.sync_button.setEnabled(True)
+        self._set_syncing(False)
         if self._thread:
             self._thread.quit()
             self._thread.wait()
@@ -247,6 +293,116 @@ class Dashboard(QWidget):
         self._history_thread = None
         self._history_worker = None
 
+    # ── Team metrics sync ──
+
+    def _sync_team_metrics(self) -> None:
+        if self._metrics_thread:
+            return
+        self._set_syncing(True)
+        self.metrics_button.setEnabled(False)
+        self.status.setText("Syncing team metrics...")
+        self.log.append("--- Team Metrics Sync Started ---")
+        self._metrics_thread, self._metrics_worker = start_team_metrics_worker(
+            on_progress=self._on_metrics_progress,
+            on_finished=self._on_metrics_finished,
+            on_error=self._on_metrics_error,
+            on_cancelled=self._on_metrics_cancelled,
+        )
+        self._metrics_thread.start()
+
+    def _on_metrics_progress(self, msg: str) -> None:
+        self.status.setText(msg)
+        self.log.append(msg)
+
+    def _on_metrics_finished(self, msg: str) -> None:
+        self.status.setText(msg)
+        self._log_success(msg)
+        self._log_success("--- Team Metrics Sync Complete ---")
+        self.metrics_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._metrics_thread:
+            self._metrics_thread.quit()
+            self._metrics_thread.wait()
+        self._metrics_thread = None
+        self._metrics_worker = None
+
+    def _on_metrics_cancelled(self, msg: str) -> None:
+        self.status.setText(msg)
+        self._log_warning(msg)
+        self.metrics_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._metrics_thread:
+            self._metrics_thread.quit()
+            self._metrics_thread.wait()
+        self._metrics_thread = None
+        self._metrics_worker = None
+
+    def _on_metrics_error(self, msg: str) -> None:
+        self.status.setText(f"Team metrics sync failed: {msg}")
+        self._log_error(msg)
+        self.metrics_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._metrics_thread:
+            self._metrics_thread.quit()
+            self._metrics_thread.wait()
+        self._metrics_thread = None
+        self._metrics_worker = None
+
+    # ── Player impact sync ──
+
+    def _sync_player_impact(self) -> None:
+        if self._impact_thread:
+            return
+        self._set_syncing(True)
+        self.impact_button.setEnabled(False)
+        self.status.setText("Syncing player impact...")
+        self.log.append("--- Player Impact Sync Started ---")
+        self._impact_thread, self._impact_worker = start_player_impact_worker(
+            on_progress=self._on_impact_progress,
+            on_finished=self._on_impact_finished,
+            on_error=self._on_impact_error,
+            on_cancelled=self._on_impact_cancelled,
+        )
+        self._impact_thread.start()
+
+    def _on_impact_progress(self, msg: str) -> None:
+        self.status.setText(msg)
+        self.log.append(msg)
+
+    def _on_impact_finished(self, msg: str) -> None:
+        self.status.setText(msg)
+        self._log_success(msg)
+        self._log_success("--- Player Impact Sync Complete ---")
+        self.impact_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._impact_thread:
+            self._impact_thread.quit()
+            self._impact_thread.wait()
+        self._impact_thread = None
+        self._impact_worker = None
+
+    def _on_impact_cancelled(self, msg: str) -> None:
+        self.status.setText(msg)
+        self._log_warning(msg)
+        self.impact_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._impact_thread:
+            self._impact_thread.quit()
+            self._impact_thread.wait()
+        self._impact_thread = None
+        self._impact_worker = None
+
+    def _on_impact_error(self, msg: str) -> None:
+        self.status.setText(f"Player impact sync failed: {msg}")
+        self._log_error(msg)
+        self.impact_button.setEnabled(True)
+        self._set_syncing(False)
+        if self._impact_thread:
+            self._impact_thread.quit()
+            self._impact_thread.wait()
+        self._impact_thread = None
+        self._impact_worker = None
+
     # ── Image sync ──
 
     def _sync_images(self) -> None:
@@ -287,6 +443,25 @@ class Dashboard(QWidget):
         self._image_thread = None
         self._image_worker = None
 
+    # ── Stop / cancel ──
+
+    def _stop_sync(self) -> None:
+        """Request cancellation of whatever sync is currently running."""
+        self.stop_button.setEnabled(False)
+        self.stop_button.setText("  Stopping...")
+        self.status.setText("Cancelling after current step...")
+        # Signal whichever worker is active
+        for worker in (self._worker, self._metrics_worker, self._impact_worker):
+            if worker and hasattr(worker, "request_cancel"):
+                worker.request_cancel()
+
+    def _set_syncing(self, active: bool) -> None:
+        """Show/hide the stop button based on whether a sync is running."""
+        self.stop_button.setVisible(active)
+        self.stop_button.setEnabled(active)
+        if active:
+            self.stop_button.setText("  Stop Sync")
+
     # ── helpers ──
 
     def _log_info(self, msg: str) -> None:
@@ -294,6 +469,9 @@ class Dashboard(QWidget):
 
     def _log_success(self, msg: str) -> None:
         self.log.append(f'<span style="color:#10b981;">{msg}</span>')
+
+    def _log_warning(self, msg: str) -> None:
+        self.log.append(f'<span style="color:#f59e0b;">{msg}</span>')
 
     def _log_error(self, msg: str) -> None:
         self.log.append(f'<span style="color:#ef4444;">ERROR: {msg}</span>')

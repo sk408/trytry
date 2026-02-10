@@ -35,8 +35,17 @@
     <button type="button" onclick="runSync('/api/sync/injury-history', 'Building history...')" id="btn-history">
       Build Injury History
     </button>
+    <button type="button" onclick="runSync('/api/sync/team-metrics', 'Syncing team metrics...')" id="btn-team-metrics">
+      Sync Team Metrics
+    </button>
+    <button type="button" onclick="runSync('/api/sync/player-impact', 'Syncing player impact...')" id="btn-player-impact">
+      Sync Player Impact
+    </button>
     <button type="button" onclick="runSync('/api/sync/images', 'Syncing images...')" id="btn-images" class="secondary">
       Sync Images
+    </button>
+    <button type="button" onclick="cancelSync()" id="btn-stop" class="danger" style="display:none;">
+      Stop Sync
     </button>
   </div>
   
@@ -50,18 +59,24 @@
 </div>
 
 <script>
+let _currentEventSource = null;
+
 function runSync(endpoint, startMsg) {
   const statusEl = document.getElementById('status');
   const logEl = document.getElementById('log-container');
-  const buttons = document.querySelectorAll('.actions button');
+  const syncButtons = document.querySelectorAll('.actions button:not(#btn-stop)');
+  const stopBtn = document.getElementById('btn-stop');
   
-  buttons.forEach(btn => btn.disabled = true);
+  syncButtons.forEach(btn => btn.disabled = true);
+  stopBtn.style.display = '';
+  stopBtn.disabled = false;
   logEl.innerHTML = '';
   logEl.style.display = 'block';
   statusEl.textContent = startMsg;
   statusEl.className = 'status';
   
   const eventSource = new EventSource(endpoint);
+  _currentEventSource = eventSource;
   
   eventSource.onmessage = function(event) {
     const msg = event.data;
@@ -72,6 +87,10 @@ function runSync(endpoint, startMsg) {
       line.className = 'text-success';
       statusEl.textContent = msg.replace('[DONE] ', '');
       statusEl.className = 'status success';
+    } else if (msg.startsWith('[CANCELLED]')) {
+      line.className = 'text-warning';
+      statusEl.textContent = msg.replace('[CANCELLED] ', '');
+      statusEl.className = 'status warning';
     } else if (msg.startsWith('[ERROR]')) {
       line.className = 'text-danger';
       statusEl.textContent = msg.replace('[ERROR] ', '');
@@ -84,8 +103,26 @@ function runSync(endpoint, startMsg) {
   
   eventSource.onerror = function() {
     eventSource.close();
-    buttons.forEach(btn => btn.disabled = false);
+    _currentEventSource = null;
+    syncButtons.forEach(btn => btn.disabled = false);
+    stopBtn.style.display = 'none';
   };
+}
+
+function cancelSync() {
+  const stopBtn = document.getElementById('btn-stop');
+  stopBtn.disabled = true;
+  stopBtn.textContent = 'Stopping...';
+  
+  fetch('/api/sync/cancel', { method: 'POST' })
+    .then(() => {
+      document.getElementById('status').textContent = 'Cancelling after current step...';
+    })
+    .catch(err => {
+      console.error('Cancel failed:', err);
+      stopBtn.disabled = false;
+      stopBtn.textContent = 'Stop Sync';
+    });
 }
 </script>
 {% endblock %}

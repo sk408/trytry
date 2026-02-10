@@ -1,24 +1,41 @@
 from __future__ import annotations
 
+import threading
 import traceback
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from src.data.sync_service import full_sync, sync_injuries, sync_injury_history
+from src.data.sync_service import (
+    SyncCancelled,
+    full_sync,
+    sync_injuries,
+    sync_injury_history,
+    sync_player_impact,
+    sync_team_metrics,
+)
 
 
 class SyncWorker(QObject):
     progress = Signal(str)
     finished = Signal(str)
+    cancelled = Signal(str)
     error = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
+        self._cancel_flag = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_flag.set()
 
     def run(self) -> None:
         try:
-            full_sync(progress_cb=self.progress.emit)
+            self._cancel_flag.clear()
+            full_sync(progress_cb=self.progress.emit,
+                      cancel_check=self._cancel_flag.is_set)
             self.finished.emit("Sync complete")
+        except SyncCancelled:
+            self.cancelled.emit("Sync stopped — data synced so far is saved")
         except Exception as exc:  # pragma: no cover - UI path
             tb = traceback.format_exc()
             self.error.emit(f"{exc}\n{tb}")
@@ -60,6 +77,64 @@ class InjuryHistoryWorker(QObject):
             self.error.emit(f"{exc}\n{tb}")
 
 
+class TeamMetricsWorker(QObject):
+    """Fetch team advanced metrics from NBA API."""
+
+    progress = Signal(str)
+    finished = Signal(str)
+    cancelled = Signal(str)
+    error = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cancel_flag = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_flag.set()
+
+    def run(self) -> None:
+        try:
+            self._cancel_flag.clear()
+            self.progress.emit("Fetching team advanced metrics...")
+            count = sync_team_metrics(progress_cb=self.progress.emit,
+                                      cancel_check=self._cancel_flag.is_set)
+            self.finished.emit(f"Team metrics sync complete: {count} teams updated")
+        except SyncCancelled:
+            self.cancelled.emit("Team metrics sync stopped — data synced so far is saved")
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.error.emit(f"{exc}\n{tb}")
+
+
+class PlayerImpactWorker(QObject):
+    """Fetch player on/off and estimated impact metrics."""
+
+    progress = Signal(str)
+    finished = Signal(str)
+    cancelled = Signal(str)
+    error = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cancel_flag = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_flag.set()
+
+    def run(self) -> None:
+        try:
+            self._cancel_flag.clear()
+            self.progress.emit("Fetching player impact metrics...")
+            count = sync_player_impact(progress_cb=self.progress.emit,
+                                       cancel_check=self._cancel_flag.is_set)
+            self.finished.emit(f"Player impact sync complete: {count} players updated")
+        except SyncCancelled:
+            self.cancelled.emit("Player impact sync stopped — data synced so far is saved")
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.error.emit(f"{exc}\n{tb}")
+
+
 class ImageSyncWorker(QObject):
     """Download team logos and player headshots into the disk cache."""
 
@@ -90,7 +165,7 @@ class ImageSyncWorker(QObject):
             self.error.emit(f"{exc}\n{tb}")
 
 
-def start_sync_worker(on_progress, on_finished, on_error):
+def start_sync_worker(on_progress, on_finished, on_error, on_cancelled=None):
     thread = QThread()
     worker = SyncWorker()
     worker.moveToThread(thread)
@@ -98,7 +173,10 @@ def start_sync_worker(on_progress, on_finished, on_error):
     worker.progress.connect(on_progress)  # type: ignore[arg-type]
     worker.finished.connect(on_finished)  # type: ignore[arg-type]
     worker.error.connect(on_error)  # type: ignore[arg-type]
+    if on_cancelled:
+        worker.cancelled.connect(on_cancelled)  # type: ignore[arg-type]
     worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.cancelled.connect(thread.quit)  # type: ignore[arg-type]
     worker.error.connect(thread.quit)  # type: ignore[arg-type]
     thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
     thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
@@ -129,6 +207,42 @@ def start_injury_history_worker(on_progress, on_finished, on_error):
     worker.finished.connect(on_finished)  # type: ignore[arg-type]
     worker.error.connect(on_error)  # type: ignore[arg-type]
     worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.error.connect(thread.quit)  # type: ignore[arg-type]
+    thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
+    thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
+    return thread, worker
+
+
+def start_team_metrics_worker(on_progress, on_finished, on_error, on_cancelled=None):
+    thread = QThread()
+    worker = TeamMetricsWorker()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)  # type: ignore[arg-type]
+    worker.progress.connect(on_progress)  # type: ignore[arg-type]
+    worker.finished.connect(on_finished)  # type: ignore[arg-type]
+    worker.error.connect(on_error)  # type: ignore[arg-type]
+    if on_cancelled:
+        worker.cancelled.connect(on_cancelled)  # type: ignore[arg-type]
+    worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.cancelled.connect(thread.quit)  # type: ignore[arg-type]
+    worker.error.connect(thread.quit)  # type: ignore[arg-type]
+    thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
+    thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
+    return thread, worker
+
+
+def start_player_impact_worker(on_progress, on_finished, on_error, on_cancelled=None):
+    thread = QThread()
+    worker = PlayerImpactWorker()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)  # type: ignore[arg-type]
+    worker.progress.connect(on_progress)  # type: ignore[arg-type]
+    worker.finished.connect(on_finished)  # type: ignore[arg-type]
+    worker.error.connect(on_error)  # type: ignore[arg-type]
+    if on_cancelled:
+        worker.cancelled.connect(on_cancelled)  # type: ignore[arg-type]
+    worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.cancelled.connect(thread.quit)  # type: ignore[arg-type]
     worker.error.connect(thread.quit)  # type: ignore[arg-type]
     thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
     thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]

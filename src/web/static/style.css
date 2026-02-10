@@ -195,6 +195,7 @@ main {
 }
 
 .status.success { color: var(--success); }
+.status.warning { color: var(--warning); }
 .status.error { color: var(--danger); }
 
 /* Buttons */

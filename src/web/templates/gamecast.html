@@ -5,10 +5,13 @@
 <h1 class="page-title">Gamecast</h1>
 
 <!-- Game Selector -->
-<div class="card">
-  <h2>Select Game</h2>
+<div class="card game-selector {% if game_id %}collapsed{% endif %}" id="game-selector">
+  <h2 class="game-selector-toggle" onclick="toggleGameSelector()">
+    <span>Select Game</span>
+    <span class="toggle-icon">{% if game_id %}&#9654;{% else %}&#9660;{% endif %}</span>
+  </h2>
   {% if games %}
-  <div class="games-list">
+  <div class="games-list" id="games-list">
     {% for g in games %}
     <a href="/gamecast?game_id={{ g.game_id }}" 
        class="game-row {% if game_id == g.game_id %}active{% endif %}">
@@ -34,11 +37,22 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="empty-state">
-    <p>No games scheduled today</p>
+  <div class="games-list" id="games-list">
+    <div class="empty-state">
+      <p>No games scheduled today</p>
+    </div>
   </div>
   {% endif %}
 </div>
+
+<script>
+function toggleGameSelector() {
+  const selector = document.getElementById('game-selector');
+  selector.classList.toggle('collapsed');
+  const icon = selector.querySelector('.toggle-icon');
+  icon.innerHTML = selector.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+}
+</script>
 
 {% if selected_game %}
 <!-- Live Score -->
@@ -685,6 +699,33 @@ window.addEventListener('beforeunload', function() {
 {% endif %}
 
 <style>
+/* Game Selector (collapsible on mobile) */
+.game-selector-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+
+.toggle-icon {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .toggle-icon {
+    display: inline;
+  }
+
+  .game-selector.collapsed .games-list {
+    display: none;
+  }
+}
+
 /* Score Display */
 .score-display {
   display: flex;

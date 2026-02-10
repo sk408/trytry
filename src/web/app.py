@@ -43,11 +43,14 @@ from src.analytics.live_recommendations import build_live_recommendations
 from src.analytics.prediction import predict_matchup
 from src.analytics.stats_engine import get_scheduled_games, get_team_matchup_stats, TeamMatchupStats
 from src.data.sync_service import (
+    SyncCancelled,
     full_sync,
     sync_injuries,
     sync_injury_history,
     sync_live_scores,
+    sync_player_impact,
     sync_schedule,
+    sync_team_metrics,
 )
 from src.data.nba_fetcher import get_current_season
 from src.data.gamecast import (
@@ -203,10 +206,30 @@ async def dashboard_injury_history(request: Request) -> HTMLResponse:
     return await dashboard(request, status=status, logs=logs)
 
 
+@app.post("/dashboard/team-metrics", response_class=HTMLResponse)
+async def dashboard_team_metrics(request: Request) -> HTMLResponse:
+    status, logs = await asyncio.to_thread(_run_with_progress, sync_team_metrics, progress_label="Team metrics sync")
+    return await dashboard(request, status=status, logs=logs)
+
+
+@app.post("/dashboard/player-impact", response_class=HTMLResponse)
+async def dashboard_player_impact(request: Request) -> HTMLResponse:
+    status, logs = await asyncio.to_thread(_run_with_progress, sync_player_impact, progress_label="Player impact sync")
+    return await dashboard(request, status=status, logs=logs)
+
+
+# --- Sync cancel flag (shared across requests) ---
+_sync_cancel_flag = threading.Event()
+
+
 # --- Server-Sent Events (SSE) for real-time progress ---
 
 async def _stream_sync(sync_func, label: str) -> AsyncGenerator[str, None]:
-    """Run a sync function and stream progress via SSE."""
+    """Run a sync function and stream progress via SSE.
+
+    Automatically passes cancel_check to sync functions that accept it.
+    """
+    _sync_cancel_flag.clear()
     msg_queue: queue.Queue[str | None] = queue.Queue()
 
     def progress_cb(msg: str) -> None:
@@ -215,10 +238,17 @@ async def _stream_sync(sync_func, label: str) -> AsyncGenerator[str, None]:
     def run_sync() -> None:
         try:
             try:
-                sync_func(progress_cb=progress_cb)
+                sync_func(progress_cb=progress_cb,
+                          cancel_check=_sync_cancel_flag.is_set)
             except TypeError:
-                sync_func()
+                # Fallback for sync functions that don't accept cancel_check
+                try:
+                    sync_func(progress_cb=progress_cb)
+                except TypeError:
+                    sync_func()
             msg_queue.put(f"[DONE] {label} complete")
+        except SyncCancelled:
+            msg_queue.put(f"[CANCELLED] {label} stopped — data synced so far is saved")
         except Exception as exc:
             msg_queue.put(f"[ERROR] {label} failed: {exc}")
         finally:
@@ -236,6 +266,13 @@ async def _stream_sync(sync_func, label: str) -> AsyncGenerator[str, None]:
         except Exception:
             if not thread.is_alive():
                 break
+
+
+@app.post("/api/sync/cancel")
+async def api_sync_cancel() -> dict:
+    """Signal any running sync operation to stop after the current step."""
+    _sync_cancel_flag.set()
+    return {"status": "cancel_requested"}
 
 
 @app.get("/api/sync/data")
@@ -263,6 +300,26 @@ async def stream_sync_injury_history() -> StreamingResponse:
     """Stream injury history build progress via SSE."""
     return StreamingResponse(
         _stream_sync(sync_injury_history, "Injury history"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/sync/team-metrics")
+async def stream_sync_team_metrics() -> StreamingResponse:
+    """Stream team metrics sync progress via SSE."""
+    return StreamingResponse(
+        _stream_sync(sync_team_metrics, "Team metrics sync"),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/sync/player-impact")
+async def stream_sync_player_impact() -> StreamingResponse:
+    """Stream player impact sync progress via SSE."""
+    return StreamingResponse(
+        _stream_sync(sync_player_impact, "Player impact sync"),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

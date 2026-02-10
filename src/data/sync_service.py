@@ -21,6 +21,17 @@ from src.database.db import get_conn
 from src.analytics.injury_history import build_injury_history
 
 
+class SyncCancelled(Exception):
+    """Raised when a sync operation is cancelled by the user."""
+    pass
+
+
+def _check_cancel(cancel_check: Optional[Callable[[], bool]]) -> None:
+    """Raise SyncCancelled if the cancel flag is set."""
+    if cancel_check and cancel_check():
+        raise SyncCancelled("Sync cancelled by user")
+
+
 # ============ CACHING HELPERS ============
 
 def _get_cached_players(conn, max_age_hours: int = 24) -> Set[int]:
@@ -266,6 +277,7 @@ def sync_player_logs(
     cache_max_age_hours: int = 24,
     force_recent_days: int = 3,
     force: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     Sync all player game logs with comprehensive stats.
@@ -327,6 +339,8 @@ def sync_player_logs(
                 players_skipped += 1
                 continue
             
+            _check_cancel(cancel_check)
+
             players_synced += 1
             if players_synced == 1 or players_synced % 25 == 0:
                 progress(f"Syncing game logs {players_synced}/{total - len(players_to_skip)}...")
@@ -594,6 +608,7 @@ def sync_team_metrics(
     season: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     force: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> int:
     """
     Sync comprehensive team metrics from multiple NBA API endpoints into
@@ -639,6 +654,7 @@ def sync_team_metrics(
         return team_data[tid]
 
     # 1. TeamEstimatedMetrics
+    _check_cancel(cancel_check)
     df = fetch_team_estimated_metrics(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -662,6 +678,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 2. LeagueDashTeamStats (Advanced)
+    _check_cancel(cancel_check)
     df = fetch_league_dash_team_stats(season=season, measure_type="Advanced", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -685,6 +702,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 3. Four Factors
+    _check_cancel(cancel_check)
     df = fetch_league_dash_team_stats(season=season, measure_type="Four Factors", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -703,6 +721,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 4. Opponent stats
+    _check_cancel(cancel_check)
     df = fetch_league_dash_team_stats(season=season, measure_type="Opponent", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -717,6 +736,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 5. Home splits
+    _check_cancel(cancel_check)
     df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Home", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -735,6 +755,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 6. Road splits
+    _check_cancel(cancel_check)
     df = fetch_league_dash_team_stats(season=season, measure_type="Base", location="Road", progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -752,6 +773,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 7. Clutch stats
+    _check_cancel(cancel_check)
     df = fetch_team_clutch_stats(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -768,6 +790,7 @@ def sync_team_metrics(
     _time.sleep(0.8)
 
     # 8. Hustle stats
+    _check_cancel(cancel_check)
     df = fetch_team_hustle_stats(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -812,6 +835,7 @@ def sync_player_impact(
     season: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     force: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> int:
     """
     Sync player on/off impact and estimated metrics into player_impact table.
@@ -845,6 +869,7 @@ def sync_player_impact(
         return player_data[pid]
 
     # 1. Player Estimated Metrics (one API call for all players)
+    _check_cancel(cancel_check)
     df = fetch_player_estimated_metrics(season=season, progress_cb=progress_cb)
     if not df.empty:
         for _, row in df.iterrows():
@@ -867,6 +892,7 @@ def sync_player_impact(
         teams = conn.execute("SELECT team_id, abbreviation FROM teams ORDER BY abbreviation").fetchall()
 
     for idx, (tid, abbr) in enumerate(teams, start=1):
+        _check_cancel(cancel_check)
         progress(f"  Fetching on/off data {idx}/{len(teams)} ({abbr})...")
         on_df, off_df = fetch_player_on_off(tid, season=season, progress_cb=progress_cb)
 
@@ -937,6 +963,7 @@ def full_sync(
     season: Optional[str] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
     force: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """Full data sync with smart freshness checks.
 
@@ -953,17 +980,20 @@ def full_sync(
         progress("Force mode: all freshness checks bypassed")
 
     # 1. Core reference data (teams + rosters with height/weight/age/exp)
+    _check_cancel(cancel_check)
     progress("Sync: reference data (teams + rosters)")
     players_df = sync_reference_data(progress_cb=progress_cb, season=season, force=force)
 
     # 2. Player game logs (now includes WL and PF)
+    _check_cancel(cancel_check)
     progress(f"Sync: game logs for {len(players_df)} players...")
     sync_player_logs(
         players_df["id"].tolist(), season=season, progress_cb=progress_cb,
-        force=force,
+        force=force, cancel_check=cancel_check,
     )
 
     # 3. Current injuries (ALWAYS refresh — lightweight and can change any time)
+    _check_cancel(cancel_check)
     progress("Sync: current injuries")
     try:
         sync_injuries(progress_cb=progress)
@@ -972,6 +1002,7 @@ def full_sync(
         progress(f"Current injuries sync skipped: {exc}")
 
     # 3b. Backfill injury status outcomes (cross-reference log with game logs)
+    _check_cancel(cancel_check)
     progress("Backfilling injury play outcomes...")
     try:
         from src.analytics.injury_intelligence import backfill_play_outcomes
@@ -981,6 +1012,7 @@ def full_sync(
         progress(f"Injury backfill skipped: {exc}")
 
     # 4. Historical injury inference (skip if game log count unchanged)
+    _check_cancel(cancel_check)
     progress("Building historical injury data...")
     try:
         _skip_history = False
@@ -1001,17 +1033,21 @@ def full_sync(
         progress(f"Historical injury build skipped: {exc}")
 
     # 5. Team advanced metrics (official NBA ratings, Four Factors, clutch, hustle, splits)
+    _check_cancel(cancel_check)
     progress("Sync: team advanced metrics (8 API endpoints)...")
     try:
-        n = sync_team_metrics(season=season, progress_cb=progress_cb, force=force)
+        n = sync_team_metrics(season=season, progress_cb=progress_cb, force=force,
+                              cancel_check=cancel_check)
         progress(f"Team metrics: {n} teams")
     except Exception as exc:
         progress(f"Team metrics sync skipped: {exc}")
 
     # 6. Player impact (on/off + estimated metrics)
+    _check_cancel(cancel_check)
     progress("Sync: player impact data (on/off + estimated metrics)...")
     try:
-        n = sync_player_impact(season=season, progress_cb=progress_cb, force=force)
+        n = sync_player_impact(season=season, progress_cb=progress_cb, force=force,
+                               cancel_check=cancel_check)
         progress(f"Player impact: {n} players")
     except Exception as exc:
         progress(f"Player impact sync skipped: {exc}")
