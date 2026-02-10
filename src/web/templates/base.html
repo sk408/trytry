@@ -36,8 +36,11 @@
     function toggleMenu() {
       document.getElementById('nav').classList.toggle('open');
     }
-    // Close menu when clicking a link
+    // Mark active nav link
+    const path = window.location.pathname.replace(/\/$/, '') || '/dashboard';
     document.querySelectorAll('nav a').forEach(link => {
+      if (link.getAttribute('href') === path) link.classList.add('active');
+      // Close menu when clicking a link
       link.addEventListener('click', () => {
         document.getElementById('nav').classList.remove('open');
       });

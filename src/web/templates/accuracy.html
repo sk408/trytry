@@ -38,20 +38,18 @@
       </select>
     </div>
 
-    <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
-      <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
-        <input type="checkbox" id="use-cache" name="use_cache" value="1" checked
-               style="width: 16px; height: 16px;">
+    <div class="form-group">
+      <label class="opt-checkbox-label">
+        <input type="checkbox" id="use-cache" name="use_cache" value="1" checked>
         Use cached results
+        <span id="cache-age" class="text-muted" style="font-size: 0.8rem;"></span>
       </label>
-      <span id="cache-age" style="color: #94a3b8; font-size: 12px;"></span>
     </div>
 
     <div class="form-group">
       <label for="workers">Workers</label>
       <input type="number" id="workers" name="max_workers" value="4" min="1" max="16" step="1"
-             title="Number of parallel threads. More = faster but more CPU. 4 is a good default."
-             style="width: 60px;">
+             title="Number of parallel threads. More = faster but more CPU. 4 is a good default.">
     </div>
     
     <button type="submit">Run Backtest</button>
@@ -204,32 +202,41 @@
     Improve prediction accuracy by optimising model weights, building spread calibration,
     or analysing which features help the most.
   </p>
-  <!-- Row 1: Main optimisation buttons -->
-  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+  <!-- Settings row: Trials + Force re-run -->
+  <div class="opt-settings">
+    <div class="form-group opt-trials-group">
+      <label for="opt-trials">Trials</label>
+      <input type="number" id="opt-trials" value="200" min="50" max="2000" step="50"
+             title="Number of weight combinations to evaluate. More = better but slower. 200 default, 500+ for thorough.">
+    </div>
+    <label class="opt-checkbox-label">
+      <input type="checkbox" id="force-rerun"> Force re-run
+    </label>
+  </div>
+  <!-- Optimization buttons -->
+  <div class="opt-actions">
     <button id="btn-optimize" onclick="startOptimize()">Optimize Weights</button>
     <button id="btn-team-refine" onclick="startTeamRefinement()">Per-Team Refinement</button>
-    <button id="btn-optimize-all" onclick="startOptimizeAll()" style="background:#2563eb; color:#fff; font-weight:600;">Optimize All</button>
-    <button id="btn-ml-train" onclick="startMLTrain()" style="background:#2563eb; color:#fff; font-weight:600;">Train ML Model</button>
-    <label for="opt-trials" style="margin-left: 2px; font-size: 13px; color: #94a3b8;">Trials:</label>
-    <input type="number" id="opt-trials" value="200" min="50" max="2000" step="50"
-           title="Number of weight combinations to evaluate. More = better but slower. 200 default, 500+ for thorough."
-           style="width: 72px; padding: 6px 8px; border: 1px solid #334155; border-radius: 6px;
-                  background: #1e293b; color: #e2e8f0; font-size: 13px;">
-    <button id="btn-clear-weights" onclick="clearWeights()" style="background:#6b7280;">Reset Weights</button>
+    <button id="btn-optimize-all" onclick="startOptimizeAll()" class="btn-primary">Optimize All</button>
+    <button id="btn-ml-train" onclick="startMLTrain()" class="btn-primary">Train ML Model</button>
   </div>
-  <!-- Row 2: Pipeline + analysis buttons -->
-  <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
-    <button id="btn-pipeline" onclick="startFullPipeline()" style="background:#2563eb; color:#fff; font-weight:600;">Full Pipeline</button>
-    <button id="btn-continuous" onclick="startContinuousOpt()" style="background:#059669; color:#fff; font-weight:600;">Continuous Optimize</button>
-    <button id="btn-cancel-pipeline" onclick="cancelRunning()" style="background:#991b1b; color:#fecaca; display:none;">Cancel</button>
-    <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-size:13px; color:#94a3b8;">
-      <input type="checkbox" id="force-rerun" style="width:14px; height:14px;"> Force re-run
-    </label>
+  <!-- Pipeline & continuous -->
+  <div class="opt-actions">
+    <button id="btn-pipeline" onclick="startFullPipeline()" class="btn-primary">Full Pipeline</button>
+    <button id="btn-continuous" onclick="startContinuousOpt()" class="btn-success">Continuous Optimize</button>
+    <button id="btn-cancel-pipeline" onclick="cancelRunning()" class="btn-cancel" style="display:none;">Cancel</button>
+  </div>
+  <!-- Analysis buttons -->
+  <div class="opt-actions">
     <button id="btn-calibrate" onclick="startCalibrate()">Build Calibration</button>
     <button id="btn-features" onclick="startFeatureImportance()">Feature Importance</button>
     <button id="btn-grouped" onclick="startGroupedImportance()">Grouped Importance</button>
     <button id="btn-ml-features" onclick="startMLFeatureImportance()">ML Feature Importance</button>
     <button id="btn-fft" onclick="startFFTAnalysis()">Error Patterns (FFT)</button>
+  </div>
+  <!-- Reset -->
+  <div class="opt-actions">
+    <button id="btn-clear-weights" onclick="clearWeights()" class="btn-muted">Reset Weights</button>
   </div>
   <div id="opt-log" class="log" style="max-height: 200px; overflow-y: auto; display: none;"></div>
   <div id="opt-results" style="display: none; margin-top: 12px;"></div>

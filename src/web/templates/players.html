@@ -96,9 +96,9 @@
           <td>
             {{ p.name }}
             {% if mpg >= 25 %}
-            <span class="text-danger" style="font-size: 0.7rem; font-weight: 700;"> HIGH IMPACT</span>
+            <span class="text-danger player-tag"> HIGH IMPACT</span>
             {% elif mpg >= 15 %}
-            <span class="text-warning" style="font-size: 0.7rem; font-weight: 700;"> ROTATION</span>
+            <span class="text-warning player-tag"> ROTATION</span>
             {% endif %}
           </td>
           <td>{{ p.position }}</td>

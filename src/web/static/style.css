@@ -53,13 +53,14 @@ body {
 .menu-toggle {
   display: flex;
   flex-direction: column;
-  justify-content: space-around;
-  width: 28px;
-  height: 24px;
+  justify-content: center;
+  gap: 5px;
+  width: 44px;
+  height: 44px;
   background: transparent;
   border: none;
   cursor: pointer;
-  padding: 0;
+  padding: 10px 8px;
 }
 
 .menu-toggle span {
@@ -98,6 +99,12 @@ nav a:last-child {
 nav a:hover, nav a:active {
   background: var(--bg-dark);
   color: var(--accent);
+}
+
+nav a.active {
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+  font-weight: 700;
 }
 
 /* Main Content */
@@ -140,7 +147,7 @@ main {
 }
 
 .countdown-label {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -290,7 +297,7 @@ th {
   background: var(--bg-dark);
   font-weight: 600;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   position: sticky;
@@ -366,9 +373,11 @@ select:focus, input:focus {
   max-width: 600px;
 }
 
-.btn-small {
-  padding: 6px 12px;
-  font-size: 0.8rem;
+.btn-small, .btn-sm {
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  min-height: 44px;
+  width: auto;
 }
 
 .btn-danger {
@@ -386,8 +395,45 @@ select:focus, input:focus {
 }
 
 .checkbox-group input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+}
+
+/* Touch-friendly range slider */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  outline: none;
+  margin: 12px 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
 }
 
 /* Utility Classes */
@@ -396,8 +442,26 @@ select:focus, input:focus {
 .text-warning { color: var(--warning); }
 .text-muted { color: var(--text-muted); }
 .text-center { text-align: center; }
+.text-dark { color: #1e293b; }
 .mt-4 { margin-top: 16px; }
 .mb-4 { margin-bottom: 16px; }
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.bg-success { background: var(--success); color: #fff; }
+.bg-danger { background: var(--danger); color: #fff; }
+.bg-warning { background: var(--warning); color: #1e293b; }
+.bg-info { background: #3b82f6; color: #fff; }
 
 /* Error Message */
 .error-box {
@@ -442,7 +506,7 @@ select:focus, input:focus {
 }
 
 .stat-label {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -612,6 +676,14 @@ select:focus, input:focus {
   margin: 0 auto 4px;
 }
 
+/* Player Tags (HIGH IMPACT, ROTATION, etc.) */
+.player-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
 /* Player Headshots */
 .player-photo-col {
   display: none;  /* hidden on mobile */
@@ -727,6 +799,81 @@ select:focus, input:focus {
   font-size: 1rem;
 }
 
+/* Model Optimisation Layout */
+.opt-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.opt-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.opt-trials-group {
+  max-width: 200px;
+}
+
+.opt-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  min-height: 44px;
+  margin: 0;
+}
+
+.opt-checkbox-label input[type="checkbox"] {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: #3b82f6;
+}
+
+.btn-success {
+  background: #059669;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-success:hover {
+  background: #10b981;
+}
+
+.btn-cancel {
+  background: #991b1b;
+  color: #fecaca;
+}
+
+.btn-cancel:hover {
+  background: #b91c1c;
+}
+
+.btn-muted {
+  background: #6b7280;
+}
+
+.btn-muted:hover {
+  background: #9ca3af;
+}
+
 /* Desktop Styles */
 @media (min-width: 768px) {
   .menu-toggle {
@@ -759,6 +906,17 @@ select:focus, input:focus {
   button, .btn {
     width: auto;
     padding: 12px 20px;
+  }
+
+  .opt-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .opt-settings {
+    flex-direction: row;
+    align-items: flex-end;
   }
 
   .form-row {
