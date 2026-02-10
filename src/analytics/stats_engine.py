@@ -1318,6 +1318,6 @@ def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:
             "arena": str(row.get("arena", "")),
         })
 
-    # Sort by date descending (most recent first)
-    games.sort(key=lambda g: str(g.get("game_date", "")), reverse=True)
+    # Sort by date ascending (today first), then by game time
+    games.sort(key=lambda g: (str(g.get("game_date", "")), str(g.get("game_time", ""))))
     return games[:100]

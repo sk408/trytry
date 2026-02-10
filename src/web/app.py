@@ -729,6 +729,25 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
     
     teams = _team_list()
     games = await asyncio.to_thread(get_scheduled_games, 14)
+
+    # Add relative date labels (Today, Tomorrow, +X days) and formatted dates
+    today = date_type.today()
+    for g in games:
+        gd = g.get("game_date")
+        if gd:
+            if hasattr(gd, "date"):
+                gd = gd.date() if callable(getattr(gd, "date")) else gd
+            elif isinstance(gd, str):
+                try:
+                    gd = date_type.fromisoformat(str(gd)[:10])
+                except ValueError:
+                    pass
+            g["date_label"] = _format_relative_date(gd, today) if isinstance(gd, date_type) else str(gd)
+            g["game_date_fmt"] = gd.strftime("%a %m/%d") if hasattr(gd, "strftime") else str(gd)
+        else:
+            g["date_label"] = ""
+            g["game_date_fmt"] = ""
+
     prediction = None
     home_stats = None
     away_stats = None

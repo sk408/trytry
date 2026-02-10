@@ -20,7 +20,7 @@
       {% for g in games[:60] %}
       <option value="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}"
         {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}selected{% endif %}>
-        {{ g.game_date }}: {{ g.away_abbr }} @ {{ g.home_abbr }}
+        {{ g.date_label }} ({{ g.game_date_fmt }}): {{ g.away_abbr }} @ {{ g.home_abbr }}{% if g.game_time and g.game_time != 'TBD' %} - {{ g.game_time }}{% endif %}
       </option>
       {% endfor %}
     </select>
@@ -299,25 +299,44 @@
   <h2>Upcoming Games</h2>
   <p class="text-muted">Tap a game to analyze</p>
   {% if games %}
-  <div class="games-list">
-    {% for g in games[:100] %}
-    <a href="/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}" 
-       class="game-row {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active{% endif %}">
-      <span class="game-date">{{ g.game_date }}</span>
-      <span class="game-teams">
-        <img src="{{ team_logo_url(g.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
-        <span class="away">{{ g.away_abbr }}</span>
-        <span class="at">@</span>
-        <img src="{{ team_logo_url(g.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
-        <span class="home">{{ g.home_abbr }}</span>
-      </span>
-    </a>
-    {% endfor %}
+  <div class="scroll-x">
+    <table class="clickable-table">
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Date</th>
+          <th>Away</th>
+          <th></th>
+          <th>Home</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in games[:100] %}
+        <tr onclick="window.location='/matchups?home_team_id={{ g.home_team_id }}&away_team_id={{ g.away_team_id }}'"
+            style="cursor: pointer;"
+            class="{{ 'highlight-today' if g.date_label == 'Today' else 'highlight-tomorrow' if g.date_label == 'Tomorrow' else '' }} {% if home_team_id == g.home_team_id and away_team_id == g.away_team_id %}active-row{% endif %}">
+          <td>{{ g.date_label }}</td>
+          <td>{{ g.game_date_fmt }}</td>
+          <td>
+            <img src="{{ team_logo_url(g.away_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ g.away_abbr }}</strong>
+          </td>
+          <td class="text-muted">@</td>
+          <td>
+            <img src="{{ team_logo_url(g.home_abbr) }}" width="18" height="18" class="team-logo" alt="" onerror="this.style.display='none'">
+            <strong>{{ g.home_abbr }}</strong>
+          </td>
+          <td>{{ g.game_time or 'TBD' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% else %}
   <div class="empty-state">
     <p>No upcoming games</p>
-    <p class="text-muted">Run sync from Dashboard</p>
+    <p class="text-muted">Schedule data loads automatically when available</p>
   </div>
   {% endif %}
 </div>

@@ -642,6 +642,11 @@ select:focus, input:focus {
   background: rgba(59, 130, 246, 0.06) !important;
 }
 
+.active-row {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border-left: 3px solid var(--success);
+}
+
 /* Live: Status Row Colors */
 .status-live {
   background: rgba(16, 185, 129, 0.1) !important;
