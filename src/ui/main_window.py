@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import logging
 import sys
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QEventLoop
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
-    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -23,8 +23,32 @@ from src.ui.admin_view import AdminView
 from src.ui.gamecast_view import GamecastView
 from src.ui.live_view import LiveView
 from src.ui.matchup_view import MatchupView
+from src.ui.notification_widget import NotificationBell, NotificationPanel
 from src.ui.players_view import PlayersView
 from src.ui.schedule_view import ScheduleView
+
+log = logging.getLogger(__name__)
+
+# ── Background monitor intervals ──
+_INJURY_POLL_MS = 5 * 60 * 1000       # 5 minutes
+_INJURY_FIRST_DELAY_MS = 30 * 1000    # 30 seconds after launch
+
+
+# ── Worker thread for background injury monitor ──
+
+class _InjuryMonitorWorker(QThread):
+    """Runs a single injury-check cycle in a background thread."""
+    finished_with_count = Signal(int)  # number of new notifications
+
+    def run(self) -> None:
+        try:
+            from src.notifications.injury_monitor import get_injury_monitor
+            results = get_injury_monitor().check()
+            self.finished_with_count.emit(len(results))
+        except Exception as exc:
+            log.warning("Injury monitor worker error: %s", exc)
+            self.finished_with_count.emit(0)
+
 
 # ── Global stylesheet ─────────────────────────────────────────────────
 # Modern dark theme with a professional sports-analytics aesthetic.
@@ -320,6 +344,7 @@ QFormLayout { spacing: 8px; }
 
 class MainWindow(QMainWindow):
     """Main application window with thread registry and graceful shutdown."""
+    notification_received = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -349,15 +374,43 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.tabs)
 
-        # Status bar with Exit button
+        # Marshal cross-thread notification callbacks to the GUI thread.
+        self.notification_received.connect(self._handle_notification_on_main)
+
+        # ── Notification bell + panel ──
+        self._bell = NotificationBell()
+        self._panel = NotificationPanel(self)
+        self._bell.clicked_bell.connect(self._toggle_notification_panel)
+
+        # ── Status bar ──
         sb = QStatusBar()
         sb.showMessage("Ready")
+        sb.addPermanentWidget(self._bell)
         exit_btn = QPushButton("Exit App")
         exit_btn.setProperty("cssClass", "danger")
         exit_btn.setFixedWidth(90)
         exit_btn.clicked.connect(self.close)  # type: ignore
         sb.addPermanentWidget(exit_btn)
         self.setStatusBar(sb)
+
+        # ── Register notification listener (updates bell) ──
+        from src.notifications import service as notif_service
+        self._notif_svc = notif_service
+        notif_service.register_listener(self._on_notification)
+
+        # Set initial unread count
+        try:
+            self._bell.unread_count = notif_service.unread_count()
+        except Exception:
+            self._bell.unread_count = 0
+
+        # ── Background injury monitor ──
+        self._injury_worker: _InjuryMonitorWorker | None = None
+
+        # Injury monitor: first check after 30 s, then every 5 min
+        self._injury_timer = QTimer(self)
+        self._injury_timer.timeout.connect(self._run_injury_check)
+        QTimer.singleShot(_INJURY_FIRST_DELAY_MS, self._start_injury_timer)
 
     # ── Thread registry ──
 
@@ -376,10 +429,54 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.matchup_view)
         self.matchup_view.load_game(home_team_id, away_team_id)
 
+    # ── Notification handling ──
+
+    def _on_notification(self, notification) -> None:
+        """Cross-thread callback entry point from notification service."""
+        self.notification_received.emit(notification)
+
+    def _handle_notification_on_main(self, notification) -> None:
+        """Apply notification UI updates on the main Qt thread."""
+        self._bell.unread_count = self._notif_svc.unread_count()
+
+    def _toggle_notification_panel(self) -> None:
+        """Show or hide the notification dropdown panel."""
+        if self._panel.isVisible():
+            self._panel.hide()
+            return
+        # Position below the bell button
+        pos = self._bell.mapToGlobal(self._bell.rect().bottomLeft())
+        self._panel.show_at(pos)
+        # Mark all as read after viewing
+        self._notif_svc.mark_all_read()
+        self._bell.unread_count = 0
+
+    # ── Background injury monitor ──
+
+    def _start_injury_timer(self) -> None:
+        self._run_injury_check()
+        self._injury_timer.start(_INJURY_POLL_MS)
+
+    def _run_injury_check(self) -> None:
+        """Launch an injury monitor check in a background thread."""
+        if self._injury_worker is not None and self._injury_worker.isRunning():
+            return  # previous check still running
+        self._injury_worker = _InjuryMonitorWorker()
+        self._injury_worker.finished_with_count.connect(self._on_injury_done)
+        self.register_thread(self._injury_worker)
+        self._injury_worker.start()
+
+    def _on_injury_done(self, count: int) -> None:
+        if count > 0:
+            self.statusBar().showMessage(f"Injury monitor: {count} new alert(s)", 10000)
+
     # ── Graceful shutdown ──
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Flush caches, stop threads, and quit gracefully."""
+        # Stop monitor timers
+        self._injury_timer.stop()
+
         running = [t for t in self._active_threads if t.isRunning()]
         if running:
             reply = QMessageBox.question(
@@ -397,7 +494,20 @@ class MainWindow(QMainWindow):
         # Stop all running threads
         for t in running:
             t.quit()
-            t.wait(5000)  # 5 second timeout
+        # Keep UI responsive while giving workers time to stop.
+        remaining_ms = 5000
+        for t in running:
+            while t.isRunning() and remaining_ms > 0:
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+                if t.wait(50):
+                    break
+                remaining_ms -= 50
+
+        # Unregister notification listener
+        try:
+            self._notif_svc.unregister_listener(self._on_notification)
+        except Exception:
+            pass
 
         # Flush in-memory store
         try:

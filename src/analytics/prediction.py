@@ -26,6 +26,50 @@ from src.analytics.weight_config import (
 from src.database.db import get_conn
 
 
+def _get_team_injury_impact(team_id: int, as_of_date: Optional[date] = None) -> dict:
+    """Estimate current injury impact for a team from recent player logs.
+
+    Returns ``injured_count``, ``injury_ppg_lost``, and ``injury_minutes_lost``.
+    When *as_of_date* is provided, only player stats before that date are used
+    (avoids lookahead bias in backtesting).
+    """
+    date_clause = ""
+    if as_of_date is not None:
+        date_clause = "AND ps.game_date < ?"
+        params = (str(as_of_date), team_id)
+    else:
+        params = (team_id,)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) as injured_count,
+                COALESCE(SUM(COALESCE(s.ppg, 0)), 0) as ppg_lost,
+                COALESCE(SUM(COALESCE(s.mpg, 0)), 0) as minutes_lost
+            FROM players p
+            LEFT JOIN (
+                SELECT ps.player_id,
+                       AVG(ps.points) as ppg,
+                       AVG(ps.minutes) as mpg
+                FROM player_stats ps
+                WHERE 1 = 1 {date_clause}
+                GROUP BY ps.player_id
+            ) s ON s.player_id = p.player_id
+            WHERE p.team_id = ? AND p.is_injured = 1
+            """,
+            params,
+        ).fetchone()
+
+    if not row:
+        return {"injured_count": 0.0, "injury_ppg_lost": 0.0, "injury_minutes_lost": 0.0}
+    return {
+        "injured_count": float(row[0] or 0),
+        "injury_ppg_lost": float(row[1] or 0.0),
+        "injury_minutes_lost": float(row[2] or 0.0),
+    }
+
+
 @dataclass
 class MatchupPrediction:
     home_team_id: int
@@ -376,21 +420,26 @@ def predict_matchup(
         f["deflection_diff"] = f["home_deflections"] - f["away_deflections"]
 
         # ── INJURY IMPACT ──
-        # Count injured players and estimate lost PPG for each side
+        # Full injury impact: count, PPG lost, minutes lost
         try:
-            from src.database.db import get_conn as _gc
-            with _gc() as _conn:
-                for prefix, tid in [("home", home_team_id), ("away", away_team_id)]:
-                    inj_rows = _conn.execute(
-                        "SELECT COUNT(*), is_injured FROM players WHERE team_id = ? GROUP BY is_injured",
-                        (tid,),
-                    ).fetchall()
-                    inj_count = sum(r[0] for r in inj_rows if r[1])
-                    f[f"{prefix}_injured_count"] = inj_count
+            h_inj = _get_team_injury_impact(home_team_id, as_of_date=gd)
+            a_inj = _get_team_injury_impact(away_team_id, as_of_date=gd)
+            f["home_injured_count"] = h_inj["injured_count"]
+            f["away_injured_count"] = a_inj["injured_count"]
+            f["home_injury_ppg_lost"] = h_inj["injury_ppg_lost"]
+            f["away_injury_ppg_lost"] = a_inj["injury_ppg_lost"]
+            f["home_injury_minutes_lost"] = h_inj["injury_minutes_lost"]
+            f["away_injury_minutes_lost"] = a_inj["injury_minutes_lost"]
         except Exception:
-            f["home_injured_count"] = 0
-            f["away_injured_count"] = 0
+            f["home_injured_count"] = 0.0
+            f["away_injured_count"] = 0.0
+            f["home_injury_ppg_lost"] = 0.0
+            f["away_injury_ppg_lost"] = 0.0
+            f["home_injury_minutes_lost"] = 0.0
+            f["away_injury_minutes_lost"] = 0.0
         f["injured_count_diff"] = f.get("home_injured_count", 0) - f.get("away_injured_count", 0)
+        f["injury_ppg_lost_diff"] = f.get("home_injury_ppg_lost", 0.0) - f.get("away_injury_ppg_lost", 0.0)
+        f["injury_minutes_lost_diff"] = f.get("home_injury_minutes_lost", 0.0) - f.get("away_injury_minutes_lost", 0.0)
 
     return MatchupPrediction(
         home_team_id=home_team_id,
@@ -734,6 +783,13 @@ class PrecomputedGame:
     away_clutch: dict
     home_hustle: dict
     away_hustle: dict
+    # Injury context (team-level impact at game date)
+    home_injured_count: float = 0.0
+    away_injured_count: float = 0.0
+    home_injury_ppg_lost: float = 0.0
+    away_injury_ppg_lost: float = 0.0
+    home_injury_minutes_lost: float = 0.0
+    away_injury_minutes_lost: float = 0.0
 
 
 def precompute_game_data(
@@ -825,6 +881,8 @@ def precompute_game_data(
         hdf = get_opponent_defensive_factor(home_id)
         home_fatigue_info = detect_fatigue(home_id, gd)
         away_fatigue_info = detect_fatigue(away_id, gd)
+        home_injury = _get_team_injury_impact(home_id, as_of_date=gd)
+        away_injury = _get_team_injury_impact(away_id, as_of_date=gd)
 
         # Tuning
         ht = get_team_tuning(home_id)
@@ -857,6 +915,12 @@ def precompute_game_data(
             away_clutch=get_clutch_stats(away_id),
             home_hustle=get_hustle_stats(home_id),
             away_hustle=get_hustle_stats(away_id),
+            home_injured_count=home_injury["injured_count"],
+            away_injured_count=away_injury["injured_count"],
+            home_injury_ppg_lost=home_injury["injury_ppg_lost"],
+            away_injury_ppg_lost=away_injury["injury_ppg_lost"],
+            home_injury_minutes_lost=home_injury["injury_minutes_lost"],
+            away_injury_minutes_lost=away_injury["injury_minutes_lost"],
         ))
 
     progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")

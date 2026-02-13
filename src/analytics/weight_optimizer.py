@@ -85,6 +85,8 @@ class VectorizedGames:
         # Total sub-components
         "combined_steals", "combined_blocks",
         "combined_oreb", "combined_fatigue",
+        # Injury context
+        "injury_count_diff", "injury_ppg_lost_diff", "injury_minutes_lost_diff",
     )
 
     def __init__(self, games: List[PrecomputedGame]) -> None:
@@ -226,6 +228,20 @@ class VectorizedGames:
              for g in games], dtype=np.float64
         )
         self.combined_fatigue = self.home_fatigue + self.away_fatigue
+
+        # Injury context — diffs (positive = home has *more* injury impact)
+        self.injury_count_diff = np.array(
+            [getattr(g, "home_injured_count", 0) - getattr(g, "away_injured_count", 0)
+             for g in games], dtype=np.float64
+        )
+        self.injury_ppg_lost_diff = np.array(
+            [getattr(g, "home_injury_ppg_lost", 0) - getattr(g, "away_injury_ppg_lost", 0)
+             for g in games], dtype=np.float64
+        )
+        self.injury_minutes_lost_diff = np.array(
+            [getattr(g, "home_injury_minutes_lost", 0) - getattr(g, "away_injury_minutes_lost", 0)
+             for g in games], dtype=np.float64
+        )
 
     def subset(self, mask: np.ndarray) -> "VectorizedGames":
         """Return a new VectorizedGames with only games where mask is True."""

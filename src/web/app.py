@@ -109,6 +109,24 @@ templates.env.globals["player_photo_url"] = _player_photo_url
 @app.on_event("startup")
 def startup() -> None:
     migrations.init_db()
+    # Start background injury monitor
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.create_task(_background_injury_monitor())
+
+
+async def _background_injury_monitor() -> None:
+    """Poll injuries every 5 minutes in the background."""
+    import asyncio
+    await asyncio.sleep(30)  # initial delay
+    from src.notifications.injury_monitor import get_injury_monitor
+    monitor = get_injury_monitor()
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, monitor.check)
+        except Exception:
+            pass
+        await asyncio.sleep(300)  # 5 minutes
 
 
 def _df_to_records(df) -> List[dict]:
