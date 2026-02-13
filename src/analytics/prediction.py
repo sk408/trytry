@@ -41,6 +41,13 @@ class MatchupPrediction:
     hustle_adj: float = 0.0
     fatigue_adj: float = 0.0
     espn_blend_applied: bool = False
+    # ML uncertainty (0 when ML not used)
+    spread_std: float = 0.0
+    total_std: float = 0.0
+    spread_low: float = 0.0
+    spread_high: float = 0.0
+    total_low: float = 0.0
+    total_high: float = 0.0
 
 
 @dataclass
@@ -200,9 +207,11 @@ def predict_matchup(
         )
 
     # ============ 8. ML ENSEMBLE BLENDING ============
+    ml_spread_std = 0.0
+    ml_total_std = 0.0
     if w.ml_ensemble_weight > 0:
         try:
-            from src.analytics.ml_model import predict_ml, is_ml_available
+            from src.analytics.ml_model import predict_ml_with_uncertainty, is_ml_available
             if is_ml_available():
                 # Build a PrecomputedGame-like feature dict for ML model
                 _ml_feats = _build_ml_features_live(
@@ -213,13 +222,23 @@ def predict_matchup(
                     home_ff, away_ff, home_clutch, away_clutch,
                     home_hustle, away_hustle,
                 )
-                ml_spread, ml_total, ml_conf = predict_ml(_ml_feats)
+                ml_spread, ml_total, ml_conf, ml_spread_std, ml_total_std = (
+                    predict_ml_with_uncertainty(_ml_feats)
+                )
                 if ml_conf > 0.3:
                     base_weight = 1.0 - w.ml_ensemble_weight
                     ml_wt = w.ml_ensemble_weight
                     # Dampen ML when it disagrees strongly with base
                     if abs(ml_spread - spread) > w.ml_disagree_threshold:
                         ml_wt *= w.ml_disagree_damp
+                        base_weight = 1.0 - ml_wt
+                    # Down-weight ML when model uncertainty is elevated
+                    if ml_spread_std > 0 or ml_total_std > 0:
+                        uncertainty_scale = max(
+                            0.35,
+                            min(1.0, 1.0 / (1.0 + (ml_spread_std / 12.0) + (ml_total_std / 20.0))),
+                        )
+                        ml_wt *= uncertainty_scale
                         base_weight = 1.0 - ml_wt
                     spread = base_weight * spread + ml_wt * ml_spread
                     total = base_weight * total + ml_wt * ml_total
@@ -386,6 +405,12 @@ def predict_matchup(
         hustle_adj=hustle_spread_adj,
         fatigue_adj=fatigue_adj,
         espn_blend_applied=espn_blend_applied,
+        spread_std=ml_spread_std,
+        total_std=ml_total_std,
+        spread_low=spread - ml_spread_std,
+        spread_high=spread + ml_spread_std,
+        total_low=total - ml_total_std,
+        total_high=total + ml_total_std,
     )
 
 
@@ -937,14 +962,27 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
     # ML Ensemble blending (in fast path)
     if w.ml_ensemble_weight > 0:
         try:
-            from src.analytics.ml_model import predict_ml_from_precomputed, is_ml_available
+            from src.analytics.ml_model import (
+                predict_ml_from_precomputed_with_uncertainty,
+                is_ml_available,
+            )
             if is_ml_available():
-                ml_spread, ml_total, ml_conf = predict_ml_from_precomputed(g)
+                ml_spread, ml_total, ml_conf, ml_s_std, ml_t_std = (
+                    predict_ml_from_precomputed_with_uncertainty(g)
+                )
                 if ml_conf > 0.3:
                     base_weight = 1.0 - w.ml_ensemble_weight
                     ml_wt = w.ml_ensemble_weight
                     if abs(ml_spread - spread) > w.ml_disagree_threshold:
                         ml_wt *= w.ml_disagree_damp
+                        base_weight = 1.0 - ml_wt
+                    # Down-weight ML when uncertainty is elevated
+                    if ml_s_std > 0 or ml_t_std > 0:
+                        u_scale = max(
+                            0.35,
+                            min(1.0, 1.0 / (1.0 + (ml_s_std / 12.0) + (ml_t_std / 20.0))),
+                        )
+                        ml_wt *= u_scale
                         base_weight = 1.0 - ml_wt
                     spread = base_weight * spread + ml_wt * ml_spread
                     total = base_weight * total + ml_wt * ml_total

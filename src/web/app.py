@@ -118,18 +118,13 @@ def _df_to_records(df) -> List[dict]:
 
 
 def _team_lookup() -> dict[int, str]:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT team_id, abbreviation FROM teams").fetchall()
-    return {int(tid): abbr for tid, abbr in rows}
+    from src.analytics.cache import team_cache
+    return team_cache.id_to_abbr()
 
 
 def _team_list() -> List[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT team_id, abbreviation, name FROM teams ORDER BY abbreviation").fetchall()
-    return [
-        {"id": int(tid), "abbr": abbr, "name": name}
-        for tid, abbr, name in rows
-    ]
+    from src.analytics.cache import team_cache
+    return team_cache.team_list()
 
 
 def _team_players(team_id: int) -> List[int]:
@@ -600,6 +595,33 @@ def _format_time_short(time_str: str) -> str:
     if len(parts) >= 2 and parts[-1] in ("PST", "PDT", "EST", "EDT", "MST", "MDT", "CST", "CDT"):
         return " ".join(parts[:-1])
     return time_str
+
+
+def _utc_to_pacific_short(iso_utc: str) -> str:
+    """Convert an ESPN UTC ISO-8601 timestamp to a short Pacific time string.
+
+    ``"2026-02-12T00:30Z"`` → ``"4:30 PM"``
+    Falls back to the raw string on parse errors.
+    """
+    if not iso_utc:
+        return "TBD"
+    try:
+        from datetime import datetime, timezone
+        cleaned = iso_utc.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        try:
+            from zoneinfo import ZoneInfo
+            pacific = dt.astimezone(ZoneInfo("America/Los_Angeles"))
+        except (ImportError, KeyError):
+            from datetime import timedelta
+            utc_dt = dt.astimezone(timezone.utc)
+            off = -7 if 3 <= utc_dt.month <= 11 else -8
+            pacific = utc_dt + timedelta(hours=off)
+        return pacific.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return iso_utc[:16] if len(iso_utc) >= 16 else iso_utc
 
 
 @app.get("/schedule", response_class=HTMLResponse)
@@ -1789,13 +1811,11 @@ def _get_team_id_by_abbr(abbr: str) -> Optional[int]:
     """Look up team ID by abbreviation.
 
     Handles known ESPN ↔ NBA-API abbreviation mismatches (e.g. GS → GSW).
+    Uses ``team_cache`` — zero DB calls after the first lookup.
     """
+    from src.analytics.cache import team_cache
     canonical = _ESPN_TO_NBA_ABBR.get(abbr, abbr)
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT team_id FROM teams WHERE abbreviation = ?", (canonical,)
-        ).fetchone()
-    return int(row[0]) if row else None
+    return team_cache.get_id(canonical)
 
 
 def _get_our_prediction(home_abbr: str, away_abbr: str) -> Optional[dict]:
@@ -1913,6 +1933,7 @@ async def gamecast(request: Request, game_id: str | None = None) -> HTMLResponse
             "our_prediction": our_prediction,
             "live_pred": live_pred,
             "bonus": bonus,
+            "to_pacific": _utc_to_pacific_short,
         },
     )
 
@@ -1934,6 +1955,7 @@ async def api_gamecast_games() -> List[dict]:
             "period": g.period,
             "clock": g.clock,
             "start_time": g.start_time,
+            "start_time_pt": _utc_to_pacific_short(g.start_time),
         }
         for g in games
     ]

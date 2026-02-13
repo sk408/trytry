@@ -188,6 +188,9 @@ CREATE TABLE IF NOT EXISTS team_tuning (
     avg_spread_error_before REAL DEFAULT 0.0,
     avg_total_error_before REAL DEFAULT 0.0,
     last_tuned_at TEXT,
+    tuning_mode TEXT DEFAULT 'classic',
+    tuning_version TEXT DEFAULT 'v1_classic',
+    tuning_sample_size INTEGER DEFAULT 0,
     FOREIGN KEY (team_id) REFERENCES teams(team_id) ON DELETE CASCADE
 );
 
@@ -456,6 +459,15 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_injury_status_log_team
                 ON injury_status_log(team_id, log_date);
         """)
+
+    # team_tuning new columns (distribution-aware autotune)
+    if has_table("team_tuning"):
+        if not has_column("team_tuning", "tuning_mode"):
+            conn.execute("ALTER TABLE team_tuning ADD COLUMN tuning_mode TEXT DEFAULT 'classic';")
+        if not has_column("team_tuning", "tuning_version"):
+            conn.execute("ALTER TABLE team_tuning ADD COLUMN tuning_version TEXT DEFAULT 'v1_classic';")
+        if not has_column("team_tuning", "tuning_sample_size"):
+            conn.execute("ALTER TABLE team_tuning ADD COLUMN tuning_sample_size INTEGER DEFAULT 0;")
 
     # sync_meta table (may be missing on older DBs created before schema update)
     if not has_table("sync_meta"):

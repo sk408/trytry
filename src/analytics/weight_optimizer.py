@@ -88,6 +88,20 @@ class VectorizedGames:
     )
 
     def __init__(self, games: List[PrecomputedGame]) -> None:
+        import math as _math
+
+        def _num(v, default: float = 0.0) -> float:
+            """Convert optional/NaN values to a safe float."""
+            if v is None:
+                return default
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return default
+            if _math.isnan(fv) or _math.isinf(fv):
+                return default
+            return fv
+
         n = len(games)
         self.n = n
 
@@ -164,10 +178,10 @@ class VectorizedGames:
         self.ff_oreb_edge = _ff_edge("oreb_pct", "opp_oreb_pct", "home", "away")
         self.ff_fta_edge = _ff_edge("fta_rate", "opp_fta_rate", "home", "away")
 
-        # Clutch — net rating diff
+        # Clutch — net rating diff (use _num to handle None values safely)
         self.clutch_diff = np.array(
-            [(g.home_clutch or {}).get("clutch_net_rating", 0) -
-             (g.away_clutch or {}).get("clutch_net_rating", 0)
+            [_num((g.home_clutch or {}).get("clutch_net_rating")) -
+             _num((g.away_clutch or {}).get("clutch_net_rating"))
              for g in games], dtype=np.float64
         )
 
@@ -179,8 +193,8 @@ class VectorizedGames:
         def _hustle_effort(g, wt=0.3):
             hh = g.home_hustle or {}
             ah = g.away_hustle or {}
-            h_e = (hh.get("deflections") or 0) + (hh.get("contested_shots") or 0) * wt
-            a_e = (ah.get("deflections") or 0) + (ah.get("contested_shots") or 0) * wt
+            h_e = _num(hh.get("deflections")) + _num(hh.get("contested_shots")) * wt
+            a_e = _num(ah.get("deflections")) + _num(ah.get("contested_shots")) * wt
             return h_e - a_e
         self.hustle_effort_diff = np.array(
             [_hustle_effort(g) for g in games], dtype=np.float64
@@ -188,8 +202,8 @@ class VectorizedGames:
 
         # Hustle total — combined deflections
         self.combined_deflections = np.array(
-            [(g.home_hustle or {}).get("deflections", 0) +
-             (g.away_hustle or {}).get("deflections", 0)
+            [_num((g.home_hustle or {}).get("deflections")) +
+             _num((g.away_hustle or {}).get("deflections"))
              for g in games], dtype=np.float64
         )
 

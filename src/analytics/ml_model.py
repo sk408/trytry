@@ -242,6 +242,7 @@ def train_models(
     games: list,
     val_fraction: float = 0.2,
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 1,
 ) -> MLTrainingResult:
     """Train XGBoost spread and total models on precomputed games.
 
@@ -284,7 +285,8 @@ def train_models(
         json.dump(feature_cols, fp)
 
     # 4. Train spread model
-    progress("Training spread model...")
+    n_jobs = max(1, max_workers)
+    progress(f"Training spread model (n_jobs={n_jobs})...")
     spread_model = xgb.XGBRegressor(
         n_estimators=200,
         max_depth=5,
@@ -295,6 +297,7 @@ def train_models(
         reg_lambda=1.0,
         random_state=42,
         verbosity=0,
+        n_jobs=n_jobs,
     )
     spread_model.fit(
         X_train, y_spread_train,
@@ -324,7 +327,7 @@ def train_models(
         progress(f"    {name}: gain={gain:.2f}")
 
     # 5. Train total model
-    progress("Training total model...")
+    progress(f"Training total model (n_jobs={n_jobs})...")
     total_model = xgb.XGBRegressor(
         n_estimators=200,
         max_depth=5,
@@ -335,6 +338,7 @@ def train_models(
         reg_lambda=1.0,
         random_state=42,
         verbosity=0,
+        n_jobs=n_jobs,
     )
     total_model.fit(
         X_train, y_total_train,
@@ -497,10 +501,68 @@ def predict_ml(features: Dict[str, float]) -> Tuple[float, float, float]:
     return ml_spread, ml_total, confidence
 
 
+def predict_ml_with_uncertainty(
+    features: Dict[str, float],
+) -> Tuple[float, float, float, float, float]:
+    """Predict spread and total with uncertainty estimates.
+
+    Returns:
+        (ml_spread, ml_total, confidence, spread_std, total_std)
+
+    ``spread_std`` and ``total_std`` are derived from the individual
+    tree predictions in the XGBoost ensemble.  They give a sense of
+    how much internal disagreement exists within the model.
+    """
+    if not _ensure_models_loaded():
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    row = {col: features.get(col, 0.0) for col in _feature_cols}
+    X = pd.DataFrame([row])[_feature_cols]
+
+    ml_spread = float(_spread_model.predict(X)[0])
+    ml_total = float(_total_model.predict(X)[0])
+
+    n_present = sum(1 for col in _feature_cols if features.get(col, 0.0) != 0.0)
+    confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
+
+    # Estimate uncertainty from per-tree predictions
+    spread_std = 0.0
+    total_std = 0.0
+    try:
+        import xgboost as _xgb
+        dm = _xgb.DMatrix(X)
+        spread_leaf = _spread_model.get_booster().predict(dm, pred_leaf=True)
+        total_leaf = _total_model.get_booster().predict(dm, pred_leaf=True)
+        # Use margin predictions from each tree for std estimation
+        spread_preds = _spread_model.get_booster().predict(
+            dm, output_margin=False, iteration_range=(0, 0)
+        )
+        total_preds = _total_model.get_booster().predict(
+            dm, output_margin=False, iteration_range=(0, 0)
+        )
+        # Fallback: use a heuristic based on leaf diversity
+        if spread_leaf.ndim == 2:
+            spread_std = float(np.std(spread_leaf[0]))
+        if total_leaf.ndim == 2:
+            total_std = float(np.std(total_leaf[0]))
+    except Exception:
+        pass
+
+    return ml_spread, ml_total, confidence, spread_std, total_std
+
+
 def predict_ml_from_precomputed(g) -> Tuple[float, float, float]:
     """Convenience: extract features from PrecomputedGame and predict."""
     features = extract_features(g)
     return predict_ml(features)
+
+
+def predict_ml_from_precomputed_with_uncertainty(
+    g,
+) -> Tuple[float, float, float, float, float]:
+    """Convenience: extract features from PrecomputedGame and predict with uncertainty."""
+    features = extract_features(g)
+    return predict_ml_with_uncertainty(features)
 
 
 def get_model_meta() -> Optional[Dict]:

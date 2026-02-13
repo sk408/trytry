@@ -47,13 +47,14 @@ class ScheduleView(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._games_data: list[dict] = []
+        self._loaded_once = False  # tracks whether we've auto-loaded
 
         self.table = QTableWidget()
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self._on_double_click)  # type: ignore[arg-type]
 
-        self.refresh_button = QPushButton("Load schedule")
+        self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.refresh)  # type: ignore[arg-type]
 
         self.open_matchup_btn = QPushButton("Open in Matchups")
@@ -72,6 +73,13 @@ class ScheduleView(QWidget):
         layout.addLayout(header)
         layout.addWidget(self.table)
         self.setLayout(layout)
+
+    def showEvent(self, event) -> None:
+        """Auto-load the schedule the first time the tab becomes visible."""
+        super().showEvent(event)
+        if not self._loaded_once:
+            self._loaded_once = True
+            self.refresh()
 
     def refresh(self) -> None:
         try:

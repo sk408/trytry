@@ -30,7 +30,7 @@
           <span class="text-muted">FINAL</span>
           <span style="margin-left: 8px;">{{ g.away_score }} - {{ g.home_score }}</span>
         {% else %}
-          <span class="text-muted">{{ g.start_time[:16] if g.start_time else 'Upcoming' }}</span>
+          <span class="text-muted">{{ to_pacific(g.start_time) if g.start_time else 'Upcoming' }}</span>
         {% endif %}
       </div>
     </a>

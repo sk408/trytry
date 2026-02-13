@@ -373,7 +373,15 @@ def get_injuries_for_game(team_id: int, game_date: date) -> List[Dict]:
     """
     Get list of players who were out for a specific game.
     Returns list of dicts with player_id, name, position, avg_minutes.
+    Uses ``backtest_cache`` when active (during batch backtest runs).
     """
+    from src.analytics.cache import backtest_cache
+
+    cache_key = ("injuries_for_game", team_id, str(game_date))
+    cached = backtest_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     with get_conn() as conn:
         df = pd.read_sql(
             """
@@ -387,7 +395,7 @@ def get_injuries_for_game(team_id: int, game_date: date) -> List[Dict]:
             params=[team_id, str(game_date)],
         )
     
-    return [
+    result = [
         {
             "player_id": int(row["player_id"]),
             "name": str(row["name"]),
@@ -396,6 +404,8 @@ def get_injuries_for_game(team_id: int, game_date: date) -> List[Dict]:
         }
         for _, row in df.iterrows()
     ]
+    backtest_cache.put(cache_key, result)
+    return result
 
 
 def get_team_injuries_summary(team_id: int) -> pd.DataFrame:

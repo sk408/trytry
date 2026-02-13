@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date, datetime, timedelta
 from typing import Callable, Iterable, List, Optional, Set
@@ -595,13 +596,66 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
         return updated
 
 
+# Schedule data rarely changes within a session.  Cache the DataFrame
+# in memory so every caller (Matchup tab startup, Schedule tab, web
+# endpoints, stats engine, etc.) reuses the same data instead of
+# hitting the NBA CDN repeatedly.  The cache auto-refreshes after
+# _SCHEDULE_TTL seconds.
+
+_schedule_cache: Optional[pd.DataFrame] = None
+_schedule_cache_time: float = 0.0
+_schedule_cache_key: Optional[tuple] = None
+_schedule_lock = threading.Lock()
+_SCHEDULE_TTL: float = 7200.0  # 2 hours
+
+
+def clear_schedule_cache() -> None:
+    """Flush the in-memory schedule cache so the next call re-fetches."""
+    global _schedule_cache, _schedule_cache_time, _schedule_cache_key
+    with _schedule_lock:
+        _schedule_cache = None
+        _schedule_cache_time = 0.0
+        _schedule_cache_key = None
+
+
 def sync_schedule(
     season: Optional[str] = None,
     team_ids: List[int] | None = None,
     include_future_days: int = 14,
+    force_refresh: bool = False,
 ) -> pd.DataFrame:
+    """Fetch the schedule, returning a cached copy if still fresh.
+
+    The cache is keyed on (season, team_ids, include_future_days) and
+    expires after 2 hours.  Pass ``force_refresh=True`` to bypass
+    the cache and re-fetch from the NBA CDN.
+
+    Thread-safe: a lock ensures that concurrent callers share a single
+    fetch instead of hitting the NBA CDN multiple times.
+    """
+    import time
+
+    global _schedule_cache, _schedule_cache_time, _schedule_cache_key
+
     season = season or get_current_season()
-    return fetch_schedule(season=season, team_ids=team_ids, include_future_days=include_future_days)
+    cache_key = (season, tuple(team_ids) if team_ids else None, include_future_days)
+
+    with _schedule_lock:
+        # Return cached copy if still fresh and same parameters
+        if (
+            not force_refresh
+            and _schedule_cache is not None
+            and _schedule_cache_key == cache_key
+            and (time.time() - _schedule_cache_time) < _SCHEDULE_TTL
+        ):
+            return _schedule_cache.copy()
+
+        # Fetch from NBA CDN and cache (under lock so concurrent callers wait)
+        df = fetch_schedule(season=season, team_ids=team_ids, include_future_days=include_future_days)
+        _schedule_cache = df
+        _schedule_cache_time = time.time()
+        _schedule_cache_key = cache_key
+        return df.copy()
 
 
 def sync_team_metrics(

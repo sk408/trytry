@@ -29,10 +29,19 @@ class _AutotuneWorker(QThread):
     progress = Signal(str)
     finished = Signal(list)
 
-    def __init__(self, team_id: Optional[int], strength: float, parent=None):
+    def __init__(
+        self,
+        team_id: Optional[int],
+        strength: float,
+        mode: str = "classic",
+        max_abs_correction: float = 100.0,
+        parent=None,
+    ):
         super().__init__(parent)
         self.team_id = team_id
         self.strength = strength
+        self.mode = mode
+        self.max_abs_correction = max_abs_correction
 
     def run(self):
         def _cb(msg: str):
@@ -40,10 +49,21 @@ class _AutotuneWorker(QThread):
 
         try:
             if self.team_id is not None:
-                result = autotune_team(self.team_id, strength=self.strength, progress_cb=_cb)
+                result = autotune_team(
+                    self.team_id,
+                    strength=self.strength,
+                    mode=self.mode,
+                    max_abs_correction=self.max_abs_correction,
+                    progress_cb=_cb,
+                )
                 self.finished.emit([result])
             else:
-                results = autotune_all(strength=self.strength, progress_cb=_cb)
+                results = autotune_all(
+                    strength=self.strength,
+                    mode=self.mode,
+                    max_abs_correction=self.max_abs_correction,
+                    progress_cb=_cb,
+                )
                 self.finished.emit(results)
         except Exception as exc:
             self.progress.emit(f"Error: {exc}")
@@ -64,6 +84,16 @@ class AutotuneView(QWidget):
         self.strength_spin.setRange(0.0, 1.0)
         self.strength_spin.setSingleStep(0.05)
         self.strength_spin.setValue(0.75)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Classic (all games)", "classic")
+        self.mode_combo.addItem("Walk-Forward (recent window)", "walk_forward")
+
+        self.max_corr_spin = QDoubleSpinBox()
+        self.max_corr_spin.setRange(1.0, 100.0)
+        self.max_corr_spin.setSingleStep(1.0)
+        self.max_corr_spin.setValue(20.0)
+        self.max_corr_spin.setSuffix(" pts")
 
         self.run_btn = QPushButton("  Run Autotune")
         self.run_btn.setProperty("cssClass", "primary")
@@ -93,6 +123,8 @@ class AutotuneView(QWidget):
         form = QFormLayout()
         form.addRow("Team:", self.team_combo)
         form.addRow("Strength:", self.strength_spin)
+        form.addRow("Mode:", self.mode_combo)
+        form.addRow("Max Correction:", self.max_corr_spin)
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.run_btn)
         btn_row.addWidget(self.clear_btn)
@@ -129,13 +161,20 @@ class AutotuneView(QWidget):
 
         team_id = self.team_combo.currentData()
         strength = self.strength_spin.value()
+        mode = self.mode_combo.currentData()
+        max_corr = self.max_corr_spin.value()
         label = self.team_combo.currentText()
 
         self.log.clear()
-        self.log.append(f"Starting autotune for {label} (strength={strength:.2f})...")
+        self.log.append(
+            f"Starting autotune for {label} "
+            f"(strength={strength:.2f}, mode={mode}, max_corr={max_corr:.0f})..."
+        )
         self.run_btn.setEnabled(False)
 
-        self._worker = _AutotuneWorker(team_id, strength)
+        self._worker = _AutotuneWorker(
+            team_id, strength, mode=mode, max_abs_correction=max_corr,
+        )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.start()
@@ -166,7 +205,10 @@ class AutotuneView(QWidget):
         except Exception:
             tunings = []
 
-        headers = ["Team", "Home Adj", "Away Adj", "Games", "Avg Spread Err", "Avg Total Err", "Last Tuned"]
+        headers = [
+            "Team", "Home Adj", "Away Adj", "Games", "Sample",
+            "Mode", "Spread Err (before)", "Spread Err (after)", "Last Tuned",
+        ]
         self.table.clear()
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -176,7 +218,7 @@ class AutotuneView(QWidget):
         self.table.setRowCount(len(active))
 
         for idx, t in enumerate(active):
-            self.table.setItem(idx, 0, QTableWidgetItem(f"{t['abbr']} - {t['name']}"))
+            self.table.setItem(idx, 0, QTableWidgetItem(f"{t['abbr']}"))
 
             home_adj = t['home_pts_correction']
             away_adj = t['away_pts_correction']
@@ -192,8 +234,20 @@ class AutotuneView(QWidget):
             self.table.setItem(idx, 1, home_item)
             self.table.setItem(idx, 2, away_item)
             self.table.setItem(idx, 3, QTableWidgetItem(str(t["games_analyzed"])))
-            self.table.setItem(idx, 4, QTableWidgetItem(f"{t['avg_spread_error_before']:.1f}"))
-            self.table.setItem(idx, 5, QTableWidgetItem(f"{t['avg_total_error_before']:.1f}"))
-            self.table.setItem(idx, 6, QTableWidgetItem(t.get("last_tuned_at", "")[:16]))
+            self.table.setItem(idx, 4, QTableWidgetItem(str(t.get("tuning_sample_size", ""))))
+            self.table.setItem(idx, 5, QTableWidgetItem(t.get("tuning_mode", "classic")))
+
+            before = t.get("avg_spread_error_before", 0)
+            after = t.get("avg_spread_error_after", before)
+            before_item = QTableWidgetItem(f"{before:.1f}")
+            after_item = QTableWidgetItem(f"{after:.1f}")
+            if after < before:
+                after_item.setForeground(QColor("#10b981"))
+            elif after > before:
+                after_item.setForeground(QColor("#ef4444"))
+            self.table.setItem(idx, 6, before_item)
+            self.table.setItem(idx, 7, after_item)
+
+            self.table.setItem(idx, 8, QTableWidgetItem(t.get("last_tuned_at", "")[:16]))
 
         self.table.resizeColumnsToContents()

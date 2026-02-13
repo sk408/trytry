@@ -21,13 +21,56 @@ from src.analytics.stats_engine import get_team_metrics, detect_fatigue
 _CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "backtest_cache"
 
 
+def _learning_signature() -> str:
+    """Fingerprint learned state so cache invalidates after training/tuning."""
+    payload: dict = {}
+    try:
+        with get_conn() as conn:
+            mw = conn.execute(
+                "SELECT key, value FROM model_weights ORDER BY key"
+            ).fetchall()
+            payload["model_weights"] = [[r[0], r[1]] for r in mw]
+    except Exception:
+        payload["model_weights"] = []
+    try:
+        with get_conn() as conn:
+            tt = conn.execute(
+                """
+                SELECT team_id, home_pts_correction, away_pts_correction,
+                       games_analyzed, last_tuned_at
+                FROM team_tuning
+                ORDER BY team_id
+                """
+            ).fetchall()
+            payload["team_tuning"] = [list(r) for r in tt]
+    except Exception:
+        payload["team_tuning"] = []
+    try:
+        meta_path = Path(__file__).resolve().parents[2] / "data" / "ml_models" / "model_meta.json"
+        if meta_path.exists():
+            payload["ml_meta"] = json.loads(meta_path.read_text(encoding="utf-8"))
+        else:
+            payload["ml_meta"] = {}
+    except Exception:
+        payload["ml_meta"] = {}
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def _cache_key(
     home_team_filter: int | None,
     away_team_filter: int | None,
     use_injury_adjustment: bool,
 ) -> str:
-    """Deterministic hash for a set of backtest settings."""
-    raw = f"home={home_team_filter}|away={away_team_filter}|inj={use_injury_adjustment}"
+    """Deterministic hash for a set of backtest settings.
+
+    Includes the learned-state fingerprint so the cache automatically
+    invalidates when model weights, team tuning, or ML models change.
+    """
+    raw = (
+        f"home={home_team_filter}|away={away_team_filter}|"
+        f"inj={use_injury_adjustment}|learn={_learning_signature()}"
+    )
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -196,8 +239,14 @@ def get_team_record_before_date(team_id: int, before_date: date) -> Tuple[int, i
     Get team's win-loss record before a specific date.
     Uses the win_loss column from player_stats for accurate results.
     """
+    from src.analytics.cache import backtest_cache
+
+    cache_key = ("record", team_id, str(before_date))
+    cached = backtest_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     with get_conn() as conn:
-        # Use win_loss column: get one row per game (any player from this team)
         rows = conn.execute(
             """
             SELECT DISTINCT ps.game_date, ps.win_loss
@@ -211,11 +260,20 @@ def get_team_record_before_date(team_id: int, before_date: date) -> Tuple[int, i
     
     wins = sum(1 for _, wl in rows if wl == "W")
     losses = sum(1 for _, wl in rows if wl == "L")
-    return wins, losses
+    result = (wins, losses)
+    backtest_cache.put(cache_key, result)
+    return result
 
 
 def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
     """Get team's statistical profile before a date (PPG, opponent PPG, etc.)."""
+    from src.analytics.cache import backtest_cache
+
+    cache_key = ("profile", team_id, str(before_date))
+    cached = backtest_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     with get_conn() as conn:
         df = pd.read_sql(
             """
@@ -234,15 +292,17 @@ def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
         )
     
     if df.empty or df.iloc[0]["games"] == 0:
-        return {"ppg": 0.0, "rpg": 0.0, "apg": 0.0, "games": 0}
-    
-    row = df.iloc[0]
-    return {
-        "ppg": float(row["ppg"] or 0),
-        "rpg": float(row["rpg"] or 0),
-        "apg": float(row["apg"] or 0),
-        "games": int(row["games"] or 0),
-    }
+        result = {"ppg": 0.0, "rpg": 0.0, "apg": 0.0, "games": 0}
+    else:
+        row = df.iloc[0]
+        result = {
+            "ppg": float(row["ppg"] or 0),
+            "rpg": float(row["rpg"] or 0),
+            "apg": float(row["apg"] or 0),
+            "games": int(row["games"] or 0),
+        }
+    backtest_cache.put(cache_key, result)
+    return result
 
 
 def find_similar_teams(team_id: int, before_date: date, threshold: float = 0.15) -> List[int]:
@@ -487,7 +547,15 @@ def _get_roster_for_game(team_id: int, game_date: date) -> List[int]:
     """Get the player IDs who actually played for *team_id* on *game_date*.
 
     Falls back to players on the team roster if no game-day stats exist.
+    Uses ``backtest_cache`` when active (during batch backtest runs).
     """
+    from src.analytics.cache import backtest_cache
+
+    cache_key = ("roster", team_id, str(game_date))
+    cached = backtest_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     with get_conn() as conn:
         rows = conn.execute(
             """
@@ -500,7 +568,9 @@ def _get_roster_for_game(team_id: int, game_date: date) -> List[int]:
         ).fetchall()
 
     if rows:
-        return [r[0] for r in rows]
+        result = [r[0] for r in rows]
+        backtest_cache.put(cache_key, result)
+        return result
 
     # Fallback: all non-injured players on the current roster
     with get_conn() as conn:
@@ -511,7 +581,9 @@ def _get_roster_for_game(team_id: int, game_date: date) -> List[int]:
             """,
             (team_id,),
         ).fetchall()
-    return [r[0] for r in rows]
+    result = [r[0] for r in rows]
+    backtest_cache.put(cache_key, result)
+    return result
 
 
 def _predict_via_matchup(
@@ -933,9 +1005,14 @@ def run_backtest(
         - Away only: Games where that team is away
         - Both set: Specific matchup (home vs away)
     """
+    from src.analytics.cache import backtest_cache, team_cache
+
     progress = progress_cb or (lambda msg: None)
     results = BacktestResults()
-    
+
+    # Start session caches for the duration of this backtest
+    backtest_cache.start()
+
     # Clear cached advanced profiles from previous runs
     clear_advanced_profile_cache()
     
@@ -943,6 +1020,7 @@ def run_backtest(
     games_df = get_actual_game_results()
     if games_df.empty:
         progress("No game data found")
+        backtest_cache.stop()
         return results
     
     progress(f"Found {len(games_df)} total games in database")
@@ -972,10 +1050,11 @@ def run_backtest(
     # Sort by date ascending to process chronologically
     games_df = games_df.sort_values("game_date")
     
-    # Get team info
-    with get_conn() as conn:
-        teams = pd.read_sql("SELECT team_id, abbreviation, name FROM teams", conn)
-    team_info = {int(row["team_id"]): (row["abbreviation"], row["name"]) for _, row in teams.iterrows()}
+    # Get team info from cache (avoids DB hit)
+    team_info = {tid: (info, "") for tid, info in team_cache.id_to_abbr().items()}
+    # Enrich with full names
+    for t in team_cache.team_list():
+        team_info[t["id"]] = (t["abbr"], t["name"])
     
     # Initialize team accuracy tracking
     for tid, (abbr, name) in team_info.items():
@@ -1075,7 +1154,10 @@ def run_backtest(
                           if p.home_team_id == ta.team_id or p.away_team_id == ta.team_id]
             ta.avg_total_error = sum(total_errors) / len(total_errors) if total_errors else 0
     
-    # Save to cache
+    # Stop session cache
+    backtest_cache.stop()
+
+    # Save to disk cache
     try:
         save_backtest_cache(results, home_team_filter, away_team_filter, use_injury_adjustment)
         progress("Results cached for quick re-use")

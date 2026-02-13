@@ -22,6 +22,7 @@ def run_full_pipeline(
     n_trials: int = 200,
     team_trials: int = 100,
     autotune_strength: float = 0.75,
+    autotune_mode: str = "classic",
     max_workers: int = 4,
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
@@ -205,7 +206,9 @@ def run_full_pipeline(
         try:
             from src.analytics.autotune import autotune_all
             results = autotune_all(
-                strength=autotune_strength, progress_cb=progress,
+                strength=autotune_strength,
+                mode=autotune_mode,
+                progress_cb=progress,
             )
             tuned = sum(1 for r in results if r.get("applied"))
             progress(f"  Autotune: {tuned}/{len(results)} teams got corrections")
