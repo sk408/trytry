@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from src.database.db import get_conn
@@ -666,11 +667,25 @@ def player_splits(
         return empty
 
     # ---- helpers ----
+    _DECAY = 0.9  # per-game exponential decay factor for recency weighting
+    #   row 0 (most recent) = 1.0, row 1 = 0.9, row 2 = 0.81, ...
+    #   For 10 games this gives ~60% weight to the last 5, matching the
+    #   model description ("last 5 games 60%, older 40%").
+
+    def _recency_weights(n: int) -> np.ndarray:
+        """Return normalised exponential-decay weights for *n* rows (0=most recent)."""
+        raw = np.power(_DECAY, np.arange(n))
+        return raw / raw.sum() if raw.sum() > 0 else raw
+
     def _df_mean(subset: pd.DataFrame, col: str, default: float = 0.0) -> float:
         if col not in subset.columns or subset.empty:
             return default
-        val = subset[col].mean()
-        return float(val) if pd.notna(val) else default
+        vals = subset[col].values
+        weights = _recency_weights(len(vals))
+        valid = ~pd.isna(vals)
+        if not valid.any():
+            return default
+        return float(np.dot(vals[valid], weights[valid]) / weights[valid].sum())
 
     def _df_sum(subset: pd.DataFrame, col: str) -> int:
         if col not in subset.columns or subset.empty:
@@ -710,7 +725,9 @@ def player_splits(
     mean_cols = [
         "points", "rebounds", "assists", "minutes",
         "steals", "blocks", "turnovers", "oreb", "dreb",
-        "fg_attempted", "ft_attempted",
+        "fg_made", "fg_attempted",
+        "fg3_made", "fg3_attempted",
+        "ft_made", "ft_attempted",
     ]
 
     result: Dict[str, float] = {}
@@ -725,18 +742,21 @@ def player_splits(
     result["fta_pg"] = result["ft_attempted"]
 
     # ---- shooting totals from the base slice (used for aggregate efficiency) ----
-    result["fg_made"] = _df_sum(base_df, "fg_made")
-    result["fg_attempted"] = _df_sum(base_df, "fg_attempted")
-    result["fg3_made"] = _df_sum(base_df, "fg3_made")
-    result["fg3_attempted"] = _df_sum(base_df, "fg3_attempted")
-    result["ft_made"] = _df_sum(base_df, "ft_made")
-    result["ft_attempted"] = _df_sum(base_df, "ft_attempted")
+    # BUG FIX: previously these overwrote the blended per-game averages stored
+    # under "fg_attempted" / "ft_attempted", corrupting efficiency metrics that
+    # downstream code computed from those keys.  Now stored under *_total keys.
+    result["fg_made_total"] = _df_sum(base_df, "fg_made")
+    result["fg_attempted_total"] = _df_sum(base_df, "fg_attempted")
+    result["fg3_made_total"] = _df_sum(base_df, "fg3_made")
+    result["fg3_attempted_total"] = _df_sum(base_df, "fg3_attempted")
+    result["ft_made_total"] = _df_sum(base_df, "ft_made")
+    result["ft_attempted_total"] = _df_sum(base_df, "ft_attempted")
 
     # ---- efficiency metrics (from base slice totals) ----
     total_pts = _df_sum(base_df, "points")
-    total_fga = result["fg_attempted"]
-    total_fg3a = result["fg3_attempted"]
-    total_fta = result["ft_attempted"]
+    total_fga = result["fg_attempted_total"]
+    total_fg3a = result["fg3_attempted_total"]
+    total_fta = result["ft_attempted_total"]
 
     ts_denom = 2 * (total_fga + 0.44 * total_fta)
     result["ts_pct"] = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
@@ -1249,7 +1269,16 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
     elif rest_days == 0:
         penalty += 3.0  # Same-day (rare, doubleheader scenario)
 
-    result["fatigue_penalty"] = penalty
+    # Rest advantage: teams with 3+ days of rest outperform their baseline
+    # by ~1-2 points on average.  This is the inverse of fatigue — well-
+    # rested teams get a *negative* penalty (i.e. a boost).
+    rest_bonus = 0.0
+    if rest_days >= 4:
+        rest_bonus = -1.5  # 4+ days rest → notable advantage
+    elif rest_days >= 3:
+        rest_bonus = -1.0  # 3 days rest → moderate advantage
+    result["rest_bonus"] = rest_bonus
+    result["fatigue_penalty"] = penalty + rest_bonus
     return result
 
 

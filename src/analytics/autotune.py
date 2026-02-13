@@ -157,7 +157,7 @@ def autotune_team(
     strength: float = 0.75,
     min_threshold: float = 1.5,
     mode: str = "classic",
-    max_abs_correction: float = 100.0,
+    max_abs_correction: float = 10.0,
     progress_cb: Optional[Callable[[str], None]] = None,
 ) -> Dict:
     """Analyse a team's historical games, compare player-level predictions
@@ -376,7 +376,7 @@ def autotune_all(
     strength: float = 0.75,
     min_threshold: float = 1.5,
     mode: str = "classic",
-    max_abs_correction: float = 100.0,
+    max_abs_correction: float = 10.0,
     require_global_improvement: bool = False,
     progress_cb: Optional[Callable[[str], None]] = None,
     max_workers: int | None = None,

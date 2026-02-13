@@ -77,9 +77,9 @@ def _safe(val, default: float = 0.0) -> float:
 def extract_features(g) -> Dict[str, float]:
     """Extract a flat feature dict from a ``PrecomputedGame``.
 
-    Returns ~65 features covering raw projections, efficiency,
+    Returns ~74 features covering raw projections, efficiency,
     ratings, matchup edges, four-factor components, clutch/hustle
-    sub-metrics, fatigue, and key differentials.
+    sub-metrics, fatigue, injury context, and key differentials.
     """
     hp = g.home_proj
     ap = g.away_proj
@@ -183,6 +183,22 @@ def extract_features(g) -> Dict[str, float]:
     f["home_loose_balls"] = _safe(hh.get("loose_balls_recovered"))
     f["away_loose_balls"] = _safe(ah.get("loose_balls_recovered"))
 
+    # ── Injury context ──
+    # PrecomputedGame stores team-level injury impact that was previously
+    # unused by the ML model.  These features let the model learn non-linear
+    # injury effects (e.g., losing a star PG hurts more than a role player).
+    f["home_injured_count"] = _safe(getattr(g, "home_injured_count", 0.0))
+    f["away_injured_count"] = _safe(getattr(g, "away_injured_count", 0.0))
+    f["diff_injured_count"] = f["home_injured_count"] - f["away_injured_count"]
+    f["home_injury_ppg_lost"] = _safe(getattr(g, "home_injury_ppg_lost", 0.0))
+    f["away_injury_ppg_lost"] = _safe(getattr(g, "away_injury_ppg_lost", 0.0))
+    f["diff_injury_ppg_lost"] = f["home_injury_ppg_lost"] - f["away_injury_ppg_lost"]
+    f["home_injury_minutes_lost"] = _safe(getattr(g, "home_injury_minutes_lost", 0.0))
+    f["away_injury_minutes_lost"] = _safe(getattr(g, "away_injury_minutes_lost", 0.0))
+    f["diff_injury_minutes_lost"] = (
+        f["home_injury_minutes_lost"] - f["away_injury_minutes_lost"]
+    )
+
     return f
 
 
@@ -285,19 +301,24 @@ def train_models(
         json.dump(feature_cols, fp)
 
     # 4. Train spread model
+    # Regularisation tuned to reduce severe overfitting (train MAE 1.9 vs val 11.7).
+    # Key changes: shallower trees, higher min_child_weight, stronger L1/L2,
+    # lower column sampling, and early stopping.
     n_jobs = max(1, max_workers)
     progress(f"Training spread model (n_jobs={n_jobs})...")
     spread_model = xgb.XGBRegressor(
-        n_estimators=200,
-        max_depth=5,
+        n_estimators=500,           # more trees, but early stopping will cut
+        max_depth=3,                # was 5 → shallower to reduce memorisation
         learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
+        subsample=0.7,              # was 0.8 → more row dropout
+        colsample_bytree=0.6,      # was 0.8 → more feature dropout
+        min_child_weight=5,         # new → prevents tiny leaf groups
+        reg_alpha=0.5,              # was 0.1 → stronger L1
+        reg_lambda=2.0,             # was 1.0 → stronger L2
         random_state=42,
         verbosity=0,
         n_jobs=n_jobs,
+        early_stopping_rounds=20,   # new → stop when val stops improving
     )
     spread_model.fit(
         X_train, y_spread_train,
@@ -326,19 +347,21 @@ def train_models(
     for name, gain in result.top_spread_features[:5]:
         progress(f"    {name}: gain={gain:.2f}")
 
-    # 5. Train total model
+    # 5. Train total model (same regularisation strategy as spread)
     progress(f"Training total model (n_jobs={n_jobs})...")
     total_model = xgb.XGBRegressor(
-        n_estimators=200,
-        max_depth=5,
+        n_estimators=500,
+        max_depth=3,
         learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
+        subsample=0.7,
+        colsample_bytree=0.6,
+        min_child_weight=5,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
         random_state=42,
         verbosity=0,
         n_jobs=n_jobs,
+        early_stopping_rounds=20,
     )
     total_model.fit(
         X_train, y_total_train,
@@ -525,26 +548,34 @@ def predict_ml_with_uncertainty(
     n_present = sum(1 for col in _feature_cols if features.get(col, 0.0) != 0.0)
     confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
 
-    # Estimate uncertainty from per-tree predictions
+    # Estimate uncertainty from per-tree margin contributions.
+    # Previous implementation used pred_leaf=True which returns integer leaf
+    # *indices* (node IDs like 3, 7, 12) — taking std of those is meaningless.
+    # Instead we accumulate each tree's margin contribution and compute their
+    # standard deviation, which reflects genuine model disagreement.
     spread_std = 0.0
     total_std = 0.0
     try:
         import xgboost as _xgb
         dm = _xgb.DMatrix(X)
-        spread_leaf = _spread_model.get_booster().predict(dm, pred_leaf=True)
-        total_leaf = _total_model.get_booster().predict(dm, pred_leaf=True)
-        # Use margin predictions from each tree for std estimation
-        spread_preds = _spread_model.get_booster().predict(
-            dm, output_margin=False, iteration_range=(0, 0)
-        )
-        total_preds = _total_model.get_booster().predict(
-            dm, output_margin=False, iteration_range=(0, 0)
-        )
-        # Fallback: use a heuristic based on leaf diversity
-        if spread_leaf.ndim == 2:
-            spread_std = float(np.std(spread_leaf[0]))
-        if total_leaf.ndim == 2:
-            total_std = float(np.std(total_leaf[0]))
+
+        def _tree_std(booster: "_xgb.Booster", dm: "_xgb.DMatrix") -> float:
+            """Std-dev of individual tree margin contributions for one sample."""
+            n_trees = booster.num_boosted_rounds()
+            if n_trees < 2:
+                return 0.0
+            # Get cumulative margin after each tree; differences = per-tree
+            margins = []
+            prev = 0.0
+            for i in range(1, n_trees + 1):
+                cum = float(booster.predict(dm, output_margin=True,
+                                            iteration_range=(0, i))[0])
+                margins.append(cum - prev)
+                prev = cum
+            return float(np.std(margins))
+
+        spread_std = _tree_std(_spread_model.get_booster(), dm)
+        total_std = _tree_std(_total_model.get_booster(), dm)
     except Exception:
         pass
 

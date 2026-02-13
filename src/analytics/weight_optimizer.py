@@ -891,12 +891,22 @@ def _fast_loss_team(
 # -----------------------------------------------------------------------
 
 _CALIBRATION_TABLE = "residual_calibration"
+_TOTAL_CALIBRATION_TABLE = "residual_calibration_total"
 
 
 def _ensure_calibration_table() -> None:
     with get_conn() as conn:
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_CALIBRATION_TABLE} (
+                bin_label     TEXT PRIMARY KEY,
+                bin_low       REAL NOT NULL,
+                bin_high      REAL NOT NULL,
+                avg_residual  REAL NOT NULL,
+                sample_count  INTEGER NOT NULL
+            )
+        """)
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_TOTAL_CALIBRATION_TABLE} (
                 bin_label     TEXT PRIMARY KEY,
                 bin_low       REAL NOT NULL,
                 bin_high      REAL NOT NULL,
@@ -971,17 +981,79 @@ def build_residual_calibration(
 
         conn.commit()
 
-    progress(f"Calibration complete: {len(calibration)} bins populated")
+    progress(f"Spread calibration complete: {len(calibration)} bins populated")
+
+    # ── Total calibration (parallel bins keyed by predicted total range) ──
+    total_bins = [
+        ("very_low",   180.0, 200.0),
+        ("low",        200.0, 210.0),
+        ("below_avg",  210.0, 215.0),
+        ("avg_low",    215.0, 220.0),
+        ("avg_high",   220.0, 225.0),
+        ("above_avg",  225.0, 230.0),
+        ("high",       230.0, 240.0),
+        ("very_high",  240.0, 270.0),
+    ]
+    total_calibration: Dict[str, Dict] = {}
+    with get_conn() as conn:
+        conn.execute(f"DELETE FROM {_TOTAL_CALIBRATION_TABLE}")
+        for label, lo, hi in total_bins:
+            preds_in_bin = [
+                p for p in results.predictions
+                if lo <= p.predicted_total < hi
+            ]
+            if not preds_in_bin:
+                continue
+            avg_residual = sum(p.total_error for p in preds_in_bin) / len(preds_in_bin)
+            total_calibration[label] = {
+                "bin_low": lo,
+                "bin_high": hi,
+                "avg_residual": round(avg_residual, 3),
+                "sample_count": len(preds_in_bin),
+            }
+            conn.execute(
+                f"INSERT INTO {_TOTAL_CALIBRATION_TABLE} "
+                "(bin_label, bin_low, bin_high, avg_residual, sample_count) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (label, lo, hi, avg_residual, len(preds_in_bin)),
+            )
+            progress(
+                f"  total {label} [{lo:.0f}, {hi:.0f}): "
+                f"n={len(preds_in_bin)}, avg_residual={avg_residual:+.2f}"
+            )
+        conn.commit()
+
+    progress(
+        f"Total calibration complete: {len(total_calibration)} bins populated"
+    )
+    calibration["_total"] = total_calibration
     return calibration
 
 
 def load_residual_calibration() -> List[Dict]:
-    """Load saved calibration bins from the DB."""
+    """Load saved spread calibration bins from the DB."""
     _ensure_calibration_table()
     with get_conn() as conn:
         rows = conn.execute(
             f"SELECT bin_label, bin_low, bin_high, avg_residual, sample_count "
             f"FROM {_CALIBRATION_TABLE} ORDER BY bin_low"
+        ).fetchall()
+    return [
+        {
+            "bin_label": r[0], "bin_low": r[1], "bin_high": r[2],
+            "avg_residual": r[3], "sample_count": r[4],
+        }
+        for r in rows
+    ]
+
+
+def load_total_calibration() -> List[Dict]:
+    """Load saved total calibration bins from the DB."""
+    _ensure_calibration_table()
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT bin_label, bin_low, bin_high, avg_residual, sample_count "
+            f"FROM {_TOTAL_CALIBRATION_TABLE} ORDER BY bin_low"
         ).fetchall()
     return [
         {

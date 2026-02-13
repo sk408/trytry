@@ -133,14 +133,20 @@ def predict_matchup(
     """
     gd = game_date or date.today()
 
-    # Check for per-team weight overrides (use home team's overrides if they
-    # exist, otherwise away team's, otherwise global).  This lets the per-team
-    # refinement influence predictions for that team's games.
-    w = (
-        load_team_weights(home_team_id)
-        or load_team_weights(away_team_id)
-        or get_weight_config()
-    )
+    # Per-team weight overrides: when both teams have tuned weights, blend
+    # them (average) so neither side's weights dominate.  Previously this was
+    # a fallback chain (home → away → global) which ignored the away team's
+    # overrides whenever the home team had any.
+    home_w = load_team_weights(home_team_id)
+    away_w = load_team_weights(away_team_id)
+    if home_w and away_w:
+        w = home_w.blend(away_w)
+    elif home_w:
+        w = home_w
+    elif away_w:
+        w = away_w
+    else:
+        w = get_weight_config()
 
     # ============ 1. PLAYER-LEVEL PROJECTIONS ============
     home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
@@ -215,8 +221,28 @@ def predict_matchup(
     hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle, w)
     spread += hustle_spread_adj
 
+    # ============ 6. INJURY IMPACT (base model only) ============
+    # When the ML ensemble is active (ml_ensemble_weight > 0), injury effects
+    # are handled by injury features in extract_features() to avoid double-
+    # counting.  When ML is disabled, apply a direct linear adjustment based
+    # on each team's PPG lost to injuries.
+    home_injury = _get_team_injury_impact(home_team_id, as_of_date=gd)
+    away_injury = _get_team_injury_impact(away_team_id, as_of_date=gd)
+    injury_spread_adj = 0.0
+    injury_total_adj = 0.0
+    if w.ml_ensemble_weight == 0:
+        # PPG lost is a positive number; a team missing more PPG is weaker.
+        # Spread perspective: home losing PPG hurts home → subtract from spread;
+        # away losing PPG helps home → add to spread.
+        home_ppg_lost = home_injury.get("injury_ppg_lost", 0.0)
+        away_ppg_lost = away_injury.get("injury_ppg_lost", 0.0)
+        injury_spread_adj = away_ppg_lost - home_ppg_lost
+        spread += injury_spread_adj
+        # Total perspective: more injuries → fewer points scored overall
+        injury_total_adj = -(home_ppg_lost + away_ppg_lost)
+
     # ============ TOTAL CALCULATION ============
-    total = home_base_pts + away_base_pts
+    total = home_base_pts + away_base_pts + injury_total_adj
 
     # Pace
     home_pace = get_pace(home_team_id)
@@ -295,6 +321,7 @@ def predict_matchup(
 
     # ============ 9. RESIDUAL CALIBRATION ============
     spread = _apply_calibration(spread)
+    total = _apply_total_calibration(total)
 
     # ============ DERIVE INDIVIDUAL SCORES ============
     pred_home_score = (total + spread) / 2
@@ -420,26 +447,16 @@ def predict_matchup(
         f["deflection_diff"] = f["home_deflections"] - f["away_deflections"]
 
         # ── INJURY IMPACT ──
-        # Full injury impact: count, PPG lost, minutes lost
-        try:
-            h_inj = _get_team_injury_impact(home_team_id, as_of_date=gd)
-            a_inj = _get_team_injury_impact(away_team_id, as_of_date=gd)
-            f["home_injured_count"] = h_inj["injured_count"]
-            f["away_injured_count"] = a_inj["injured_count"]
-            f["home_injury_ppg_lost"] = h_inj["injury_ppg_lost"]
-            f["away_injury_ppg_lost"] = a_inj["injury_ppg_lost"]
-            f["home_injury_minutes_lost"] = h_inj["injury_minutes_lost"]
-            f["away_injury_minutes_lost"] = a_inj["injury_minutes_lost"]
-        except Exception:
-            f["home_injured_count"] = 0.0
-            f["away_injured_count"] = 0.0
-            f["home_injury_ppg_lost"] = 0.0
-            f["away_injury_ppg_lost"] = 0.0
-            f["home_injury_minutes_lost"] = 0.0
-            f["away_injury_minutes_lost"] = 0.0
-        f["injured_count_diff"] = f.get("home_injured_count", 0) - f.get("away_injured_count", 0)
-        f["injury_ppg_lost_diff"] = f.get("home_injury_ppg_lost", 0.0) - f.get("away_injury_ppg_lost", 0.0)
-        f["injury_minutes_lost_diff"] = f.get("home_injury_minutes_lost", 0.0) - f.get("away_injury_minutes_lost", 0.0)
+        # Reuse home_injury / away_injury already fetched in step 6 above.
+        f["home_injured_count"] = home_injury.get("injured_count", 0.0)
+        f["away_injured_count"] = away_injury.get("injured_count", 0.0)
+        f["home_injury_ppg_lost"] = home_injury.get("injury_ppg_lost", 0.0)
+        f["away_injury_ppg_lost"] = away_injury.get("injury_ppg_lost", 0.0)
+        f["home_injury_minutes_lost"] = home_injury.get("injury_minutes_lost", 0.0)
+        f["away_injury_minutes_lost"] = away_injury.get("injury_minutes_lost", 0.0)
+        f["injured_count_diff"] = f["home_injured_count"] - f["away_injured_count"]
+        f["injury_ppg_lost_diff"] = f["home_injury_ppg_lost"] - f["away_injury_ppg_lost"]
+        f["injury_minutes_lost_diff"] = f["home_injury_minutes_lost"] - f["away_injury_minutes_lost"]
 
     return MatchupPrediction(
         home_team_id=home_team_id,
@@ -602,6 +619,7 @@ def _build_ml_features_live(
 
 # Cache for residual calibration (loaded once, refreshed on demand)
 _calibration_cache: list | None = None
+_total_calibration_cache: list | None = None
 
 
 def _load_calibration_bins() -> list:
@@ -624,10 +642,31 @@ def _load_calibration_bins() -> list:
     return _calibration_cache
 
 
+def _load_total_calibration_bins() -> list:
+    """Load total residual calibration from DB (cached)."""
+    global _total_calibration_cache
+    if _total_calibration_cache is not None:
+        return _total_calibration_cache
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT bin_low, bin_high, avg_residual, sample_count "
+                "FROM residual_calibration_total ORDER BY bin_low"
+            ).fetchall()
+        _total_calibration_cache = [
+            {"bin_low": r[0], "bin_high": r[1], "avg_residual": r[2], "sample_count": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        _total_calibration_cache = []
+    return _total_calibration_cache
+
+
 def reload_calibration_cache() -> None:
     """Force a reload of calibration bins (call after rebuilding)."""
-    global _calibration_cache
+    global _calibration_cache, _total_calibration_cache
     _calibration_cache = None
+    _total_calibration_cache = None
 
 
 def _apply_calibration(spread: float) -> float:
@@ -637,6 +676,15 @@ def _apply_calibration(spread: float) -> float:
         if cal["bin_low"] <= spread < cal["bin_high"] and cal["sample_count"] >= 5:
             return spread - cal["avg_residual"]
     return spread
+
+
+def _apply_total_calibration(total: float) -> float:
+    """Adjust total using saved total residual calibration bins."""
+    bins = _load_total_calibration_bins()
+    for cal in bins:
+        if cal["bin_low"] <= total < cal["bin_high"] and cal["sample_count"] >= 5:
+            return total - cal["avg_residual"]
+    return total
 
 
 def _compute_four_factors_spread(
@@ -991,6 +1039,14 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
     hustle_adj = _compute_hustle_spread(g.home_hustle, g.away_hustle, w)
     spread += hustle_adj
 
+    # Injury impact (base model only — gated on ML being disabled)
+    injury_total_adj = 0.0
+    if w.ml_ensemble_weight == 0:
+        home_ppg_lost = getattr(g, "home_injury_ppg_lost", 0.0) or 0.0
+        away_ppg_lost = getattr(g, "away_injury_ppg_lost", 0.0) or 0.0
+        spread += away_ppg_lost - home_ppg_lost
+        injury_total_adj = -(home_ppg_lost + away_ppg_lost)
+
     # Clamp spread
     spread = max(-w.spread_clamp, min(w.spread_clamp, spread))
 
@@ -998,7 +1054,7 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
     # spread = _apply_calibration(spread)
 
     # ── Total ──
-    total = home_base_pts + away_base_pts
+    total = home_base_pts + away_base_pts + injury_total_adj
 
     # Pace
     exp_pace = (g.home_pace + g.away_pace) / 2

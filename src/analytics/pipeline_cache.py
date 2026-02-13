@@ -49,6 +49,10 @@ class PipelineState:
     last_backtest_at: str = ""
     last_injury_history_at: str = ""
     precomputed_games_hash: str = ""
+    # Hash of model_weights + team_tuning at the time calibration was last
+    # built.  When weights or tuning change, calibration becomes stale even
+    # if no new games have appeared.
+    calibration_learned_hash: str = ""
 
 
 def load_pipeline_state() -> PipelineState:
@@ -94,6 +98,10 @@ def mark_step_done(state: PipelineState, step_name: str) -> PipelineState:
     attr = mapping.get(step_name)
     if attr:
         setattr(state, attr, _now_iso())
+    # When calibration finishes, snapshot the current learned state so that
+    # is_step_fresh("calibrate") can detect when weights/tuning change later.
+    if step_name == "calibrate":
+        state.calibration_learned_hash = get_learned_state_hash()
     save_pipeline_state(state)
     return state
 
@@ -138,12 +146,47 @@ def has_new_games(state: PipelineState) -> bool:
     return False
 
 
+def get_learned_state_hash() -> str:
+    """Hash of model_weights + team_tuning, for calibration freshness.
+
+    Mirrors ``_learning_signature()`` in the backtester but lives here so
+    the pipeline cache can use it without importing backtester (avoids a
+    circular dependency).
+    """
+    payload: dict = {}
+    try:
+        with get_conn() as conn:
+            mw = conn.execute(
+                "SELECT key, value FROM model_weights ORDER BY key"
+            ).fetchall()
+            payload["model_weights"] = [[r[0], r[1]] for r in mw]
+    except Exception:
+        payload["model_weights"] = []
+    try:
+        with get_conn() as conn:
+            tt = conn.execute(
+                """
+                SELECT team_id, home_pts_correction, away_pts_correction,
+                       games_analyzed, last_tuned_at
+                FROM team_tuning
+                ORDER BY team_id
+                """
+            ).fetchall()
+            payload["team_tuning"] = [list(r) for r in tt]
+    except Exception:
+        payload["team_tuning"] = []
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def is_step_fresh(state: PipelineState, step_name: str) -> bool:
     """Return True if *step_name* was run AFTER the last data change.
 
     A step is "fresh" when:
     1. It has a recorded last-run timestamp, AND
     2. No new games have appeared since it was last run.
+    3. For "calibrate": also requires that model weights / team tuning
+       have not changed since calibration was last built.
     """
     mapping = {
         "sync": "last_sync_at",
@@ -163,6 +206,11 @@ def is_step_fresh(state: PipelineState, step_name: str) -> bool:
     # If there are new games, step is stale
     if has_new_games(state):
         return False
+    # Calibration depends on model weights and team tuning.  If those have
+    # changed since calibration was last built, the residual bins are stale.
+    if step_name == "calibrate" and state.calibration_learned_hash:
+        if get_learned_state_hash() != state.calibration_learned_hash:
+            return False
     return True
 
 

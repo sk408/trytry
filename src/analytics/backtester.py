@@ -908,7 +908,17 @@ def _process_single_game(
     if home_profile["games"] < min_games_before or away_profile["games"] < min_games_before:
         return None
 
-    # Injury information
+    # Injury information (for display/reporting only).
+    #
+    # INVARIANT — actual-roster path: _get_roster_for_game returns who
+    # *actually played*, so aggregate_projection already excludes injured
+    # players.  Applying injury_adj on top of the predicted spread would
+    # double-penalise.  These values are stored in GamePrediction for
+    # diagnostics (e.g., "star X was out") but must NOT modify the spread
+    # or total.
+    #
+    # For LIVE predictions (matchup_view, live_prediction) the roster is
+    # "expected/pre-game" — injury adjustment SHOULD be applied there.
     home_adj, home_injured = calculate_injury_adjustment(home_id, game_date, 0)
     away_adj, away_injured = calculate_injury_adjustment(away_id, game_date, 0)
     home_injury_names = [p.get("name", "Unknown") for p in home_injured if p.get("avg_minutes", 0) >= 12]

@@ -85,6 +85,19 @@ class WeightConfig:
         valid = {f.name for f in cls.__dataclass_fields__.values()}
         return cls(**{k: v for k, v in d.items() if k in valid})
 
+    def blend(self, other: "WeightConfig") -> "WeightConfig":
+        """Return a new config whose fields are the average of *self* and *other*.
+
+        Used when both teams in a matchup have per-team weight overrides —
+        instead of arbitrarily picking one side's weights, we average them.
+        """
+        merged = {}
+        for f in self.__dataclass_fields__:
+            a = getattr(self, f)
+            b = getattr(other, f)
+            merged[f] = (a + b) / 2.0
+        return WeightConfig(**merged)
+
 
 # -----------------------------------------------------------------------
 # DB persistence
