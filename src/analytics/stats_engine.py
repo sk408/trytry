@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from src.database.db import get_conn
@@ -86,12 +87,22 @@ class TeamMatchupStats:
     def_rating: float = 0.0   # defensive rating (opponent pts per 100 possessions)
 
 
-def _load_player_df(player_id: int) -> pd.DataFrame:
+def _load_player_df(
+    player_id: int,
+    as_of_date: Optional[date] = None,
+) -> pd.DataFrame:
+    """Load player stats, optionally restricted to games before as_of_date (for backtest lookahead)."""
+    if as_of_date is not None:
+        sql = "SELECT * FROM player_stats WHERE player_id = ? AND game_date < ? ORDER BY game_date DESC"
+        params: tuple = (player_id, str(as_of_date))
+    else:
+        sql = "SELECT * FROM player_stats WHERE player_id = ? ORDER BY game_date DESC"
+        params = (player_id,)
     with get_conn() as conn:
         df = pd.read_sql(
-            "SELECT * FROM player_stats WHERE player_id = ? ORDER BY game_date DESC",
+            sql,
             conn,
-            params=[player_id],
+            params=params,
             parse_dates=["game_date"],
         )
     return df
@@ -640,9 +651,13 @@ def player_splits(
     opponent_team_id: Optional[int] = None,
     is_home: Optional[bool] = None,
     recent_games: Optional[int] = 10,
+    as_of_date: Optional[date] = None,
 ) -> Dict[str, float]:
     """
     Get player stats splits with extended metrics.
+
+    When *as_of_date* is set (for backtest/ML training), only games before
+    that date are used to avoid lookahead bias.
 
     Uses a **blended** approach to avoid small-sample-size inflation:
     - Base: overall recent games           (50% weight)
@@ -661,7 +676,7 @@ def player_splits(
         "ts_pct": 0.0, "fg3_rate": 0.0,
     }
 
-    df = _load_player_df(player_id)
+    df = _load_player_df(player_id, as_of_date=as_of_date)
     if df.empty:
         return empty
 
@@ -679,6 +694,20 @@ def player_splits(
 
     # ---- slices ----
     base_df = df.head(recent_games) if recent_games else df
+
+    # Recency weighting: most recent game = 1.0, decay 0.9 per game
+    # Row 0 is most recent (df sorted by game_date DESC)
+    decay = 0.9
+    recency_weights = [decay ** i for i in range(len(base_df))]
+
+    def _df_weighted_mean(subset: pd.DataFrame, col: str, weights: list, default: float = 0.0) -> float:
+        if col not in subset.columns or subset.empty:
+            return default
+        vals = subset[col].fillna(0).astype(float)
+        w = np.array(weights[: len(vals)])
+        s = np.sum(vals.values * w)
+        wsum = np.sum(w)
+        return float(s / wsum) if wsum > 0 else default
 
     loc_df = pd.DataFrame()
     if is_home is not None and not base_df.empty:
@@ -706,7 +735,7 @@ def player_splits(
     # Redistribute unused weight to base
     w_base = 1.0 - w_loc - w_opp
 
-    # ---- blend a stat column ----
+    # ---- blend a stat column (base uses recency-weighted mean) ----
     mean_cols = [
         "points", "rebounds", "assists", "minutes",
         "steals", "blocks", "turnovers", "oreb", "dreb",
@@ -715,28 +744,32 @@ def player_splits(
 
     result: Dict[str, float] = {}
     for col in mean_cols:
-        base_val = _df_mean(base_df, col)
-        loc_val = _df_mean(loc_df, col) if w_loc > 0 else base_val
-        opp_val = _df_mean(opp_df, col) if w_opp > 0 else base_val
+        base_val = _df_weighted_mean(base_df, col, recency_weights)
+        loc_val = _df_mean(loc_df, col, base_val) if w_loc > 0 else base_val
+        opp_val = _df_mean(opp_df, col, base_val) if w_opp > 0 else base_val
         result[col] = w_base * base_val + w_loc * loc_val + w_opp * opp_val
 
     # Copy blended per-game averages for pace/possession estimation
     result["fga_pg"] = result["fg_attempted"]
     result["fta_pg"] = result["ft_attempted"]
 
-    # ---- shooting totals from the base slice (used for aggregate efficiency) ----
+    # ---- shooting totals from the base slice (for efficiency only; do NOT overwrite blended) ----
     result["fg_made"] = _df_sum(base_df, "fg_made")
-    result["fg_attempted"] = _df_sum(base_df, "fg_attempted")
     result["fg3_made"] = _df_sum(base_df, "fg3_made")
-    result["fg3_attempted"] = _df_sum(base_df, "fg3_attempted")
     result["ft_made"] = _df_sum(base_df, "ft_made")
-    result["ft_attempted"] = _df_sum(base_df, "ft_attempted")
+    fga_total = _df_sum(base_df, "fg_attempted")
+    fg3a_total = _df_sum(base_df, "fg3_attempted")
+    fta_total = _df_sum(base_df, "ft_attempted")
+    # Keep fg_attempted, ft_attempted as blended per-game; use _total for efficiency
+    result["fg_attempted_total"] = float(fga_total)
+    result["fg3_attempted_total"] = float(fg3a_total)
+    result["ft_attempted_total"] = float(fta_total)
 
-    # ---- efficiency metrics (from base slice totals) ----
+    # ---- efficiency metrics (from base slice totals, NOT blended) ----
     total_pts = _df_sum(base_df, "points")
-    total_fga = result["fg_attempted"]
-    total_fg3a = result["fg3_attempted"]
-    total_fta = result["ft_attempted"]
+    total_fga = fga_total
+    total_fg3a = fg3a_total
+    total_fta = fta_total
 
     ts_denom = 2 * (total_fga + 0.44 * total_fta)
     result["ts_pct"] = (total_pts / ts_denom * 100) if ts_denom > 0 else 0.0
@@ -773,9 +806,13 @@ def aggregate_projection(
     opponent_team_id: Optional[int] = None,
     is_home: Optional[bool] = None,
     recent_games: int = 10,
+    as_of_date: Optional[date] = None,
 ) -> Dict[str, float]:
     """
     Aggregate player stats for team projection with extended metrics.
+
+    When *as_of_date* is set (for backtest/ML training), only stats from
+    games before that date are used to avoid lookahead bias.
     
     Returns:
         Dict with team totals for all stats plus efficiency metrics.
@@ -796,6 +833,7 @@ def aggregate_projection(
             opponent_team_id=opponent_team_id,
             is_home=is_home,
             recent_games=recent_games,
+            as_of_date=as_of_date,
         )
         for k in totals:
             totals[k] = totals[k] + splits.get(k, 0.0)
@@ -1214,6 +1252,7 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
         "is_4_in_6": False,
         "rest_days": 99,  # default: well rested
         "fatigue_penalty": 0.0,
+        "rest_bonus": 0.0,
     }
 
     if not prior:
@@ -1236,9 +1275,15 @@ def detect_fatigue(team_id: int, game_date: date) -> Dict[str, object]:
     games_in_6 = sum(1 for d in prior if d >= window_6) + 1
     result["is_4_in_6"] = games_in_6 >= 4
 
-    # Calculate graduated fatigue penalty using configurable weights
+    # Rest bonus for well-rested teams (3+ days)
     from src.analytics.weight_config import get_weight_config
     w = get_weight_config()
+    if rest_days >= 4:
+        result["rest_bonus"] = getattr(w, "rest_bonus_4plus", 1.5)
+    elif rest_days >= 3:
+        result["rest_bonus"] = getattr(w, "rest_bonus_3days", 1.0)
+
+    # Calculate graduated fatigue penalty using configurable weights
     penalty = 0.0
     if result["is_back_to_back"]:
         penalty += w.fatigue_b2b  # B2B penalty (default 2.0)

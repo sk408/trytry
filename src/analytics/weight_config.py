@@ -60,6 +60,11 @@ class WeightConfig:
     fatigue_b2b: float = 2.0
     fatigue_3in4: float = 1.0
     fatigue_4in6: float = 1.5
+    rest_bonus_3days: float = 1.0
+    rest_bonus_4plus: float = 1.5
+
+    # --- Injury adjustment (base model only; gate when ML active to avoid double-count) ---
+    injury_ppg_mult: float = 0.4
 
     # --- ML Ensemble blending ---
     ml_ensemble_weight: float = 0.4       # weight for ML model (0 = disabled)

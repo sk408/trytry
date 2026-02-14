@@ -389,9 +389,17 @@ class MatchupView(QWidget):
             self.total_label.setText("Run sync")
             return
         
-        # Use full prediction engine with all advanced factors
-        home_player_ids = [p.player_id for p in home_stats.players if not p.is_injured]
-        away_player_ids = [p.player_id for p in away_stats.players if not p.is_injured]
+        # Use full prediction engine; include players with play_probability >= 0.2
+        # (Injury Intelligence) instead of binary is_injured
+        _min_prob = 0.2
+        home_player_ids = [
+            p.player_id for p in home_stats.players
+            if getattr(p, "play_probability", 1.0) >= _min_prob
+        ]
+        away_player_ids = [
+            p.player_id for p in away_stats.players
+            if getattr(p, "play_probability", 1.0) >= _min_prob
+        ]
         pred = predict_matchup(
             home_team_id=home_id,
             away_team_id=away_id,

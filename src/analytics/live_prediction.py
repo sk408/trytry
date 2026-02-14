@@ -107,6 +107,47 @@ def _team_ppm(team_id: int, is_home: bool) -> float:
 # Pre-game prediction (cached for the lifetime of the process)
 # ---------------------------------------------------------------------------
 
+def _get_roster_with_play_probability(
+    team_id: int,
+    min_play_probability: float = 0.2,
+) -> List[int]:
+    """Return player IDs expected to play, using Injury Intelligence play_probability.
+
+    Includes players with play_probability >= min_play_probability instead of
+    the binary is_injured filter.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT player_id, name, is_injured, injury_note FROM players WHERE team_id = ?",
+            (team_id,),
+        ).fetchall()
+
+    result: List[int] = []
+    try:
+        from src.analytics.injury_intelligence import compute_play_probability
+        from src.data.sync_service import _normalise_status_level, _extract_injury_keyword
+        has_intel = True
+    except Exception:
+        has_intel = False
+
+    for pid, pname, is_inj, inj_note in rows:
+        if not is_inj:
+            result.append(pid)
+            continue
+        if not has_intel or not inj_note:
+            continue  # injured, no intel -> assume out
+        status_raw = (inj_note.split(":")[0].strip() if ":" in inj_note else inj_note)
+        injury_text = inj_note.split(":", 1)[1].strip() if ":" in inj_note else inj_note
+        if "(" in injury_text:
+            injury_text = injury_text[:injury_text.rfind("(")].strip()
+        status_level = _normalise_status_level(status_raw)
+        keyword = _extract_injury_keyword(injury_text)
+        prob = compute_play_probability(pid, pname or "", status_level, keyword)
+        if prob.composite_probability >= min_play_probability:
+            result.append(pid)
+    return result
+
+
 @functools.lru_cache(maxsize=64)
 def _cached_pregame(
     home_team_id: int,
@@ -119,22 +160,9 @@ def _cached_pregame(
     """
     from src.analytics.prediction import predict_matchup
 
-    # Gather active (non-injured) player IDs
-    with get_conn() as conn:
-        home_pids = [
-            r[0] for r in conn.execute(
-                "SELECT player_id FROM players "
-                "WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)",
-                (home_team_id,),
-            ).fetchall()
-        ]
-        away_pids = [
-            r[0] for r in conn.execute(
-                "SELECT player_id FROM players "
-                "WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)",
-                (away_team_id,),
-            ).fetchall()
-        ]
+    # Gather player IDs using Injury Intelligence play_probability (>= 0.2)
+    home_pids = _get_roster_with_play_probability(home_team_id)
+    away_pids = _get_roster_with_play_probability(away_team_id)
 
     if not home_pids or not away_pids:
         return 110.0, 110.0, 220.0, 0.0

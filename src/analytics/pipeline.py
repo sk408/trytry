@@ -327,7 +327,9 @@ def run_full_pipeline(
         t0 = time.perf_counter()
         try:
             cal = build_residual_calibration(progress_cb=progress)
-            progress(f"  Calibration: {len(cal)} bins")
+            n_spread = len(cal.get("spread", {}))
+            n_total = len(cal.get("total", {}))
+            progress(f"  Calibration: {n_spread} spread bins, {n_total} total bins")
             state = mark_step_done(state, "calibrate")
         except Exception as exc:
             progress(f"  Calibration error: {exc}")

@@ -891,12 +891,22 @@ def _fast_loss_team(
 # -----------------------------------------------------------------------
 
 _CALIBRATION_TABLE = "residual_calibration"
+_CALIBRATION_TOTAL_TABLE = "residual_calibration_total"
 
 
 def _ensure_calibration_table() -> None:
     with get_conn() as conn:
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {_CALIBRATION_TABLE} (
+                bin_label     TEXT PRIMARY KEY,
+                bin_low       REAL NOT NULL,
+                bin_high      REAL NOT NULL,
+                avg_residual  REAL NOT NULL,
+                sample_count  INTEGER NOT NULL
+            )
+        """)
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {_CALIBRATION_TOTAL_TABLE} (
                 bin_label     TEXT PRIMARY KEY,
                 bin_low       REAL NOT NULL,
                 bin_high      REAL NOT NULL,
@@ -971,8 +981,50 @@ def build_residual_calibration(
 
         conn.commit()
 
-    progress(f"Calibration complete: {len(calibration)} bins populated")
-    return calibration
+    # Total calibration bins (predicted total ~195-248)
+    total_bins = [
+        ("total_low",    195.0, 210.0),
+        ("total_mid_low", 210.0, 220.0),
+        ("total_mid",     220.0, 230.0),
+        ("total_mid_high", 230.0, 240.0),
+        ("total_high",    240.0, 260.0),
+    ]
+    total_calibration: Dict[str, Dict] = {}
+    with get_conn() as conn:
+        conn.execute(f"DELETE FROM {_CALIBRATION_TOTAL_TABLE}")
+        for label, lo, hi in total_bins:
+            preds_in_bin = [
+                p for p in results.predictions
+                if lo <= p.predicted_total < hi
+            ]
+            if not preds_in_bin:
+                continue
+            avg_residual = sum(p.total_error for p in preds_in_bin) / len(preds_in_bin)
+            total_calibration[label] = {
+                "bin_low": lo,
+                "bin_high": hi,
+                "avg_residual": round(avg_residual, 3),
+                "sample_count": len(preds_in_bin),
+            }
+            conn.execute(
+                f"INSERT INTO {_CALIBRATION_TOTAL_TABLE} (bin_label, bin_low, bin_high, avg_residual, sample_count) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (label, lo, hi, avg_residual, len(preds_in_bin)),
+            )
+            progress(
+                f"  {label} total [{lo:.0f}, {hi:.0f}): "
+                f"n={len(preds_in_bin)}, avg_residual={avg_residual:+.2f}"
+            )
+        conn.commit()
+
+    progress(f"Calibration complete: {len(calibration)} spread bins, {len(total_calibration)} total bins")
+    # Invalidate prediction module's calibration cache so it picks up new bins
+    try:
+        from src.analytics.prediction import reload_calibration_cache
+        reload_calibration_cache()
+    except Exception:
+        pass
+    return {"spread": calibration, "total": total_calibration}
 
 
 def load_residual_calibration() -> List[Dict]:

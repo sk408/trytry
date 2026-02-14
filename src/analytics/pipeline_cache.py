@@ -45,6 +45,7 @@ class PipelineState:
     last_optimize_at: str = ""
     last_team_refine_at: str = ""
     last_calibrate_at: str = ""
+    calibrate_config_hash: str = ""  # hash of model_weights + team_tuning when calibrate ran
     last_autotune_at: str = ""
     last_backtest_at: str = ""
     last_injury_history_at: str = ""
@@ -80,6 +81,30 @@ def _now_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
+def _calibration_config_hash() -> str:
+    """Hash of model_weights + team_tuning; changes when weights/tuning change."""
+    payload: dict = {}
+    try:
+        with get_conn() as conn:
+            mw = conn.execute(
+                "SELECT key, value FROM model_weights ORDER BY key"
+            ).fetchall()
+            payload["model_weights"] = [[r[0], r[1]] for r in mw]
+    except Exception:
+        payload["model_weights"] = []
+    try:
+        with get_conn() as conn:
+            tt = conn.execute(
+                "SELECT team_id, home_pts_correction, away_pts_correction "
+                "FROM team_tuning ORDER BY team_id"
+            ).fetchall()
+            payload["team_tuning"] = [list(r) for r in tt]
+    except Exception:
+        payload["team_tuning"] = []
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def mark_step_done(state: PipelineState, step_name: str) -> PipelineState:
     """Update the timestamp for a completed step and save."""
     mapping = {
@@ -94,6 +119,8 @@ def mark_step_done(state: PipelineState, step_name: str) -> PipelineState:
     attr = mapping.get(step_name)
     if attr:
         setattr(state, attr, _now_iso())
+    if step_name == "calibrate":
+        state.calibrate_config_hash = _calibration_config_hash()
     save_pipeline_state(state)
     return state
 
@@ -144,6 +171,8 @@ def is_step_fresh(state: PipelineState, step_name: str) -> bool:
     A step is "fresh" when:
     1. It has a recorded last-run timestamp, AND
     2. No new games have appeared since it was last run.
+    3. For "calibrate": model_weights + team_tuning hash must match
+       (calibration is specific to the current weight config).
     """
     mapping = {
         "sync": "last_sync_at",
@@ -163,6 +192,10 @@ def is_step_fresh(state: PipelineState, step_name: str) -> bool:
     # If there are new games, step is stale
     if has_new_games(state):
         return False
+    # Calibration is tied to weight config: if weights/tuning changed, recalibrate
+    if step_name == "calibrate" and getattr(state, "calibrate_config_hash", ""):
+        if _calibration_config_hash() != state.calibrate_config_hash:
+            return False
     return True
 
 

@@ -183,6 +183,17 @@ def extract_features(g) -> Dict[str, float]:
     f["home_loose_balls"] = _safe(hh.get("loose_balls_recovered"))
     f["away_loose_balls"] = _safe(ah.get("loose_balls_recovered"))
 
+    # ── Injury and rest (optional on PrecomputedGame; 0 when absent) ──
+    f["home_rest_bonus"] = _safe(getattr(g, "home_rest_bonus", None), 0.0)
+    f["away_rest_bonus"] = _safe(getattr(g, "away_rest_bonus", None), 0.0)
+    f["diff_rest_bonus"] = f["home_rest_bonus"] - f["away_rest_bonus"]
+    f["home_injury_ppg_lost"] = _safe(getattr(g, "home_injury_ppg_lost", None), 0.0)
+    f["away_injury_ppg_lost"] = _safe(getattr(g, "away_injury_ppg_lost", None), 0.0)
+    f["diff_injury_ppg_lost"] = f["home_injury_ppg_lost"] - f["away_injury_ppg_lost"]
+    f["home_injured_count"] = _safe(getattr(g, "home_injured_count", None), 0.0)
+    f["away_injured_count"] = _safe(getattr(g, "away_injured_count", None), 0.0)
+    f["diff_injured_count"] = f["home_injured_count"] - f["away_injured_count"]
+
     return f
 
 
@@ -284,17 +295,18 @@ def train_models(
     with open(_FEATURE_COLS_PATH, "w") as fp:
         json.dump(feature_cols, fp)
 
-    # 4. Train spread model
+    # 4. Train spread model (anti-overfit: shallow trees, regularization, early stopping)
     n_jobs = max(1, max_workers)
     progress(f"Training spread model (n_jobs={n_jobs})...")
     spread_model = xgb.XGBRegressor(
-        n_estimators=200,
-        max_depth=5,
+        n_estimators=150,
+        max_depth=3,
         learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
+        subsample=0.7,
+        colsample_bytree=0.6,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
+        min_child_weight=5,
         random_state=42,
         verbosity=0,
         n_jobs=n_jobs,
@@ -303,6 +315,7 @@ def train_models(
         X_train, y_spread_train,
         eval_set=[(X_val, y_spread_val)],
         verbose=False,
+        early_stopping_rounds=20,
     )
     spread_model.save_model(str(_SPREAD_MODEL_PATH))
 
@@ -317,25 +330,31 @@ def train_models(
     )
 
     # Feature importance (gain-based)
+    # XGBoost returns "f0","f1"... or actual names like "ff_tov_edge"
+    def _imp_key_to_name(k: str) -> str:
+        if k.startswith("f") and len(k) > 1 and k[1:].isdigit():
+            return feature_cols[int(k[1:])]
+        return k
     importance = spread_model.get_booster().get_score(importance_type="gain")
     sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
     result.top_spread_features = [
-        (feature_cols[int(k.replace("f", ""))] if k.startswith("f") else k, round(v, 2))
+        (_imp_key_to_name(k), round(v, 2))
         for k, v in sorted_imp[:10]
     ]
     for name, gain in result.top_spread_features[:5]:
         progress(f"    {name}: gain={gain:.2f}")
 
-    # 5. Train total model
+    # 5. Train total model (anti-overfit: shallow trees, regularization, early stopping)
     progress(f"Training total model (n_jobs={n_jobs})...")
     total_model = xgb.XGBRegressor(
-        n_estimators=200,
-        max_depth=5,
+        n_estimators=150,
+        max_depth=3,
         learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
+        subsample=0.7,
+        colsample_bytree=0.6,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
+        min_child_weight=5,
         random_state=42,
         verbosity=0,
         n_jobs=n_jobs,
@@ -344,6 +363,7 @@ def train_models(
         X_train, y_total_train,
         eval_set=[(X_val, y_total_val)],
         verbose=False,
+        early_stopping_rounds=20,
     )
     total_model.save_model(str(_TOTAL_MODEL_PATH))
 
@@ -359,7 +379,7 @@ def train_models(
     importance = total_model.get_booster().get_score(importance_type="gain")
     sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
     result.top_total_features = [
-        (feature_cols[int(k.replace("f", ""))] if k.startswith("f") else k, round(v, 2))
+        (_imp_key_to_name(k), round(v, 2))
         for k, v in sorted_imp[:10]
     ]
 
@@ -525,26 +545,27 @@ def predict_ml_with_uncertainty(
     n_present = sum(1 for col in _feature_cols if features.get(col, 0.0) != 0.0)
     confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
 
-    # Estimate uncertainty from per-tree predictions
+    # Estimate uncertainty from per-tree margin contributions (not leaf indices!)
     spread_std = 0.0
     total_std = 0.0
     try:
         import xgboost as _xgb
         dm = _xgb.DMatrix(X)
-        spread_leaf = _spread_model.get_booster().predict(dm, pred_leaf=True)
-        total_leaf = _total_model.get_booster().predict(dm, pred_leaf=True)
-        # Use margin predictions from each tree for std estimation
-        spread_preds = _spread_model.get_booster().predict(
-            dm, output_margin=False, iteration_range=(0, 0)
-        )
-        total_preds = _total_model.get_booster().predict(
-            dm, output_margin=False, iteration_range=(0, 0)
-        )
-        # Fallback: use a heuristic based on leaf diversity
-        if spread_leaf.ndim == 2:
-            spread_std = float(np.std(spread_leaf[0]))
-        if total_leaf.ndim == 2:
-            total_std = float(np.std(total_leaf[0]))
+        booster_s = _spread_model.get_booster()
+        booster_t = _total_model.get_booster()
+        n_trees = booster_s.num_boosted_rounds()
+        if n_trees > 1:
+            spread_margins = []
+            total_margins = []
+            for i in range(1, n_trees + 1):
+                pred_s = booster_s.predict(dm, output_margin=True, iteration_range=(0, i))
+                pred_t = booster_t.predict(dm, output_margin=True, iteration_range=(0, i))
+                spread_margins.append(float(pred_s[0]))
+                total_margins.append(float(pred_t[0]))
+            spread_diffs = np.diff(spread_margins)
+            total_diffs = np.diff(total_margins)
+            spread_std = float(np.std(spread_diffs)) * (n_trees ** 0.5) if len(spread_diffs) > 1 else 0.0
+            total_std = float(np.std(total_diffs)) * (n_trees ** 0.5) if len(total_diffs) > 1 else 0.0
     except Exception:
         pass
 

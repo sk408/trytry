@@ -26,6 +26,38 @@ from src.analytics.weight_config import (
 from src.database.db import get_conn
 
 
+def _blend_weight_configs(
+    w_home: Optional[WeightConfig],
+    w_away: Optional[WeightConfig],
+    w_global: WeightConfig,
+) -> WeightConfig:
+    """Blend per-team weights when both exist; otherwise use available config."""
+    if w_home is None and w_away is None:
+        return w_global
+    if w_home is None:
+        return w_away or w_global
+    if w_away is None:
+        return w_home
+    # Both exist: average numeric fields; use one-sided value if key missing in one
+    d_h = w_home.to_dict()
+    d_a = w_away.to_dict()
+    d_g = w_global.to_dict()
+    all_keys = set(d_h) | set(d_a) | set(d_g)
+    blended = {}
+    for k in all_keys:
+        v_h = d_h.get(k)
+        v_a = d_a.get(k)
+        if v_h is not None and v_a is not None:
+            blended[k] = (v_h + v_a) / 2.0
+        elif v_h is not None:
+            blended[k] = v_h
+        elif v_a is not None:
+            blended[k] = v_a
+        else:
+            blended[k] = d_g.get(k, 0.0)
+    return WeightConfig.from_dict(blended)
+
+
 def _get_team_injury_impact(team_id: int, as_of_date: Optional[date] = None) -> dict:
     """Estimate current injury impact for a team from recent player logs.
 
@@ -133,14 +165,12 @@ def predict_matchup(
     """
     gd = game_date or date.today()
 
-    # Check for per-team weight overrides (use home team's overrides if they
-    # exist, otherwise away team's, otherwise global).  This lets the per-team
-    # refinement influence predictions for that team's games.
-    w = (
-        load_team_weights(home_team_id)
-        or load_team_weights(away_team_id)
-        or get_weight_config()
-    )
+    # Blend per-team weight overrides: use both teams' configs when available
+    # to avoid systematic bias (home-only or away-only).
+    w_home = load_team_weights(home_team_id)
+    w_away = load_team_weights(away_team_id)
+    w_global = get_weight_config()
+    w = _blend_weight_configs(w_home, w_away, w_global)
 
     # ============ 1. PLAYER-LEVEL PROJECTIONS ============
     home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
@@ -167,14 +197,16 @@ def predict_matchup(
     if away_tuning:
         away_base_pts += away_tuning["away_pts_correction"]
 
-    # ============ 5. FATIGUE (auto-detected) ============
+    # ============ 5. FATIGUE & REST ============
     home_fatigue = detect_fatigue(home_team_id, gd)
     away_fatigue = detect_fatigue(away_team_id, gd)
     fatigue_adj = home_fatigue["fatigue_penalty"] - away_fatigue["fatigue_penalty"]
+    rest_adj = home_fatigue.get("rest_bonus", 0.0) - away_fatigue.get("rest_bonus", 0.0)
 
     # ============ SPREAD CALCULATION ============
     spread = (home_base_pts - away_base_pts) + home_court
     spread -= fatigue_adj
+    spread += rest_adj
 
     # Turnover differential
     home_to_margin = home_proj.get("turnover_margin", 0)
@@ -214,6 +246,13 @@ def predict_matchup(
     away_hustle = get_hustle_stats(away_team_id)
     hustle_spread_adj = _compute_hustle_spread(home_hustle, away_hustle, w)
     spread += hustle_spread_adj
+
+    # Injury adjustment (base model only; gate when ML active to avoid double-count)
+    if w.ml_ensemble_weight == 0:
+        home_inj = _get_team_injury_impact(home_team_id, as_of_date=gd)
+        away_inj = _get_team_injury_impact(away_team_id, as_of_date=gd)
+        inj_adj = (away_inj["injury_ppg_lost"] - home_inj["injury_ppg_lost"]) * w.injury_ppg_mult
+        spread += inj_adj
 
     # ============ TOTAL CALCULATION ============
     total = home_base_pts + away_base_pts
@@ -257,7 +296,8 @@ def predict_matchup(
         try:
             from src.analytics.ml_model import predict_ml_with_uncertainty, is_ml_available
             if is_ml_available():
-                # Build a PrecomputedGame-like feature dict for ML model
+                home_inj = _get_team_injury_impact(home_team_id, as_of_date=gd)
+                away_inj = _get_team_injury_impact(away_team_id, as_of_date=gd)
                 _ml_feats = _build_ml_features_live(
                     home_proj, away_proj, home_off, away_off, home_def, away_def,
                     home_pace, away_pace, home_court,
@@ -265,6 +305,12 @@ def predict_matchup(
                     home_def_factor_raw, away_def_factor_raw,
                     home_ff, away_ff, home_clutch, away_clutch,
                     home_hustle, away_hustle,
+                    home_rest_bonus=home_fatigue.get("rest_bonus", 0.0),
+                    away_rest_bonus=away_fatigue.get("rest_bonus", 0.0),
+                    home_injury_ppg_lost=home_inj["injury_ppg_lost"],
+                    away_injury_ppg_lost=away_inj["injury_ppg_lost"],
+                    home_injured_count=home_inj["injured_count"],
+                    away_injured_count=away_inj["injured_count"],
                 )
                 ml_spread, ml_total, ml_conf, ml_spread_std, ml_total_std = (
                     predict_ml_with_uncertainty(_ml_feats)
@@ -295,6 +341,7 @@ def predict_matchup(
 
     # ============ 9. RESIDUAL CALIBRATION ============
     spread = _apply_calibration(spread)
+    total = _apply_total_calibration(total)
 
     # ============ DERIVE INDIVIDUAL SCORES ============
     pred_home_score = (total + spread) / 2
@@ -507,6 +554,13 @@ def _build_ml_features_live(
     home_ff: dict, away_ff: dict,
     home_clutch: dict, away_clutch: dict,
     home_hustle: dict, away_hustle: dict,
+    *,
+    home_rest_bonus: float = 0.0,
+    away_rest_bonus: float = 0.0,
+    home_injury_ppg_lost: float = 0.0,
+    away_injury_ppg_lost: float = 0.0,
+    home_injured_count: float = 0.0,
+    away_injured_count: float = 0.0,
 ) -> dict:
     """Build a feature dict compatible with ml_model.extract_features
     from live prediction data.  This mirrors the feature extraction in
@@ -597,15 +651,27 @@ def _build_ml_features_live(
     f["home_loose_balls"] = _s(hh.get("loose_balls_recovered"))
     f["away_loose_balls"] = _s(ah.get("loose_balls_recovered"))
 
+    # Injury and rest (0 when not passed; ML can learn from these at inference)
+    f["home_rest_bonus"] = home_rest_bonus
+    f["away_rest_bonus"] = away_rest_bonus
+    f["diff_rest_bonus"] = home_rest_bonus - away_rest_bonus
+    f["home_injury_ppg_lost"] = home_injury_ppg_lost
+    f["away_injury_ppg_lost"] = away_injury_ppg_lost
+    f["diff_injury_ppg_lost"] = home_injury_ppg_lost - away_injury_ppg_lost
+    f["home_injured_count"] = home_injured_count
+    f["away_injured_count"] = away_injured_count
+    f["diff_injured_count"] = home_injured_count - away_injured_count
+
     return f
 
 
 # Cache for residual calibration (loaded once, refreshed on demand)
 _calibration_cache: list | None = None
+_total_calibration_cache: list | None = None
 
 
 def _load_calibration_bins() -> list:
-    """Load residual calibration from DB (cached)."""
+    """Load spread residual calibration from DB (cached)."""
     global _calibration_cache
     if _calibration_cache is not None:
         return _calibration_cache
@@ -624,10 +690,31 @@ def _load_calibration_bins() -> list:
     return _calibration_cache
 
 
+def _load_total_calibration_bins() -> list:
+    """Load total residual calibration from DB (cached)."""
+    global _total_calibration_cache
+    if _total_calibration_cache is not None:
+        return _total_calibration_cache
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT bin_low, bin_high, avg_residual, sample_count "
+                "FROM residual_calibration_total ORDER BY bin_low"
+            ).fetchall()
+        _total_calibration_cache = [
+            {"bin_low": r[0], "bin_high": r[1], "avg_residual": r[2], "sample_count": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        _total_calibration_cache = []
+    return _total_calibration_cache
+
+
 def reload_calibration_cache() -> None:
     """Force a reload of calibration bins (call after rebuilding)."""
-    global _calibration_cache
+    global _calibration_cache, _total_calibration_cache
     _calibration_cache = None
+    _total_calibration_cache = None
 
 
 def _apply_calibration(spread: float) -> float:
@@ -637,6 +724,15 @@ def _apply_calibration(spread: float) -> float:
         if cal["bin_low"] <= spread < cal["bin_high"] and cal["sample_count"] >= 5:
             return spread - cal["avg_residual"]
     return spread
+
+
+def _apply_total_calibration(total: float) -> float:
+    """Adjust total using saved total residual calibration bins."""
+    bins = _load_total_calibration_bins()
+    for cal in bins:
+        if cal["bin_low"] <= total < cal["bin_high"] and cal["sample_count"] >= 5:
+            return total - cal["avg_residual"]
+    return total
 
 
 def _compute_four_factors_spread(
@@ -790,6 +886,8 @@ class PrecomputedGame:
     away_injury_ppg_lost: float = 0.0
     home_injury_minutes_lost: float = 0.0
     away_injury_minutes_lost: float = 0.0
+    home_rest_bonus: float = 0.0
+    away_rest_bonus: float = 0.0
 
 
 def precompute_game_data(
@@ -871,9 +969,13 @@ def precompute_game_data(
         if not home_pids or not away_pids:
             continue
 
-        # Player projections
-        home_proj = aggregate_projection(home_pids, opponent_team_id=away_id, is_home=True)
-        away_proj = aggregate_projection(away_pids, opponent_team_id=home_id, is_home=False)
+        # Player projections (as_of_date=gd avoids lookahead for ML training)
+        home_proj = aggregate_projection(
+            home_pids, opponent_team_id=away_id, is_home=True, as_of_date=gd
+        )
+        away_proj = aggregate_projection(
+            away_pids, opponent_team_id=home_id, is_home=False, as_of_date=gd
+        )
 
         # Team metrics
         hca = get_home_court_advantage(home_id)
@@ -903,6 +1005,8 @@ def precompute_game_data(
             away_tuning_away_corr=at["away_pts_correction"] if at else 0.0,
             home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
             away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
+            home_rest_bonus=home_fatigue_info.get("rest_bonus", 0.0),
+            away_rest_bonus=away_fatigue_info.get("rest_bonus", 0.0),
             home_off=get_offensive_rating(home_id),
             away_off=get_offensive_rating(away_id),
             home_def=get_defensive_rating(home_id),
@@ -956,11 +1060,12 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
     home_base_pts += g.home_tuning_home_corr
     away_base_pts += g.away_tuning_away_corr
 
-    # Fatigue
+    # Fatigue and rest
     fatigue_adj = g.home_fatigue_penalty - g.away_fatigue_penalty
+    rest_adj = getattr(g, "home_rest_bonus", 0.0) - getattr(g, "away_rest_bonus", 0.0)
 
-    # Spread
-    spread = (home_base_pts - away_base_pts) + g.home_court - fatigue_adj
+    # Spread (no base injury: backtest uses actual roster, so no double-penalty)
+    spread = (home_base_pts - away_base_pts) + g.home_court - fatigue_adj + rest_adj
 
     # Turnover differential
     h_to = g.home_proj.get("turnover_margin", 0)
