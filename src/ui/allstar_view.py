@@ -218,6 +218,129 @@ def _load_all_players() -> List[Dict]:
     ]
 
 
+def _find_player_ids(names: List[str]) -> List[int]:
+    """Look up player IDs by name (fuzzy last-name match)."""
+    with get_conn() as conn:
+        all_rows = conn.execute(
+            "SELECT player_id, name FROM players"
+        ).fetchall()
+    # Build lookup: lowercase name -> player_id
+    name_map = {str(r[1]).lower(): int(r[0]) for r in all_rows}
+    # Also build last-name map for fuzzy matching
+    last_map: Dict[str, int] = {}
+    for r in all_rows:
+        parts = str(r[1]).lower().split()
+        if parts:
+            last_map[parts[-1]] = int(r[0])
+
+    ids = []
+    for name in names:
+        low = name.lower().strip()
+        # Try exact match first
+        if low in name_map:
+            ids.append(name_map[low])
+            continue
+        # Try partial match (name contains search)
+        found = False
+        for full_name, pid in name_map.items():
+            if low in full_name or full_name in low:
+                ids.append(pid)
+                found = True
+                break
+        if found:
+            continue
+        # Try last name only
+        last = low.split()[-1] if low.split() else low
+        if last in last_map:
+            ids.append(last_map[last])
+    return ids
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  2025 All-Star Weekend — Prefill Data
+#  (Participants and betting odds from DraftKings / FanDuel)
+# ════════════════════════════════════════════════════════════════════════
+
+# ASG MVP candidates with DraftKings odds
+ASG_MVP_PLAYERS = [
+    "Stephen Curry", "Shai Gilgeous-Alexander", "Victor Wembanyama",
+    "LeBron James", "Anthony Edwards", "Kevin Durant", "Jayson Tatum",
+    "Jaylen Brown", "Damian Lillard", "Donovan Mitchell", "Nikola Jokic",
+    "Karl-Anthony Towns", "Jalen Brunson", "Cade Cunningham",
+    "Tyler Herro", "Trae Young", "Kyrie Irving", "James Harden",
+    "Jalen Williams", "Pascal Siakam", "Jaren Jackson Jr.",
+    "Darius Garland", "Evan Mobley", "Alperen Sengun",
+]
+ASG_MVP_ODDS: Dict[str, int] = {
+    "Stephen Curry": 500, "Shai Gilgeous-Alexander": 800,
+    "Victor Wembanyama": 800, "LeBron James": 900,
+    "Anthony Edwards": 1000, "Kevin Durant": 1200,
+    "Jayson Tatum": 1200, "Jaylen Brown": 1500,
+    "Damian Lillard": 1500, "Donovan Mitchell": 2000,
+    "Nikola Jokic": 2500, "Karl-Anthony Towns": 2500,
+    "Jalen Brunson": 2500, "Cade Cunningham": 2500,
+    "Tyler Herro": 4000, "Trae Young": 4000,
+    "Kyrie Irving": 4000, "James Harden": 4000,
+    "Jalen Williams": 4000, "Pascal Siakam": 4500,
+    "Jaren Jackson Jr.": 4500, "Darius Garland": 4500,
+    "Evan Mobley": 5500, "Alperen Sengun": 6000,
+}
+
+# 3-Point Contest participants with CBS Sports odds
+THREE_PT_PLAYERS = [
+    "Damian Lillard", "Tyler Herro", "Norman Powell", "Buddy Hield",
+    "Darius Garland", "Cam Johnson", "Jalen Brunson", "Cade Cunningham",
+]
+THREE_PT_ODDS: Dict[str, int] = {
+    "Damian Lillard": 250, "Tyler Herro": 500, "Norman Powell": 500,
+    "Buddy Hield": 550, "Darius Garland": 750, "Cam Johnson": 800,
+    "Jalen Brunson": 900, "Cade Cunningham": 1400,
+}
+
+# Rising Stars rosters
+RISING_STARS_PLAYERS = {
+    "Team Richmond": [
+        "Amen Thompson", "Ausar Thompson", "Bilal Coulibaly",
+        "Scoot Henderson", "Toumani Camara", "Matas Buzelis",
+        "Bub Carrington", "Julian Strawther",
+    ],
+    "Team Mullin": [
+        "Stephon Castle", "Dalton Knecht", "Jaylen Wells",
+        "Keyonte George", "Zach Edey", "Trayce Jackson-Davis", "Ryan Dunn",
+    ],
+    "Team Hardaway": [
+        "Brandin Podziemski", "Jaime Jaquez Jr.", "Gradey Dick",
+        "Anthony Black", "Zaccharie Risacher", "Alex Sarr", "Tristan da Silva",
+    ],
+}
+RISING_STARS_TEAM_ODDS: Dict[str, int] = {
+    "Team Richmond": 130, "Team Mullin": 250,
+    "Team Hardaway": 320,
+}
+
+# All-Star Game team rosters
+ASG_TEAMS = {
+    "Team Shaq (OGs)": [
+        "LeBron James", "Stephen Curry", "Kyrie Irving", "Jayson Tatum",
+        "Kevin Durant", "Damian Lillard", "James Harden", "Jaylen Brown",
+    ],
+    "Team Chuck (Global)": [
+        "Nikola Jokic", "Shai Gilgeous-Alexander", "Victor Wembanyama",
+        "Karl-Anthony Towns", "Donovan Mitchell", "Pascal Siakam",
+        "Alperen Sengun", "Trae Young",
+    ],
+    "Team Kenny (Young Stars)": [
+        "Jalen Brunson", "Anthony Edwards", "Jaren Jackson Jr.",
+        "Jalen Williams", "Darius Garland", "Evan Mobley",
+        "Cade Cunningham", "Tyler Herro",
+    ],
+}
+ASG_TEAM_ODDS: Dict[str, int] = {
+    "Team Shaq (OGs)": 100, "Team Chuck (Global)": 225,
+    "Team Kenny (Young Stars)": 300,
+}
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  Scoring models
 # ════════════════════════════════════════════════════════════════════════
@@ -225,30 +348,70 @@ def _load_all_players() -> List[Dict]:
 def compute_mvp_score(stat: Dict) -> float:
     """Score a player for ASG MVP probability.
 
-    MVP is typically won by the highest scorer on the winning team,
-    with bonus for highlight plays (dunks, 3s) and efficiency.
-    ASG minutes matter — starters get more.
+    Historical ASG MVPs share these traits:
+    - High scoring (almost always 25+ pts in the game)
+    - Highlight plays (blocks, 3-pointers, lobs/dunks)
+    - On the winning team (can't model this, but +/- is a proxy)
+    - "Wow factor" — bigs who shoot 3s, guards who block, etc.
 
-    Weights emphasise scoring volume, efficiency, and star power.
+    The model balances scoring volume, defensive highlights (blocks,
+    steals), two-way versatility, and efficiency.  Blocks are weighted
+    heavily because they're the most dramatic ASG highlight.
     """
     pts = stat.get("ppg", 0)
     fg3 = stat.get("fg3m_pg", 0)
     ast = stat.get("apg", 0)
+    reb = stat.get("rpg", 0)
+    blk = stat.get("bpg", 0)
+    stl = stat.get("spg", 0)
     eff = stat.get("fg_pct", 0) / 100
     ft = stat.get("ft_pct", 0) / 100
     mpg = stat.get("mpg", 0)
+    pm = stat.get("plus_minus", 0)
+    pos = stat.get("position", "")
 
-    # Scoring volume (most important — MVP almost always top scorer)
+    # ── Scoring volume (most important — MVP almost always top scorer)
     score = pts * 2.5
-    # 3-point bonus (highlight factor)
-    score += fg3 * 3.0
-    # Assists (playmaking creates excitement)
-    score += ast * 1.5
-    # Efficiency bonus
-    score += eff * 15
-    score += ft * 5
-    # Minutes proxy for star status / likely ASG minutes
-    score += min(mpg, 36) * 0.5
+
+    # ── Highlight plays ──
+    # Blocks are THE biggest ASG highlight — crowd goes wild
+    score += blk * 8.0
+    # 3-point makes (especially from unexpected positions)
+    score += fg3 * 3.5
+    # Steals → fast-break highlights
+    score += stl * 4.0
+
+    # ── Playmaking (flashy assists = highlights)
+    score += ast * 1.8
+
+    # ── Rebounds (dominance on the boards, especially for bigs)
+    score += reb * 1.0
+
+    # ── Efficiency bonus
+    score += eff * 12
+    score += ft * 4
+
+    # ── Winner proxy (MVP comes from winning team)
+    if pm > 0:
+        score += min(pm, 8) * 1.5
+
+    # ── Minutes proxy for star status / likely ASG minutes
+    score += min(mpg, 36) * 0.4
+
+    # ── "Unicorn" bonus: bigs who shoot 3s get extra highlight value
+    # (e.g., Wembanyama, KAT — a 7-footer draining 3s is electric)
+    is_big = any(p in pos.upper() for p in ("C", "CENTER", "PF", "FORWARD"))
+    if is_big and fg3 >= 1.0:
+        score += fg3 * 4.0  # extra bonus on top of base 3PT credit
+
+    # ── Two-way versatility bonus (pts + blk + ast + stl all above thresholds)
+    versatile_count = sum([
+        pts >= 20, blk >= 1.5, ast >= 3.0, stl >= 1.0, reb >= 8.0,
+    ])
+    if versatile_count >= 4:
+        score += 15.0  # elite two-way players dominate ASG format
+    elif versatile_count >= 3:
+        score += 8.0
 
     return max(0, score)
 
@@ -604,16 +767,24 @@ class MVPPanel(QWidget):
         layout.addWidget(header)
 
         desc = QLabel(
-            "MVP is typically the highest scorer on the winning team. "
-            "Model weights: scoring volume, 3PT makes, assists, efficiency, and star minutes."
+            "Model factors: scoring volume, blocks (biggest ASG highlight), 3PT makes, "
+            "assists, steals, rebounds, efficiency, two-way versatility, and unicorn "
+            "bonus (bigs who shoot 3s like Wemby/KAT get extra credit)."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
-        # Player picker
+        # Player picker + prefill button
+        picker_row = QHBoxLayout()
         self._picker = PlayerPicker("MVP Candidates", max_players=24)
-        layout.addWidget(self._picker)
+        picker_row.addWidget(self._picker, 1)
+        prefill_btn = QPushButton("Load 2025 All-Stars + Odds")
+        prefill_btn.setToolTip("Pre-fill with actual 2025 ASG participants and DraftKings odds")
+        prefill_btn.setFixedWidth(200)
+        prefill_btn.clicked.connect(self._prefill)
+        picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(picker_row)
 
         # Recent games filter
         filter_row = QHBoxLayout()
@@ -665,10 +836,20 @@ class MVPPanel(QWidget):
     def init_data(self) -> None:
         self._picker.load_players()
 
+    def _prefill(self) -> None:
+        """Load 2025 All-Star participants and betting odds."""
+        ids = _find_player_ids(ASG_MVP_PLAYERS)
+        if ids:
+            self._picker.set_player_ids(ids)
+            self._prefill_odds = True  # flag to auto-fill odds after stats load
+            self._analyze()
+        else:
+            self._insights.setText("Could not find All-Star players in database. Run a data sync first.")
+
     def _analyze(self) -> None:
         ids = self._picker.selected_ids()
         if not ids:
-            self._insights.setText("Add players using the search above to begin analysis.")
+            self._insights.setText("Add players using the search above, or click 'Load 2025 All-Stars + Odds'.")
             return
         recent = self._recent_spin.value()
         self._worker = _StatsWorker(ids, recent)
@@ -679,14 +860,39 @@ class MVPPanel(QWidget):
     def _on_stats_loaded(self, stats: List[Dict]) -> None:
         self._stats = stats
         self._odds_input.set_players(stats)
+        # Auto-fill odds from prefill data
+        if getattr(self, "_prefill_odds", False):
+            self._prefill_odds = False
+            self._auto_fill_odds(stats, ASG_MVP_ODDS)
         self._refresh_table()
+
+    def _auto_fill_odds(self, stats: List[Dict], odds_dict: Dict[str, int]) -> None:
+        """Set odds spin boxes from the prefill odds dictionary."""
+        for s in stats:
+            name = s["name"]
+            # Try exact match, then partial
+            odds_val = odds_dict.get(name, 0)
+            if not odds_val:
+                for oname, oval in odds_dict.items():
+                    if oname.lower() in name.lower() or name.lower() in oname.lower():
+                        odds_val = oval
+                        break
+                    # Last name match
+                    if oname.split()[-1].lower() == name.split()[-1].lower():
+                        odds_val = oval
+                        break
+            if odds_val and s["player_id"] in self._odds_input._entries:
+                self._odds_input._entries[s["player_id"]].setValue(odds_val)
 
     def _refresh_table(self) -> None:
         odds = self._odds_input.get_odds_map()
         self._table.populate(
             self._stats,
             compute_mvp_score,
-            lambda s: f"{s['ppg']:.1f} PPG / {s['fg3m_pg']:.1f} 3PM / {s['apg']:.1f} APG",
+            lambda s: (
+                f"{s['ppg']:.1f}p / {s['bpg']:.1f}b / {s['fg3m_pg']:.1f}3 / "
+                f"{s['apg']:.1f}a / {s['rpg']:.1f}r"
+            ),
             odds,
         )
         # Generate insights
@@ -695,9 +901,11 @@ class MVPPanel(QWidget):
             best = top[0]
             self._insights.setText(
                 f"Top pick: {best['name']} ({best['team_abbr']}) — "
-                f"{best['ppg']:.1f} PPG, {best['fg3m_pg']:.1f} 3PM/G, "
-                f"{best['fg_pct']:.1f}% FG. "
-                f"Historical ASG MVPs average 25+ points with high efficiency."
+                f"{best['ppg']:.1f} PPG, {best['bpg']:.1f} BPG, "
+                f"{best['fg3m_pg']:.1f} 3PM/G, {best['apg']:.1f} APG, "
+                f"{best['rpg']:.1f} RPG. "
+                f"ASG MVP favors highlight scorers + two-way dominance. "
+                f"Blocks and 3s from bigs are the biggest crowd-pleasers."
             )
 
 
@@ -721,8 +929,14 @@ class ThreePointPanel(QWidget):
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
+        picker_row = QHBoxLayout()
         self._picker = PlayerPicker("3PT Contestants", max_players=8)
-        layout.addWidget(self._picker)
+        picker_row.addWidget(self._picker, 1)
+        prefill_btn = QPushButton("Load 2025 Contest + Odds")
+        prefill_btn.setFixedWidth(200)
+        prefill_btn.clicked.connect(self._prefill)
+        picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(picker_row)
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Recent games:"))
@@ -769,10 +983,19 @@ class ThreePointPanel(QWidget):
     def init_data(self) -> None:
         self._picker.load_players()
 
+    def _prefill(self) -> None:
+        ids = _find_player_ids(THREE_PT_PLAYERS)
+        if ids:
+            self._picker.set_player_ids(ids)
+            self._prefill_odds = True
+            self._analyze()
+        else:
+            self._insights.setText("Could not find 3PT contest players in database.")
+
     def _analyze(self) -> None:
         ids = self._picker.selected_ids()
         if not ids:
-            self._insights.setText("Add 3-point contest participants to begin analysis.")
+            self._insights.setText("Add 3-point contest participants or click 'Load 2025 Contest + Odds'.")
             return
         recent = self._recent_spin.value()
         self._worker = _StatsWorker(ids, recent)
@@ -783,7 +1006,22 @@ class ThreePointPanel(QWidget):
     def _on_stats_loaded(self, stats: List[Dict]) -> None:
         self._stats = stats
         self._odds_input.set_players(stats)
+        if getattr(self, "_prefill_odds", False):
+            self._prefill_odds = False
+            self._auto_fill_odds(stats, THREE_PT_ODDS)
         self._refresh_table()
+
+    def _auto_fill_odds(self, stats: List[Dict], odds_dict: Dict[str, int]) -> None:
+        for s in stats:
+            name = s["name"]
+            odds_val = odds_dict.get(name, 0)
+            if not odds_val:
+                for oname, oval in odds_dict.items():
+                    if oname.split()[-1].lower() == name.split()[-1].lower():
+                        odds_val = oval
+                        break
+            if odds_val and s["player_id"] in self._odds_input._entries:
+                self._odds_input._entries[s["player_id"]].setValue(odds_val)
 
     def _refresh_table(self) -> None:
         odds = self._odds_input.get_odds_map()
@@ -824,8 +1062,14 @@ class RisingStarsPanel(QWidget):
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
+        picker_row = QHBoxLayout()
         self._picker = PlayerPicker("Rising Stars", max_players=24)
-        layout.addWidget(self._picker)
+        picker_row.addWidget(self._picker, 1)
+        prefill_btn = QPushButton("Load 2025 Rosters")
+        prefill_btn.setFixedWidth(200)
+        prefill_btn.clicked.connect(self._prefill)
+        picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(picker_row)
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Recent games:"))
@@ -872,10 +1116,21 @@ class RisingStarsPanel(QWidget):
     def init_data(self) -> None:
         self._picker.load_players()
 
+    def _prefill(self) -> None:
+        all_rising = []
+        for team_players in RISING_STARS_PLAYERS.values():
+            all_rising.extend(team_players)
+        ids = _find_player_ids(all_rising)
+        if ids:
+            self._picker.set_player_ids(ids)
+            self._analyze()
+        else:
+            self._insights.setText("Could not find Rising Stars players in database.")
+
     def _analyze(self) -> None:
         ids = self._picker.selected_ids()
         if not ids:
-            self._insights.setText("Add Rising Stars participants to begin analysis.")
+            self._insights.setText("Add Rising Stars participants or click 'Load 2025 Rosters'.")
             return
         recent = self._recent_spin.value()
         self._worker = _StatsWorker(ids, recent)
@@ -925,22 +1180,42 @@ class AllStarGamePanel(QWidget):
         desc = QLabel(
             "Compare rosters for each All-Star team. Model aggregates scoring, "
             "shooting, playmaking, and defensive metrics to project team strength. "
-            "Enter each team's roster below."
+            "Use prefill buttons to load 2025 ASG team matchups."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
+        # Quick-load buttons for 2025 ASG matchups
+        prefill_row = QHBoxLayout()
+        prefill_lbl = QLabel("Quick Load:")
+        prefill_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        prefill_row.addWidget(prefill_lbl)
+        for team_name in ASG_TEAMS:
+            btn = QPushButton(team_name)
+            btn.setFixedWidth(170)
+            btn.setToolTip(f"Load {team_name} roster")
+            btn.clicked.connect(lambda checked, tn=team_name: self._quick_load_team(tn))
+            prefill_row.addWidget(btn)
+        load_all_btn = QPushButton("Load Semifinal 1 (Shaq vs Chuck)")
+        load_all_btn.clicked.connect(self._prefill_semi1)
+        prefill_row.addWidget(load_all_btn)
+        load_all_btn2 = QPushButton("Load Semifinal 2 (Shaq vs Kenny)")
+        load_all_btn2.clicked.connect(self._prefill_semi2)
+        prefill_row.addWidget(load_all_btn2)
+        prefill_row.addStretch()
+        layout.addLayout(prefill_row)
+
         # Two team pickers side by side
         teams_row = QHBoxLayout()
 
-        team1_box = QGroupBox("Team 1 (e.g. East / Team LeBron)")
+        team1_box = QGroupBox("Team 1")
         t1_layout = QVBoxLayout()
         self._team1_picker = PlayerPicker("Team 1", max_players=12)
         t1_layout.addWidget(self._team1_picker)
         team1_box.setLayout(t1_layout)
 
-        team2_box = QGroupBox("Team 2 (e.g. West / Team Giannis)")
+        team2_box = QGroupBox("Team 2")
         t2_layout = QVBoxLayout()
         self._team2_picker = PlayerPicker("Team 2", max_players=12)
         t2_layout.addWidget(self._team2_picker)
@@ -1047,6 +1322,39 @@ class AllStarGamePanel(QWidget):
     def init_data(self) -> None:
         self._team1_picker.load_players()
         self._team2_picker.load_players()
+
+    def _quick_load_team(self, team_name: str) -> None:
+        """Load a specific ASG team into Team 1 picker."""
+        players = ASG_TEAMS.get(team_name, [])
+        if players:
+            ids = _find_player_ids(players)
+            if ids:
+                self._team1_picker.set_player_ids(ids)
+
+    def _prefill_semi1(self) -> None:
+        """Load Semifinal 1: Team Shaq vs Team Chuck."""
+        t1 = _find_player_ids(ASG_TEAMS.get("Team Shaq (OGs)", []))
+        t2 = _find_player_ids(ASG_TEAMS.get("Team Chuck (Global)", []))
+        if t1:
+            self._team1_picker.set_player_ids(t1)
+        if t2:
+            self._team2_picker.set_player_ids(t2)
+        # Set odds
+        self._team1_odds.setValue(ASG_TEAM_ODDS.get("Team Shaq (OGs)", 0))
+        self._team2_odds.setValue(ASG_TEAM_ODDS.get("Team Chuck (Global)", 0))
+        self._analyze()
+
+    def _prefill_semi2(self) -> None:
+        """Load Semifinal 2: Team Shaq vs Team Kenny."""
+        t1 = _find_player_ids(ASG_TEAMS.get("Team Shaq (OGs)", []))
+        t2 = _find_player_ids(ASG_TEAMS.get("Team Kenny (Young Stars)", []))
+        if t1:
+            self._team1_picker.set_player_ids(t1)
+        if t2:
+            self._team2_picker.set_player_ids(t2)
+        self._team1_odds.setValue(ASG_TEAM_ODDS.get("Team Shaq (OGs)", 0))
+        self._team2_odds.setValue(ASG_TEAM_ODDS.get("Team Kenny (Young Stars)", 0))
+        self._analyze()
 
     def _analyze(self) -> None:
         t1_ids = self._team1_picker.selected_ids()
