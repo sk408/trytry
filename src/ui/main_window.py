@@ -25,6 +25,7 @@ from src.ui.live_view import LiveView
 from src.ui.matchup_view import MatchupView
 from src.ui.notification_widget import NotificationBell, NotificationPanel
 from src.ui.players_view import PlayersView
+from src.ui.allstar_view import AllStarView
 from src.ui.schedule_view import ScheduleView
 
 log = logging.getLogger(__name__)
@@ -223,6 +224,43 @@ QDoubleSpinBox, QSpinBox {
     border: 1px solid #2a3f55;
     padding: 5px 8px;
     border-radius: 6px;
+    min-height: 28px;
+}
+QDoubleSpinBox::up-button, QSpinBox::up-button,
+QDoubleSpinBox::down-button, QSpinBox::down-button {
+    width: 24px;
+    height: 14px;
+    subcontrol-origin: border;
+    border: none;
+    background: #243b53;
+}
+QDoubleSpinBox::up-button, QSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 5px;
+    border-bottom: 1px solid #2a3f55;
+}
+QDoubleSpinBox::down-button, QSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 5px;
+    border-top: 1px solid #2a3f55;
+}
+QDoubleSpinBox::up-button:hover, QSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {
+    background: #3b82f6;
+}
+QDoubleSpinBox::up-arrow, QSpinBox::up-arrow {
+    width: 10px; height: 10px;
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 6px solid #e2e8f0;
+}
+QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {
+    width: 10px; height: 10px;
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #e2e8f0;
 }
 QCheckBox {
     spacing: 6px;
@@ -365,6 +403,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.schedule_view, "  Schedule  ")
         self.tabs.addTab(LiveView(), "  Live  ")
         self.tabs.addTab(GamecastView(), "  Gamecast  ")
+        self.tabs.addTab(AllStarView(), "  All-Star  ")
         self.tabs.addTab(AccuracyView(), "  Accuracy  ")
         self.tabs.addTab(AutotuneView(), "  Autotune  ")
         self.tabs.addTab(AdminView(), "  Admin  ")
