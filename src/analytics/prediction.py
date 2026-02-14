@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional
 
 from src.analytics.stats_engine import (
     aggregate_projection,
@@ -112,6 +112,8 @@ def predict_matchup(
     espn_home_win_pct: float = 0.0,
     espn_away_win_pct: float = 0.0,
     _collect_features: dict | None = None,
+    home_player_weights: Optional[Dict[int, float]] = None,
+    away_player_weights: Optional[Dict[int, float]] = None,
 ) -> MatchupPrediction:
     """
     Predict game spread and total using comprehensive multi-factor model.
@@ -149,8 +151,14 @@ def predict_matchup(
         w = get_weight_config()
 
     # ============ 1. PLAYER-LEVEL PROJECTIONS ============
-    home_proj = aggregate_projection(home_players, opponent_team_id=away_team_id, is_home=True)
-    away_proj = aggregate_projection(away_players, opponent_team_id=home_team_id, is_home=False)
+    home_proj = aggregate_projection(
+        home_players, opponent_team_id=away_team_id, is_home=True,
+        player_weights=home_player_weights,
+    )
+    away_proj = aggregate_projection(
+        away_players, opponent_team_id=home_team_id, is_home=False,
+        player_weights=away_player_weights,
+    )
 
     # ============ 2. HOME COURT ADVANTAGE ============
     if home_court is None:
@@ -279,6 +287,18 @@ def predict_matchup(
     # ============ 8. ML ENSEMBLE BLENDING ============
     ml_spread_std = 0.0
     ml_total_std = 0.0
+
+    # Season-phase: detect how many games each team has played.
+    # Early-season (< 15 games) = noisier data, so we dampen ML weight.
+    _home_gp = 0
+    _away_gp = 0
+    try:
+        from src.analytics.backtester import get_team_profile
+        _home_gp = get_team_profile(home_team_id, gd).get("games", 0)
+        _away_gp = get_team_profile(away_team_id, gd).get("games", 0)
+    except Exception:
+        pass
+
     if w.ml_ensemble_weight > 0:
         try:
             from src.analytics.ml_model import predict_ml_with_uncertainty, is_ml_available
@@ -298,6 +318,15 @@ def predict_matchup(
                 if ml_conf > 0.3:
                     base_weight = 1.0 - w.ml_ensemble_weight
                     ml_wt = w.ml_ensemble_weight
+
+                    # Early-season dampening: when either team has < 15 games,
+                    # reduce ML influence proportionally (stats are unreliable).
+                    min_gp = min(_home_gp, _away_gp)
+                    if 0 < min_gp < 15:
+                        season_factor = min_gp / 15.0  # linear ramp 0→1
+                        ml_wt *= season_factor
+                        base_weight = 1.0 - ml_wt
+
                     # Dampen ML when it disagrees strongly with base
                     if abs(ml_spread - spread) > w.ml_disagree_threshold:
                         ml_wt *= w.ml_disagree_damp
@@ -838,6 +867,15 @@ class PrecomputedGame:
     away_injury_ppg_lost: float = 0.0
     home_injury_minutes_lost: float = 0.0
     away_injury_minutes_lost: float = 0.0
+    # Return-from-injury discount (team-average across returning players)
+    home_return_discount: float = 1.0
+    away_return_discount: float = 1.0
+    # Season-phase: games played by each team (for early-season noise detection)
+    home_games_played: int = 0
+    away_games_played: int = 0
+    # Roster change detection
+    home_roster_changed: bool = False
+    away_roster_changed: bool = False
 
 
 def precompute_game_data(
@@ -919,9 +957,9 @@ def precompute_game_data(
         if not home_pids or not away_pids:
             continue
 
-        # Player projections
-        home_proj = aggregate_projection(home_pids, opponent_team_id=away_id, is_home=True)
-        away_proj = aggregate_projection(away_pids, opponent_team_id=home_id, is_home=False)
+        # Player projections (as_of_date=gd prevents lookahead bias in ML training)
+        home_proj = aggregate_projection(home_pids, opponent_team_id=away_id, is_home=True, as_of_date=gd)
+        away_proj = aggregate_projection(away_pids, opponent_team_id=home_id, is_home=False, as_of_date=gd)
 
         # Team metrics
         hca = get_home_court_advantage(home_id)
@@ -935,6 +973,25 @@ def precompute_game_data(
         # Tuning
         ht = get_team_tuning(home_id)
         at = get_team_tuning(away_id)
+
+        # Games played (season-phase awareness)
+        try:
+            home_gp = get_team_profile(home_id, gd).get("games", 0)
+        except Exception:
+            home_gp = 0
+        try:
+            away_gp = get_team_profile(away_id, gd).get("games", 0)
+        except Exception:
+            away_gp = 0
+
+        # Roster change detection
+        try:
+            from src.analytics.stats_engine import detect_roster_change
+            home_rc = detect_roster_change(home_id).get("high_impact", False)
+            away_rc = detect_roster_change(away_id).get("high_impact", False)
+        except Exception:
+            home_rc = False
+            away_rc = False
 
         precomputed.append(PrecomputedGame(
             game_date=gd,
@@ -969,6 +1026,10 @@ def precompute_game_data(
             away_injury_ppg_lost=away_injury["injury_ppg_lost"],
             home_injury_minutes_lost=home_injury["injury_minutes_lost"],
             away_injury_minutes_lost=away_injury["injury_minutes_lost"],
+            home_games_played=home_gp,
+            away_games_played=away_gp,
+            home_roster_changed=home_rc,
+            away_roster_changed=away_rc,
         ))
 
     progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")
@@ -1093,6 +1154,16 @@ def predict_from_precomputed(g: "PrecomputedGame", w: "WeightConfig") -> tuple[f
                 if ml_conf > 0.3:
                     base_weight = 1.0 - w.ml_ensemble_weight
                     ml_wt = w.ml_ensemble_weight
+
+                    # Early-season dampening (mirrors predict_matchup logic)
+                    min_gp = min(
+                        getattr(g, "home_games_played", 82),
+                        getattr(g, "away_games_played", 82),
+                    )
+                    if 0 < min_gp < 15:
+                        ml_wt *= min_gp / 15.0
+                        base_weight = 1.0 - ml_wt
+
                     if abs(ml_spread - spread) > w.ml_disagree_threshold:
                         ml_wt *= w.ml_disagree_damp
                         base_weight = 1.0 - ml_wt

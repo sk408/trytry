@@ -197,6 +197,36 @@ def run_full_pipeline(
     if _check_cancel():
         return summary
 
+    # ── Step 6b: Roster change detection (invalidate stale autotune) ──
+    progress(_step_header(7, TOTAL_STEPS, "Roster change detection"))
+    t0 = time.perf_counter()
+    try:
+        from src.analytics.stats_engine import detect_roster_change
+        from src.analytics.autotune import clear_tuning
+        from src.database.db import get_conn as _get_conn
+        with _get_conn() as _conn:
+            team_rows = _conn.execute("SELECT team_id, abbreviation FROM teams").fetchall()
+        cleared_teams = []
+        for t_row in team_rows:
+            tid, abbr = int(t_row[0]), str(t_row[1])
+            rc = detect_roster_change(tid)
+            if rc["high_impact"]:
+                clear_tuning(tid)
+                cleared_teams.append(abbr)
+                progress(f"  {abbr}: high-impact roster change — autotune cleared")
+        if cleared_teams:
+            progress(f"  Cleared autotune for {len(cleared_teams)} teams: {', '.join(cleared_teams)}")
+        else:
+            progress("  No high-impact roster changes detected")
+    except Exception as exc:
+        progress(f"  Roster change detection error: {exc}")
+    summary["steps"]["roster_change"] = {
+        "status": "done",
+        "seconds": round(time.perf_counter() - t0, 1),
+    }
+    if _check_cancel():
+        return summary
+
     # ── Step 7: Autotune all teams ──
     if not force_rerun and is_step_fresh(state, "autotune") and not new_after_sync:
         _skipped(7, TOTAL_STEPS, "Autotune all teams")

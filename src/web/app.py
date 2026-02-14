@@ -145,13 +145,41 @@ def _team_list() -> List[dict]:
     return team_cache.team_list()
 
 
-def _team_players(team_id: int) -> List[int]:
+def _team_players(team_id: int) -> tuple[List[int], dict[int, float]]:
+    """Return (player_ids, player_weights) using play_probability >= 0.3."""
+    PLAY_PROB_THRESHOLD = 0.3
+    pids: List[int] = []
+    pw: dict[int, float] = {}
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT player_id FROM players WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)",
+            "SELECT player_id, is_injured, injury_note FROM players WHERE team_id = ?",
             (team_id,),
         ).fetchall()
-    return [int(pid) for (pid,) in rows]
+        for r in rows:
+            pid, is_injured = int(r[0]), r[1]
+            injury_note = r[2] if len(r) > 2 else None
+            if not is_injured:
+                pids.append(pid)
+                pw[pid] = 1.0
+            else:
+                try:
+                    from src.analytics.injury_intelligence import compute_play_probability
+                    from src.data.sync_service import _normalise_status_level, _extract_injury_keyword
+                    note = injury_note or ""
+                    status_raw = note.split(":")[0].strip() if ":" in note else note
+                    injury_text = note.split(":", 1)[1].strip() if ":" in note else note
+                    if "(" in injury_text:
+                        injury_text = injury_text[:injury_text.rfind("(")].strip()
+                    status_level = _normalise_status_level(status_raw)
+                    keyword = _extract_injury_keyword(injury_text)
+                    prob_result = compute_play_probability(pid, "", status_level, keyword, conn)
+                    pp = prob_result.composite_probability
+                except Exception:
+                    pp = 0.0
+                if pp >= PLAY_PROB_THRESHOLD:
+                    pids.append(pid)
+                    pw[pid] = pp
+    return pids, pw
 
 
 def _run_with_progress(func, *, progress_label: str) -> tuple[str, List[str]]:
@@ -938,15 +966,30 @@ async def matchups(request: Request, home_team_id: int | None = None, away_team_
             )
 
             if home_stats.players and away_stats.players:
-                # Use full prediction engine with all advanced factors
-                home_player_ids = [p.player_id for p in home_stats.players if not p.is_injured]
-                away_player_ids = [p.player_id for p in away_stats.players if not p.is_injured]
+                # Use play_probability for roster selection (>= 0.3)
+                PLAY_PROB_THRESHOLD = 0.3
+                home_player_ids = []
+                home_pw: dict[int, float] = {}
+                for p in home_stats.players:
+                    pp = getattr(p, "play_probability", 0.0 if p.is_injured else 1.0)
+                    if pp >= PLAY_PROB_THRESHOLD:
+                        home_player_ids.append(p.player_id)
+                        home_pw[p.player_id] = pp
+                away_player_ids = []
+                away_pw: dict[int, float] = {}
+                for p in away_stats.players:
+                    pp = getattr(p, "play_probability", 0.0 if p.is_injured else 1.0)
+                    if pp >= PLAY_PROB_THRESHOLD:
+                        away_player_ids.append(p.player_id)
+                        away_pw[p.player_id] = pp
                 full_pred = await asyncio.to_thread(
                     predict_matchup,
                     home_team_id=home_team_id,
                     away_team_id=away_team_id,
                     home_players=home_player_ids,
                     away_players=away_player_ids,
+                    home_player_weights=home_pw,
+                    away_player_weights=away_pw,
                 )
                 prediction = {
                     "predicted_spread": full_pred.predicted_spread,
@@ -1845,8 +1888,8 @@ def _get_our_prediction(home_abbr: str, away_abbr: str) -> Optional[dict]:
         return None
     
     try:
-        home_players = _team_players(home_id)
-        away_players = _team_players(away_id)
+        home_players, home_pw = _team_players(home_id)
+        away_players, away_pw = _team_players(away_id)
         
         if not home_players or not away_players:
             return None
@@ -1856,6 +1899,8 @@ def _get_our_prediction(home_abbr: str, away_abbr: str) -> Optional[dict]:
             away_team_id=away_id,
             home_players=home_players,
             away_players=away_players,
+            home_player_weights=home_pw,
+            away_player_weights=away_pw,
         )
         
         # Calculate predicted final scores

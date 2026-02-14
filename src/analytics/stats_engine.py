@@ -641,6 +641,7 @@ def player_splits(
     opponent_team_id: Optional[int] = None,
     is_home: Optional[bool] = None,
     recent_games: Optional[int] = 10,
+    as_of_date: Optional[date] = None,
 ) -> Dict[str, float]:
     """
     Get player stats splits with extended metrics.
@@ -649,6 +650,10 @@ def player_splits(
     - Base: overall recent games           (50% weight)
     - Home/away split if available         (25% weight, else folded into base)
     - Vs-opponent split if available       (25% weight, scaled by sample size)
+
+    When *as_of_date* is provided, only games **before** that date are used.
+    This prevents lookahead bias in ML training (features for game N must not
+    include data from game N or later).
 
     Returns comprehensive stats including shooting efficiency and defensive stats.
     """
@@ -665,6 +670,15 @@ def player_splits(
     df = _load_player_df(player_id)
     if df.empty:
         return empty
+
+    # Point-in-time filter: only use games strictly before as_of_date.
+    # This ensures ML training features match what would be available at
+    # prediction time (no future data leakage).
+    if as_of_date is not None and "game_date" in df.columns:
+        cutoff = pd.Timestamp(as_of_date)
+        df = df[df["game_date"] < cutoff]
+        if df.empty:
+            return empty
 
     # ---- helpers ----
     _DECAY = 0.9  # per-game exponential decay factor for recency weighting
@@ -793,9 +807,17 @@ def aggregate_projection(
     opponent_team_id: Optional[int] = None,
     is_home: Optional[bool] = None,
     recent_games: int = 10,
+    as_of_date: Optional[date] = None,
+    player_weights: Optional[Dict[int, float]] = None,
 ) -> Dict[str, float]:
     """
     Aggregate player stats for team projection with extended metrics.
+
+    When *as_of_date* is provided, only games before that date are used
+    (prevents lookahead bias in ML training).
+
+    When *player_weights* is provided, each player's counting stats are
+    scaled by their weight (e.g., play_probability) before accumulating.
     
     Returns:
         Dict with team totals for all stats plus efficiency metrics.
@@ -816,9 +838,28 @@ def aggregate_projection(
             opponent_team_id=opponent_team_id,
             is_home=is_home,
             recent_games=recent_games,
+            as_of_date=as_of_date,
         )
+        # Scale by play probability when player_weights provided
+        weight = 1.0
+        if player_weights is not None:
+            weight = player_weights.get(pid, 1.0)
+
+        # Return-from-injury discount: players returning after missed games
+        # perform below their average (rust, conditioning, rhythm).
+        # Discount: 3% per game missed, capped at 15% (i.e. minimum 0.85 multiplier).
+        if as_of_date is not None:
+            try:
+                from src.analytics.injury_history import get_games_missed_streak
+                missed = get_games_missed_streak(pid, as_of_date)
+                if missed > 0:
+                    return_discount = max(0.85, 1.0 - 0.03 * missed)
+                    weight *= return_discount
+            except Exception:
+                pass  # injury_history table may not exist yet
+
         for k in totals:
-            totals[k] = totals[k] + splits.get(k, 0.0)
+            totals[k] = totals[k] + splits.get(k, 0.0) * weight
 
     # ---- MINUTE NORMALIZATION ----
     # A game has 240 player-minutes (5 players × 48 min).
@@ -1350,3 +1391,102 @@ def get_scheduled_games(include_future_days: int = 14) -> List[Dict]:
     # Sort by date ascending (today first), then by game time
     games.sort(key=lambda g: (str(g.get("game_date", "")), str(g.get("game_time", ""))))
     return games[:100]
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Roster change detection
+# ════════════════════════════════════════════════════════════════════════
+
+def detect_roster_change(
+    team_id: int,
+    lookback_games: int = 5,
+) -> Dict[str, object]:
+    """Compare recent game rosters to current roster to detect significant changes.
+
+    Looks at the set of player IDs who appeared in the team's last
+    *lookback_games* games (from ``player_stats``) and compares with the
+    current ``players`` table.
+
+    Returns::
+
+        {
+            "changed": bool,          # True if players were added or removed
+            "players_added": [int],   # player_ids now on roster but not in recent games
+            "players_removed": [int], # player_ids in recent games but not on roster
+            "high_impact": bool,      # any added/removed player averaged 20+ MPG
+        }
+    """
+    with get_conn() as conn:
+        # Current roster
+        cur_rows = conn.execute(
+            "SELECT player_id FROM players WHERE team_id = ?",
+            (team_id,),
+        ).fetchall()
+        current_pids = {r[0] for r in cur_rows}
+
+        # Recent game participants: last N distinct game dates for this team
+        recent_dates = conn.execute(
+            """
+            SELECT DISTINCT ps.game_date
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ?
+            ORDER BY ps.game_date DESC
+            LIMIT ?
+            """,
+            (team_id, lookback_games),
+        ).fetchall()
+
+        if not recent_dates:
+            return {
+                "changed": False,
+                "players_added": [],
+                "players_removed": [],
+                "high_impact": False,
+            }
+
+        date_list = [r[0] for r in recent_dates]
+        placeholders = ",".join("?" for _ in date_list)
+
+        recent_rows = conn.execute(
+            f"""
+            SELECT DISTINCT ps.player_id, AVG(ps.minutes) as avg_mpg
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.game_date IN ({placeholders})
+            GROUP BY ps.player_id
+            """,
+            [team_id] + date_list,
+        ).fetchall()
+
+        recent_pids = {r[0] for r in recent_rows}
+        recent_mpg = {r[0]: float(r[1] or 0) for r in recent_rows}
+
+    added = list(current_pids - recent_pids)
+    removed = list(recent_pids - current_pids)
+
+    # Check if any changed player was high-impact (20+ MPG)
+    high_impact = False
+    for pid in removed:
+        if recent_mpg.get(pid, 0) >= 20.0:
+            high_impact = True
+            break
+    if not high_impact:
+        # For added players, check their overall average from any team
+        if added:
+            with get_conn() as conn:
+                for pid in added:
+                    row = conn.execute(
+                        "SELECT AVG(minutes) FROM player_stats WHERE player_id = ?",
+                        (pid,),
+                    ).fetchone()
+                    if row and row[0] and float(row[0]) >= 20.0:
+                        high_impact = True
+                        break
+
+    return {
+        "changed": bool(added or removed),
+        "players_added": added,
+        "players_removed": removed,
+        "high_impact": high_impact,
+    }

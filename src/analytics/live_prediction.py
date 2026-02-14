@@ -119,22 +119,49 @@ def _cached_pregame(
     """
     from src.analytics.prediction import predict_matchup
 
-    # Gather active (non-injured) player IDs
+    # Gather roster with play probabilities instead of binary is_injured.
+    # Players with play_probability >= 0.3 are included, weighted by that
+    # probability in aggregate_projection.
+    PLAY_PROB_THRESHOLD = 0.3
+    home_pids: list[int] = []
+    away_pids: list[int] = []
+    home_pw: dict[int, float] = {}
+    away_pw: dict[int, float] = {}
+
     with get_conn() as conn:
-        home_pids = [
-            r[0] for r in conn.execute(
-                "SELECT player_id FROM players "
-                "WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)",
-                (home_team_id,),
+        for team_id, pids, pw in [
+            (home_team_id, home_pids, home_pw),
+            (away_team_id, away_pids, away_pw),
+        ]:
+            rows = conn.execute(
+                "SELECT player_id, is_injured, injury_note FROM players "
+                "WHERE team_id = ?",
+                (team_id,),
             ).fetchall()
-        ]
-        away_pids = [
-            r[0] for r in conn.execute(
-                "SELECT player_id FROM players "
-                "WHERE team_id = ? AND (is_injured = 0 OR is_injured IS NULL)",
-                (away_team_id,),
-            ).fetchall()
-        ]
+            for r in rows:
+                pid, is_injured, injury_note = r[0], r[1], r[2] if len(r) > 2 else None
+                if not is_injured:
+                    pids.append(pid)
+                    pw[pid] = 1.0
+                else:
+                    # Compute play probability for injured players
+                    try:
+                        from src.analytics.injury_intelligence import compute_play_probability
+                        from src.data.sync_service import _normalise_status_level, _extract_injury_keyword
+                        note = injury_note or ""
+                        status_raw = note.split(":")[0].strip() if ":" in note else note
+                        injury_text = note.split(":", 1)[1].strip() if ":" in note else note
+                        if "(" in injury_text:
+                            injury_text = injury_text[:injury_text.rfind("(")].strip()
+                        status_level = _normalise_status_level(status_raw)
+                        keyword = _extract_injury_keyword(injury_text)
+                        prob_result = compute_play_probability(pid, "", status_level, keyword, conn)
+                        pp = prob_result.composite_probability
+                    except Exception:
+                        pp = 0.0
+                    if pp >= PLAY_PROB_THRESHOLD:
+                        pids.append(pid)
+                        pw[pid] = pp
 
     if not home_pids or not away_pids:
         return 110.0, 110.0, 220.0, 0.0
@@ -145,6 +172,8 @@ def _cached_pregame(
         home_players=home_pids,
         away_players=away_pids,
         game_date=date.fromisoformat(game_date_str) if game_date_str else None,
+        home_player_weights=home_pw,
+        away_player_weights=away_pw,
     )
     return (
         pred.predicted_home_score,

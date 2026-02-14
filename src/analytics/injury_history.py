@@ -408,6 +408,55 @@ def get_injuries_for_game(team_id: int, game_date: date) -> List[Dict]:
     return result
 
 
+def get_games_missed_streak(player_id: int, game_date: date) -> int:
+    """Return how many consecutive games the player was out immediately before *game_date*.
+
+    Uses the ``injury_history`` table (built by ``build_injury_history``).
+    Walks backwards from the most recent team game *before* ``game_date``
+    and counts unbroken ``was_out = 1`` rows.  Returns 0 if the player
+    played their most recent game (or has no history).
+    """
+    with get_conn() as conn:
+        # Get the player's team
+        team_row = conn.execute(
+            "SELECT team_id FROM players WHERE player_id = ?",
+            (player_id,),
+        ).fetchone()
+        if not team_row:
+            return 0
+        team_id = team_row[0]
+
+        # Get all game dates for this team before game_date, newest first
+        rows = conn.execute(
+            """
+            SELECT DISTINCT game_date FROM player_stats
+            WHERE player_id IN (
+                SELECT player_id FROM players WHERE team_id = ?
+            )
+            AND game_date < ?
+            ORDER BY game_date DESC
+            """,
+            (team_id, str(game_date)),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        # Check each game going backwards
+        streak = 0
+        for (gd_str,) in rows:
+            was_out = conn.execute(
+                "SELECT 1 FROM injury_history WHERE player_id = ? AND game_date = ? AND was_out = 1",
+                (player_id, gd_str),
+            ).fetchone()
+            if was_out:
+                streak += 1
+            else:
+                break
+
+    return streak
+
+
 def get_team_injuries_summary(team_id: int) -> pd.DataFrame:
     """Get summary of all inferred injuries for a team."""
     with get_conn() as conn:

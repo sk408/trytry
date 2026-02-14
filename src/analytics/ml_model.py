@@ -77,9 +77,10 @@ def _safe(val, default: float = 0.0) -> float:
 def extract_features(g) -> Dict[str, float]:
     """Extract a flat feature dict from a ``PrecomputedGame``.
 
-    Returns ~74 features covering raw projections, efficiency,
+    Returns ~80 features covering raw projections, efficiency,
     ratings, matchup edges, four-factor components, clutch/hustle
-    sub-metrics, fatigue, injury context, and key differentials.
+    sub-metrics, fatigue, injury context, season-phase, roster-change
+    flags, and key differentials.
     """
     hp = g.home_proj
     ap = g.away_proj
@@ -198,6 +199,18 @@ def extract_features(g) -> Dict[str, float]:
     f["diff_injury_minutes_lost"] = (
         f["home_injury_minutes_lost"] - f["away_injury_minutes_lost"]
     )
+
+    # ── Season-phase awareness ──
+    # Early-season stats are noisier — the model can learn to trust them less.
+    f["home_games_played"] = _safe(getattr(g, "home_games_played", 0))
+    f["away_games_played"] = _safe(getattr(g, "away_games_played", 0))
+    f["min_games_played"] = min(f["home_games_played"], f["away_games_played"])
+    f["games_played_diff"] = f["home_games_played"] - f["away_games_played"]
+
+    # ── Roster change detection ──
+    # Flags recent high-impact roster changes (e.g., trade deadline moves).
+    f["home_roster_changed"] = 1.0 if getattr(g, "home_roster_changed", False) else 0.0
+    f["away_roster_changed"] = 1.0 if getattr(g, "away_roster_changed", False) else 0.0
 
     return f
 
