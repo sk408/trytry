@@ -340,8 +340,8 @@ RISING_STARS_PLAYERS = {
         "Matas Buzelis", "Egor Demin", "Jaylen Wells", "Carter Bryant",
     ],
     "Team Austin (G League)": [
-        "Sean East II", "Ron Harper Jr.", "Alijah Martin",
-        "Tristen Newton", "Yang Hansen", "Jahmir Young",
+        "Sean East II", "Ron Harper Jr.", "Yanic Konan Niederhauser",
+        "Alijah Martin", "Tristen Newton", "Yang Hansen", "Jahmir Young",
     ],
 }
 RISING_STARS_TEAM_ODDS: Dict[str, int] = {
