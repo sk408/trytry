@@ -1074,7 +1074,7 @@ class ThreePointPanel(QWidget):
 
 
 class RisingStarsPanel(QWidget):
-    """Rising Stars Tournament analysis panel."""
+    """Rising Stars Tournament analysis panel — team-level + individual."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -1086,53 +1086,87 @@ class RisingStarsPanel(QWidget):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Ranks young players by overall production: scoring, rebounding, "
-            "assists, stocks (steals + blocks), and efficiency. "
-            "Tournament format favors versatile scorers."
+            "Four-team tournament (first to 40 in semis, first to 25 in final). "
+            "Model aggregates each team's combined stats to rank tournament winner "
+            "probability. Individual player rankings are shown below for MVP/top scorer bets."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
-        picker_row = QHBoxLayout()
-        self._picker = PlayerPicker("Rising Stars", max_players=24)
-        picker_row.addWidget(self._picker, 1)
-        prefill_btn = QPushButton("Load 2026 Rosters")
+        # Controls row
+        ctrl_row = QHBoxLayout()
+        prefill_btn = QPushButton("Load 2026 Teams + Odds")
         prefill_btn.setFixedWidth(200)
         prefill_btn.clicked.connect(self._prefill)
-        picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(picker_row)
-
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("Recent games:"))
+        ctrl_row.addWidget(prefill_btn)
+        ctrl_row.addWidget(QLabel("Recent games:"))
         self._recent_spin = QSpinBox()
         self._recent_spin.setRange(0, 82)
         self._recent_spin.setValue(15)
         self._recent_spin.setSpecialValueText("Full season")
-        filter_row.addWidget(self._recent_spin)
-        filter_row.addStretch()
-
+        ctrl_row.addWidget(self._recent_spin)
         analyze_btn = QPushButton("Analyze")
         analyze_btn.setFixedWidth(100)
-        analyze_btn.clicked.connect(self._analyze)
-        filter_row.addWidget(analyze_btn)
-        layout.addLayout(filter_row)
+        analyze_btn.clicked.connect(self._prefill)
+        ctrl_row.addWidget(analyze_btn)
+        ctrl_row.addStretch()
+        layout.addLayout(ctrl_row)
 
-        odds_group = QGroupBox("Enter Betting Odds (MVP / Top Scorer)")
-        self._odds_input = _OddsInputRow()
-        self._odds_input.odds_changed.connect(self._refresh_table)
-        odds_layout = QVBoxLayout()
-        odds_scroll = QScrollArea()
-        odds_scroll.setWidgetResizable(True)
-        odds_scroll.setWidget(self._odds_input)
-        odds_scroll.setMaximumHeight(140)
-        odds_layout.addWidget(odds_scroll)
-        odds_group.setLayout(odds_layout)
-        layout.addWidget(odds_group)
+        # ── TEAM COMPARISON TABLE ──
+        team_group = QGroupBox("Team Rankings (Tournament Winner)")
+        team_layout = QVBoxLayout()
 
+        self._team_table = QTableWidget()
+        team_cols = [
+            "Rank", "Team", "Avg PPG", "Avg RPG", "Avg APG",
+            "Avg FG%", "Avg 3PT%", "Team Score", "Model %",
+            "Fair Odds", "Your Odds", "Implied %", "Edge %", "Rating",
+        ]
+        self._team_table.setColumnCount(len(team_cols))
+        self._team_table.setHorizontalHeaderLabels(team_cols)
+        self._team_table.setAlternatingRowColors(True)
+        self._team_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._team_table.verticalHeader().setVisible(False)
+        self._team_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        th = self._team_table.horizontalHeader()
+        th.setStretchLastSection(True)
+        th.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        th.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._team_table.setMaximumHeight(180)
+        team_layout.addWidget(self._team_table)
+
+        # Team odds input row
+        odds_row = QHBoxLayout()
+        self._team_odds_spins: Dict[str, QSpinBox] = {}
+        for team_name in RISING_STARS_PLAYERS:
+            lbl = QLabel(f"{team_name}:")
+            lbl.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+            spin = QSpinBox()
+            spin.setRange(-50000, 50000)
+            spin.setValue(0)
+            spin.setSpecialValueText("—")
+            spin.setFixedWidth(90)
+            spin.setToolTip(f"American odds for {team_name} to win tournament")
+            spin.valueChanged.connect(self._refresh_teams)
+            odds_row.addWidget(lbl)
+            odds_row.addWidget(spin)
+            self._team_odds_spins[team_name] = spin
+        odds_row.addStretch()
+        team_layout.addLayout(odds_row)
+
+        team_group.setLayout(team_layout)
+        layout.addWidget(team_group)
+
+        # ── INDIVIDUAL PLAYER TABLE ──
+        player_group = QGroupBox("Individual Player Rankings (MVP / Top Scorer)")
+        player_layout = QVBoxLayout()
         self._table = BettingTable()
-        layout.addWidget(self._table, 1)
+        player_layout.addWidget(self._table)
+        player_group.setLayout(player_layout)
+        layout.addWidget(player_group, 1)
 
+        # Insights
         self._insights = QLabel("")
         self._insights.setWordWrap(True)
         self._insights.setStyleSheet(
@@ -1142,59 +1176,157 @@ class RisingStarsPanel(QWidget):
         layout.addWidget(self._insights)
 
         self.setLayout(layout)
-        self._stats: List[Dict] = []
-        self._worker: Optional[_StatsWorker] = None
+        self._team_stats: Dict[str, List[Dict]] = {}  # team_name -> [player stats]
+        self._all_stats: List[Dict] = []
+        self._workers: List[_StatsWorker] = []
+        self._pending = 0
 
     def init_data(self) -> None:
-        self._picker.load_players()
+        pass  # No picker to load — prefill handles it
 
     def _prefill(self) -> None:
-        all_rising = []
-        for team_players in RISING_STARS_PLAYERS.values():
-            all_rising.extend(team_players)
-        ids = _find_player_ids(all_rising)
-        if ids:
-            self._picker.set_player_ids(ids)
-            self._analyze()
-        else:
-            self._insights.setText("Could not find Rising Stars players in database.")
+        """Load all Rising Stars teams and analyze."""
+        self._team_stats = {}
+        self._all_stats = []
+        self._pending = len(RISING_STARS_PLAYERS)
+        self._workers = []
 
-    def _analyze(self) -> None:
-        ids = self._picker.selected_ids()
-        if not ids:
-            self._insights.setText("Add Rising Stars participants or click 'Load 2025 Rosters'.")
-            return
         recent = self._recent_spin.value()
-        self._worker = _StatsWorker(ids, recent)
-        self._worker.finished.connect(self._on_stats_loaded)
-        self._worker.start()
-        self._insights.setText("Loading stats...")
+        for team_name, players in RISING_STARS_PLAYERS.items():
+            ids = _find_player_ids(players)
+            if ids:
+                w = _StatsWorker(ids, recent)
+                w.finished.connect(lambda stats, tn=team_name: self._on_team_loaded(tn, stats))
+                w.start()
+                self._workers.append(w)
+            else:
+                self._pending -= 1
+                self._team_stats[team_name] = []
 
-    def _on_stats_loaded(self, stats: List[Dict]) -> None:
-        self._stats = stats
-        self._odds_input.set_players(stats)
-        self._refresh_table()
+        # Auto-fill team odds
+        for team_name, odds_val in RISING_STARS_TEAM_ODDS.items():
+            if team_name in self._team_odds_spins:
+                self._team_odds_spins[team_name].setValue(odds_val)
 
-    def _refresh_table(self) -> None:
-        odds = self._odds_input.get_odds_map()
+        self._insights.setText("Loading team stats...")
+
+    def _on_team_loaded(self, team_name: str, stats: List[Dict]) -> None:
+        self._team_stats[team_name] = stats
+        self._all_stats.extend(stats)
+        self._pending -= 1
+        if self._pending <= 0:
+            self._refresh_teams()
+            self._refresh_players()
+
+    def _refresh_teams(self) -> None:
+        """Update the team comparison table."""
+        if not self._team_stats:
+            return
+
+        def _team_score(stats: List[Dict]) -> float:
+            if not stats:
+                return 0
+            ppg = sum(s.get("ppg", 0) for s in stats) / len(stats)
+            rpg = sum(s.get("rpg", 0) for s in stats) / len(stats)
+            apg = sum(s.get("apg", 0) for s in stats) / len(stats)
+            fg = sum(s.get("fg_pct", 0) for s in stats) / len(stats)
+            fg3 = sum(s.get("fg3_pct", 0) for s in stats) / len(stats)
+            stk = sum(s.get("spg", 0) + s.get("bpg", 0) for s in stats) / len(stats)
+            return ppg * 2.0 + rpg * 1.0 + apg * 1.5 + fg * 0.3 + fg3 * 0.3 + stk * 3.0
+
+        # Calculate scores and probabilities
+        team_data = []
+        for team_name, stats in self._team_stats.items():
+            score = _team_score(stats)
+            n = len(stats) if stats else 1
+            ppg = sum(s.get("ppg", 0) for s in stats) / n if stats else 0
+            rpg = sum(s.get("rpg", 0) for s in stats) / n if stats else 0
+            apg = sum(s.get("apg", 0) for s in stats) / n if stats else 0
+            fg = sum(s.get("fg_pct", 0) for s in stats) / n if stats else 0
+            fg3 = sum(s.get("fg3_pct", 0) for s in stats) / n if stats else 0
+            team_data.append({
+                "name": team_name, "score": score,
+                "ppg": ppg, "rpg": rpg, "apg": apg, "fg": fg, "fg3": fg3,
+            })
+
+        # Sort by score
+        team_data.sort(key=lambda t: t["score"], reverse=True)
+        scores = [t["score"] for t in team_data]
+        probs = scores_to_probabilities(scores)
+
+        self._team_table.setRowCount(len(team_data))
+
+        for i, (td, prob) in enumerate(zip(team_data, probs)):
+            tn = td["name"]
+            user_odds = self._team_odds_spins.get(tn, None)
+            user_odds_val = user_odds.value() if user_odds else 0
+            implied = american_to_implied(user_odds_val) if user_odds_val != 0 else 0.0
+            edge_val = (prob - implied) * 100 if implied > 0 else 0.0
+
+            if edge_val > 10:
+                rating = "STRONG VALUE"
+            elif edge_val > 3:
+                rating = "VALUE"
+            elif edge_val > 0:
+                rating = "slight +"
+            elif implied == 0:
+                rating = "—"
+            elif edge_val > -5:
+                rating = "fair"
+            else:
+                rating = "AVOID"
+
+            items = [
+                str(i + 1), tn,
+                f"{td['ppg']:.1f}", f"{td['rpg']:.1f}", f"{td['apg']:.1f}",
+                f"{td['fg']:.1f}%", f"{td['fg3']:.1f}%",
+                f"{td['score']:.0f}", f"{prob * 100:.1f}%",
+                implied_to_american(prob),
+                f"{user_odds_val:+d}" if user_odds_val != 0 else "—",
+                f"{implied * 100:.1f}%" if implied > 0 else "—",
+                f"{edge_val:+.1f}%" if implied > 0 else "—",
+                rating,
+            ]
+
+            for col, val in enumerate(items):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if col == 8 and prob > 0.30:
+                    item.setForeground(QColor("#10b981"))
+                if col == 12 and implied > 0:
+                    item.setForeground(edge_color(edge_val))
+                if col == 13:
+                    if "STRONG" in rating:
+                        item.setForeground(QColor("#10b981"))
+                        f = item.font()
+                        f.setBold(True)
+                        item.setFont(f)
+                    elif "VALUE" in rating:
+                        item.setForeground(QColor("#34d399"))
+                    elif "AVOID" in rating:
+                        item.setForeground(QColor("#f87171"))
+                self._team_table.setItem(i, col, item)
+
+        # Insights
+        if team_data and probs:
+            best = team_data[0]
+            self._insights.setText(
+                f"Strongest team: {best['name']} — "
+                f"avg {best['ppg']:.1f} PPG, {best['rpg']:.1f} RPG, {best['apg']:.1f} APG. "
+                f"Model win probability: {probs[0] * 100:.1f}%. "
+                f"Short games (first to 40/25) favor teams with scorers who can get hot quickly."
+            )
+
+    def _refresh_players(self) -> None:
+        """Update the individual player table."""
         self._table.populate(
-            self._stats,
+            self._all_stats,
             compute_rising_star_score,
             lambda s: (
                 f"{s['ppg']:.1f} PPG / {s['rpg']:.1f} RPG / "
                 f"{s['apg']:.1f} APG / {s['spg'] + s['bpg']:.1f} STK"
             ),
-            odds,
         )
-        if self._stats:
-            top = sorted(self._stats, key=compute_rising_star_score, reverse=True)
-            best = top[0]
-            self._insights.setText(
-                f"Top pick: {best['name']} ({best['team_abbr']}) — "
-                f"{best['ppg']:.1f} PPG, {best['rpg']:.1f} RPG, "
-                f"{best['apg']:.1f} APG. "
-                f"Versatile producers with high usage tend to dominate shortened games."
-            )
 
 
 class AllStarGamePanel(QWidget):
