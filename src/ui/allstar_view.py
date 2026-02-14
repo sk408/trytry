@@ -257,87 +257,119 @@ def _find_player_ids(names: List[str]) -> List[int]:
 
 
 # ════════════════════════════════════════════════════════════════════════
-#  2025 All-Star Weekend — Prefill Data
-#  (Participants and betting odds from DraftKings / FanDuel)
+#  2026 All-Star Weekend — Prefill Data
+#  (Participants and betting odds from FanDuel / PrizePicks)
+#  Event: February 13-15, 2026 at Intuit Dome, Inglewood, CA
+#  Format: USA vs. World (three teams, round-robin tournament)
 # ════════════════════════════════════════════════════════════════════════
 
-# ASG MVP candidates with DraftKings odds
+# ASG MVP candidates with FanDuel odds (as of Feb 13, 2026)
+# Note: LeBron James (injury), Giannis Antetokounmpo (injury),
+#       and Shai Gilgeous-Alexander (injury) are OUT.
+#       De'Aaron Fox replaces Giannis on Team World.
 ASG_MVP_PLAYERS = [
-    "Stephen Curry", "Shai Gilgeous-Alexander", "Victor Wembanyama",
-    "LeBron James", "Anthony Edwards", "Kevin Durant", "Jayson Tatum",
-    "Jaylen Brown", "Damian Lillard", "Donovan Mitchell", "Nikola Jokic",
-    "Karl-Anthony Towns", "Jalen Brunson", "Cade Cunningham",
-    "Tyler Herro", "Trae Young", "Kyrie Irving", "James Harden",
-    "Jalen Williams", "Pascal Siakam", "Jaren Jackson Jr.",
-    "Darius Garland", "Evan Mobley", "Alperen Sengun",
+    # Team World
+    "Victor Wembanyama", "Nikola Jokic", "Luka Doncic",
+    "Jamal Murray", "Karl-Anthony Towns", "Pascal Siakam",
+    "Deni Avdija", "De'Aaron Fox",
+    # USA Stripes (veterans)
+    "Stephen Curry", "Kevin Durant", "Jaylen Brown", "Jalen Brunson",
+    "Donovan Mitchell", "Kawhi Leonard", "Norman Powell",
+    # USA Stars (younger)
+    "Anthony Edwards", "Tyrese Maxey", "Devin Booker",
+    "Cade Cunningham", "Scottie Barnes", "Chet Holmgren",
+    "Jalen Johnson", "Jalen Duren",
 ]
 ASG_MVP_ODDS: Dict[str, int] = {
-    "Stephen Curry": 500, "Shai Gilgeous-Alexander": 800,
-    "Victor Wembanyama": 800, "LeBron James": 900,
-    "Anthony Edwards": 1000, "Kevin Durant": 1200,
-    "Jayson Tatum": 1200, "Jaylen Brown": 1500,
-    "Damian Lillard": 1500, "Donovan Mitchell": 2000,
-    "Nikola Jokic": 2500, "Karl-Anthony Towns": 2500,
-    "Jalen Brunson": 2500, "Cade Cunningham": 2500,
-    "Tyler Herro": 4000, "Trae Young": 4000,
-    "Kyrie Irving": 4000, "James Harden": 4000,
-    "Jalen Williams": 4000, "Pascal Siakam": 4500,
-    "Jaren Jackson Jr.": 4500, "Darius Garland": 4500,
-    "Evan Mobley": 5500, "Alperen Sengun": 6000,
+    "Victor Wembanyama": 390,
+    "Tyrese Maxey": 900,
+    "Jaylen Brown": 1000,
+    "Jalen Brunson": 1000,
+    "Devin Booker": 1100,
+    "Cade Cunningham": 1100,
+    "Jamal Murray": 1300,
+    "Kevin Durant": 1300,
+    "Donovan Mitchell": 1400,
+    "Anthony Edwards": 1400,
+    "Stephen Curry": 1600,
+    "Luka Doncic": 1800,
+    "Nikola Jokic": 2000,
+    "Scottie Barnes": 2500,
+    "Kawhi Leonard": 2500,
+    "Karl-Anthony Towns": 3000,
+    "Norman Powell": 3500,
+    "Chet Holmgren": 4000,
+    "Pascal Siakam": 4000,
+    "De'Aaron Fox": 4000,
+    "Jalen Johnson": 5000,
+    "Deni Avdija": 5000,
+    "Jalen Duren": 6000,
 }
 
-# 3-Point Contest participants with CBS Sports odds
+# 3-Point Contest participants with FanDuel odds (Feb 13, 2026)
+# Saturday Feb 14 at Intuit Dome — 8 shooters
 THREE_PT_PLAYERS = [
-    "Damian Lillard", "Tyler Herro", "Norman Powell", "Buddy Hield",
-    "Darius Garland", "Cam Johnson", "Jalen Brunson", "Cade Cunningham",
+    "Kon Knueppel", "Damian Lillard", "Devin Booker", "Jamal Murray",
+    "Tyrese Maxey", "Donovan Mitchell", "Norman Powell", "Bobby Portis",
 ]
 THREE_PT_ODDS: Dict[str, int] = {
-    "Damian Lillard": 250, "Tyler Herro": 500, "Norman Powell": 500,
-    "Buddy Hield": 550, "Darius Garland": 750, "Cam Johnson": 800,
-    "Jalen Brunson": 900, "Cade Cunningham": 1400,
+    "Kon Knueppel": 270,
+    "Damian Lillard": 410,
+    "Devin Booker": 550,
+    "Jamal Murray": 650,
+    "Tyrese Maxey": 650,
+    "Donovan Mitchell": 750,
+    "Norman Powell": 950,
+    "Bobby Portis": 1600,
 }
 
-# Rising Stars rosters
+# Rising Stars rosters (Feb 13, 2026 at Intuit Dome)
 RISING_STARS_PLAYERS = {
-    "Team Richmond": [
-        "Amen Thompson", "Ausar Thompson", "Bilal Coulibaly",
-        "Scoot Henderson", "Toumani Camara", "Matas Buzelis",
-        "Bub Carrington", "Julian Strawther",
+    "Team Melo": [
+        "Reed Sheppard", "Stephon Castle", "Dylan Harper",
+        "Jeremiah Fears", "Donovan Clingan", "Collin Murray-Boyles",
+        "Ace Bailey",
     ],
-    "Team Mullin": [
-        "Stephon Castle", "Dalton Knecht", "Jaylen Wells",
-        "Keyonte George", "Zach Edey", "Trayce Jackson-Davis", "Ryan Dunn",
+    "Team T-Mac": [
+        "Kon Knueppel", "Kel'el Ware", "Tre Johnson",
+        "Jaylon Tyson", "Cam Spencer", "Bub Carrington",
+        "Zaccharie Risacher",
     ],
-    "Team Hardaway": [
-        "Brandin Podziemski", "Jaime Jaquez Jr.", "Gradey Dick",
-        "Anthony Black", "Zaccharie Risacher", "Alex Sarr", "Tristan da Silva",
+    "Team Vince": [
+        "VJ Edgecombe", "Derik Queen", "Kyshawn George",
+        "Matas Buzelis", "Egor Demin", "Jaylen Wells", "Carter Bryant",
+    ],
+    "Team Austin (G League)": [
+        "Sean East II", "Ron Harper Jr.", "Alijah Martin",
+        "Tristen Newton", "Yang Hansen", "Jahmir Young",
     ],
 }
 RISING_STARS_TEAM_ODDS: Dict[str, int] = {
-    "Team Richmond": 130, "Team Mullin": 250,
-    "Team Hardaway": 320,
+    "Team Melo": 200, "Team T-Mac": 275,
+    "Team Vince": 350, "Team Austin (G League)": 500,
 }
 
-# All-Star Game team rosters
+# All-Star Game team rosters (2026 USA vs. World format)
 ASG_TEAMS = {
-    "Team Shaq (OGs)": [
-        "LeBron James", "Stephen Curry", "Kyrie Irving", "Jayson Tatum",
-        "Kevin Durant", "Damian Lillard", "James Harden", "Jaylen Brown",
+    "Team World": [
+        "Victor Wembanyama", "Nikola Jokic", "Luka Doncic",
+        "Jamal Murray", "Karl-Anthony Towns", "Pascal Siakam",
+        "Deni Avdija", "De'Aaron Fox",
     ],
-    "Team Chuck (Global)": [
-        "Nikola Jokic", "Shai Gilgeous-Alexander", "Victor Wembanyama",
-        "Karl-Anthony Towns", "Donovan Mitchell", "Pascal Siakam",
-        "Alperen Sengun", "Trae Young",
+    "USA Stripes (Veterans)": [
+        "Stephen Curry", "Kevin Durant", "Jaylen Brown", "Jalen Brunson",
+        "Kawhi Leonard", "Donovan Mitchell", "Norman Powell",
     ],
-    "Team Kenny (Young Stars)": [
-        "Jalen Brunson", "Anthony Edwards", "Jaren Jackson Jr.",
-        "Jalen Williams", "Darius Garland", "Evan Mobley",
-        "Cade Cunningham", "Tyler Herro",
+    "USA Stars (Young)": [
+        "Anthony Edwards", "Tyrese Maxey", "Devin Booker",
+        "Cade Cunningham", "Scottie Barnes", "Chet Holmgren",
+        "Jalen Johnson", "Jalen Duren",
     ],
 }
 ASG_TEAM_ODDS: Dict[str, int] = {
-    "Team Shaq (OGs)": 100, "Team Chuck (Global)": 225,
-    "Team Kenny (Young Stars)": 300,
+    "Team World": 155,
+    "USA Stripes (Veterans)": 160,
+    "USA Stars (Young)": 200,
 }
 
 
@@ -779,8 +811,8 @@ class MVPPanel(QWidget):
         picker_row = QHBoxLayout()
         self._picker = PlayerPicker("MVP Candidates", max_players=24)
         picker_row.addWidget(self._picker, 1)
-        prefill_btn = QPushButton("Load 2025 All-Stars + Odds")
-        prefill_btn.setToolTip("Pre-fill with actual 2025 ASG participants and DraftKings odds")
+        prefill_btn = QPushButton("Load 2026 All-Stars + Odds")
+        prefill_btn.setToolTip("Pre-fill with 2026 ASG participants and FanDuel odds")
         prefill_btn.setFixedWidth(200)
         prefill_btn.clicked.connect(self._prefill)
         picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -932,7 +964,7 @@ class ThreePointPanel(QWidget):
         picker_row = QHBoxLayout()
         self._picker = PlayerPicker("3PT Contestants", max_players=8)
         picker_row.addWidget(self._picker, 1)
-        prefill_btn = QPushButton("Load 2025 Contest + Odds")
+        prefill_btn = QPushButton("Load 2026 Contest + Odds")
         prefill_btn.setFixedWidth(200)
         prefill_btn.clicked.connect(self._prefill)
         picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -1065,7 +1097,7 @@ class RisingStarsPanel(QWidget):
         picker_row = QHBoxLayout()
         self._picker = PlayerPicker("Rising Stars", max_players=24)
         picker_row.addWidget(self._picker, 1)
-        prefill_btn = QPushButton("Load 2025 Rosters")
+        prefill_btn = QPushButton("Load 2026 Rosters")
         prefill_btn.setFixedWidth(200)
         prefill_btn.clicked.connect(self._prefill)
         picker_row.addWidget(prefill_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -1186,23 +1218,20 @@ class AllStarGamePanel(QWidget):
         desc.setStyleSheet("color: #94a3b8; font-size: 11px; margin-bottom: 8px;")
         layout.addWidget(desc)
 
-        # Quick-load buttons for 2025 ASG matchups
+        # Quick-load buttons for 2026 ASG matchups (USA vs World, 3 teams)
         prefill_row = QHBoxLayout()
-        prefill_lbl = QLabel("Quick Load:")
+        prefill_lbl = QLabel("2026 Matchups:")
         prefill_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
         prefill_row.addWidget(prefill_lbl)
-        for team_name in ASG_TEAMS:
-            btn = QPushButton(team_name)
-            btn.setFixedWidth(170)
-            btn.setToolTip(f"Load {team_name} roster")
-            btn.clicked.connect(lambda checked, tn=team_name: self._quick_load_team(tn))
-            prefill_row.addWidget(btn)
-        load_all_btn = QPushButton("Load Semifinal 1 (Shaq vs Chuck)")
-        load_all_btn.clicked.connect(self._prefill_semi1)
-        prefill_row.addWidget(load_all_btn)
-        load_all_btn2 = QPushButton("Load Semifinal 2 (Shaq vs Kenny)")
-        load_all_btn2.clicked.connect(self._prefill_semi2)
-        prefill_row.addWidget(load_all_btn2)
+        load_g1 = QPushButton("Game 1: USA Stars vs World")
+        load_g1.clicked.connect(self._prefill_game1)
+        prefill_row.addWidget(load_g1)
+        load_g2 = QPushButton("USA Stripes vs World")
+        load_g2.clicked.connect(self._prefill_stripes_vs_world)
+        prefill_row.addWidget(load_g2)
+        load_g3 = QPushButton("USA Stars vs Stripes")
+        load_g3.clicked.connect(self._prefill_stars_vs_stripes)
+        prefill_row.addWidget(load_g3)
         prefill_row.addStretch()
         layout.addLayout(prefill_row)
 
@@ -1323,38 +1352,29 @@ class AllStarGamePanel(QWidget):
         self._team1_picker.load_players()
         self._team2_picker.load_players()
 
-    def _quick_load_team(self, team_name: str) -> None:
-        """Load a specific ASG team into Team 1 picker."""
-        players = ASG_TEAMS.get(team_name, [])
-        if players:
-            ids = _find_player_ids(players)
-            if ids:
-                self._team1_picker.set_player_ids(ids)
-
-    def _prefill_semi1(self) -> None:
-        """Load Semifinal 1: Team Shaq vs Team Chuck."""
-        t1 = _find_player_ids(ASG_TEAMS.get("Team Shaq (OGs)", []))
-        t2 = _find_player_ids(ASG_TEAMS.get("Team Chuck (Global)", []))
+    def _load_matchup(self, team1_key: str, team2_key: str) -> None:
+        """Load two ASG teams and their odds, then auto-analyze."""
+        t1 = _find_player_ids(ASG_TEAMS.get(team1_key, []))
+        t2 = _find_player_ids(ASG_TEAMS.get(team2_key, []))
         if t1:
             self._team1_picker.set_player_ids(t1)
         if t2:
             self._team2_picker.set_player_ids(t2)
-        # Set odds
-        self._team1_odds.setValue(ASG_TEAM_ODDS.get("Team Shaq (OGs)", 0))
-        self._team2_odds.setValue(ASG_TEAM_ODDS.get("Team Chuck (Global)", 0))
+        self._team1_odds.setValue(ASG_TEAM_ODDS.get(team1_key, 0))
+        self._team2_odds.setValue(ASG_TEAM_ODDS.get(team2_key, 0))
         self._analyze()
 
-    def _prefill_semi2(self) -> None:
-        """Load Semifinal 2: Team Shaq vs Team Kenny."""
-        t1 = _find_player_ids(ASG_TEAMS.get("Team Shaq (OGs)", []))
-        t2 = _find_player_ids(ASG_TEAMS.get("Team Kenny (Young Stars)", []))
-        if t1:
-            self._team1_picker.set_player_ids(t1)
-        if t2:
-            self._team2_picker.set_player_ids(t2)
-        self._team1_odds.setValue(ASG_TEAM_ODDS.get("Team Shaq (OGs)", 0))
-        self._team2_odds.setValue(ASG_TEAM_ODDS.get("Team Kenny (Young Stars)", 0))
-        self._analyze()
+    def _prefill_game1(self) -> None:
+        """Game 1: USA Stars vs Team World."""
+        self._load_matchup("USA Stars (Young)", "Team World")
+
+    def _prefill_stripes_vs_world(self) -> None:
+        """USA Stripes vs Team World."""
+        self._load_matchup("USA Stripes (Veterans)", "Team World")
+
+    def _prefill_stars_vs_stripes(self) -> None:
+        """USA Stars vs USA Stripes."""
+        self._load_matchup("USA Stars (Young)", "USA Stripes (Veterans)")
 
     def _analyze(self) -> None:
         t1_ids = self._team1_picker.selected_ids()
