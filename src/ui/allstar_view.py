@@ -345,8 +345,8 @@ RISING_STARS_PLAYERS = {
     ],
 }
 RISING_STARS_TEAM_ODDS: Dict[str, int] = {
-    "Team Melo": 200, "Team T-Mac": 275,
-    "Team Vince": 350, "Team Austin (G League)": 500,
+    "Team Melo": 160, "Team T-Mac": 175,
+    "Team Vince": 260, "Team Austin (G League)": 850,
 }
 
 # All-Star Game team rosters (2026 USA vs. World format)
