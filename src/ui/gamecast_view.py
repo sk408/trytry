@@ -9,7 +9,7 @@ keep the UI responsive.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, QObject, Signal
 from PySide6.QtWidgets import (
@@ -135,46 +135,70 @@ class _PollWorker(QObject):
                 pass
 
         # 5. Live prediction (DB queries + math)
-        home_id = _abbr_to_team_id(game.home_abbr)
-        away_id = _abbr_to_team_id(game.away_abbr)
-
-        if home_id and away_id:
-            game_date = game.start_time[:10] if game.start_time else ""
-
-            if game.status == "final":
-                # Post-game analysis data
-                try:
-                    from src.analytics.live_prediction import _cached_pregame
-                    pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
-                        home_id, away_id, game_date,
-                    )
+        if _is_allstar_game(game):
+            # All-Star exhibition — use custom roster-based prediction
+            try:
+                result.prediction = _allstar_predict(
+                    home_name=game.home_team,
+                    away_name=game.away_team,
+                    home_score=game.home_score,
+                    away_score=game.away_score,
+                    period=game.period,
+                    clock=game.clock,
+                )
+                if game.status == "final":
+                    lp = result.prediction
                     result.postgame_data = {
-                        "pg_home": pg_home, "pg_away": pg_away,
-                        "pg_total": pg_total, "pg_spread": pg_spread,
-                        "home_id": home_id, "away_id": away_id,
+                        "pg_home": lp.pregame_home,
+                        "pg_away": lp.pregame_away,
+                        "pg_total": lp.pregame_total,
+                        "pg_spread": lp.pregame_spread,
+                        "home_id": 0, "away_id": 0,
                     }
-                except Exception:
-                    result.postgame_data = {
-                        "pg_home": 110.0, "pg_away": 110.0,
-                        "pg_total": 220.0, "pg_spread": 0.0,
-                        "home_id": home_id, "away_id": away_id,
-                    }
-            else:
-                try:
-                    result.prediction = live_predict(
-                        home_team_id=home_id,
-                        away_team_id=away_id,
-                        home_score=game.home_score,
-                        away_score=game.away_score,
-                        period=game.period,
-                        clock=game.clock,
-                        game_id=game.game_id,
-                        game_date_str=game_date,
-                    )
-                except Exception as exc:
-                    result.prediction_error = str(exc)
+                    result.prediction = None
+            except Exception as exc:
+                result.prediction_error = f"All-Star: {exc}"
         else:
-            result.prediction_error = "teams not in DB"
+            home_id = _abbr_to_team_id(game.home_abbr)
+            away_id = _abbr_to_team_id(game.away_abbr)
+
+            if home_id and away_id:
+                game_date = game.start_time[:10] if game.start_time else ""
+
+                if game.status == "final":
+                    # Post-game analysis data
+                    try:
+                        from src.analytics.live_prediction import _cached_pregame
+                        pg_home, pg_away, pg_total, pg_spread = _cached_pregame(
+                            home_id, away_id, game_date,
+                        )
+                        result.postgame_data = {
+                            "pg_home": pg_home, "pg_away": pg_away,
+                            "pg_total": pg_total, "pg_spread": pg_spread,
+                            "home_id": home_id, "away_id": away_id,
+                        }
+                    except Exception:
+                        result.postgame_data = {
+                            "pg_home": 110.0, "pg_away": 110.0,
+                            "pg_total": 220.0, "pg_spread": 0.0,
+                            "home_id": home_id, "away_id": away_id,
+                        }
+                else:
+                    try:
+                        result.prediction = live_predict(
+                            home_team_id=home_id,
+                            away_team_id=away_id,
+                            home_score=game.home_score,
+                            away_score=game.away_score,
+                            period=game.period,
+                            clock=game.clock,
+                            game_id=game.game_id,
+                            game_date_str=game_date,
+                        )
+                    except Exception as exc:
+                        result.prediction_error = str(exc)
+            else:
+                result.prediction_error = "teams not in DB"
 
         self.finished.emit(result)
 
@@ -260,6 +284,30 @@ class _AllGamesRefreshWorker(QObject):
 
     @staticmethod
     def _compute_prediction(result: _PollResult, game: GameInfo) -> None:
+        if _is_allstar_game(game):
+            try:
+                result.prediction = _allstar_predict(
+                    home_name=game.home_team,
+                    away_name=game.away_team,
+                    home_score=game.home_score,
+                    away_score=game.away_score,
+                    period=game.period,
+                    clock=game.clock,
+                )
+                if game.status == "final":
+                    lp = result.prediction
+                    result.postgame_data = {
+                        "pg_home": lp.pregame_home,
+                        "pg_away": lp.pregame_away,
+                        "pg_total": lp.pregame_total,
+                        "pg_spread": lp.pregame_spread,
+                        "home_id": 0, "away_id": 0,
+                    }
+                    result.prediction = None
+            except Exception as exc:
+                result.prediction_error = f"All-Star: {exc}"
+            return
+
         home_id = _abbr_to_team_id(game.home_abbr)
         away_id = _abbr_to_team_id(game.away_abbr)
         if not (home_id and away_id):
@@ -350,6 +398,178 @@ def _abbr_to_team_id(abbr: str) -> Optional[int]:
 
 def _bold(text: str) -> str:
     return f"<b>{text}</b>"
+
+
+# ── All-Star Game prediction helpers ──────────────────────────────────
+
+# Map ESPN team display names / abbreviations to our ASG_TEAMS roster keys.
+# ESPN typically uses names like "World", "Team Stars", "Team Stripes",
+# and abbreviations like "WLD", "STR", "STP" (or variations).
+_ALLSTAR_NAME_MAP: Dict[str, str] = {
+    # Full display names
+    "world": "Team World",
+    "team world": "Team World",
+    "stars": "USA Stars (Young)",
+    "team stars": "USA Stars (Young)",
+    "usa stars": "USA Stars (Young)",
+    "stripes": "USA Stripes (Veterans)",
+    "team stripes": "USA Stripes (Veterans)",
+    "usa stripes": "USA Stripes (Veterans)",
+    # Common ESPN abbreviations
+    "wld": "Team World",
+    "str": "USA Stars (Young)",
+    "stp": "USA Stripes (Veterans)",
+}
+
+
+def _is_allstar_game(game: GameInfo) -> bool:
+    """Return True if this game appears to be an All-Star exhibition."""
+    names = (
+        game.home_team.lower(),
+        game.away_team.lower(),
+        game.home_abbr.lower(),
+        game.away_abbr.lower(),
+    )
+    keywords = ("world", "stars", "stripes", "all-star", "allstar",
+                "wld", "str", "stp")
+    return any(kw in n for n in names for kw in keywords)
+
+
+def _resolve_allstar_team(name_or_abbr: str) -> Optional[str]:
+    """Map an ESPN team name/abbreviation to an ASG_TEAMS key."""
+    low = name_or_abbr.lower().strip()
+    if low in _ALLSTAR_NAME_MAP:
+        return _ALLSTAR_NAME_MAP[low]
+    # Partial match
+    for key, roster_key in _ALLSTAR_NAME_MAP.items():
+        if key in low or low in key:
+            return roster_key
+    return None
+
+
+def _allstar_predict(
+    home_name: str,
+    away_name: str,
+    home_score: int,
+    away_score: int,
+    period: int,
+    clock: Optional[str],
+) -> LivePrediction:
+    """Compute a prediction for an All-Star exhibition game.
+
+    Uses player stats from the database rather than team-level models,
+    since All-Star teams don't exist in our ``teams`` table.
+    Each round-robin game is 12 minutes, so projected totals are scaled.
+    """
+    from src.ui.allstar_view import ASG_TEAMS, _find_player_ids, _load_player_stats
+
+    home_key = _resolve_allstar_team(home_name) or _resolve_allstar_team(
+        home_name.split()[-1] if home_name else ""
+    )
+    away_key = _resolve_allstar_team(away_name) or _resolve_allstar_team(
+        away_name.split()[-1] if away_name else ""
+    )
+
+    # Fallback if we can't map — return zeroed prediction
+    if not home_key or not away_key:
+        return LivePrediction(
+            projected_home_score=0, projected_away_score=0,
+            projected_total=0, projected_spread=0,
+            pregame_home=0, pregame_away=0, pregame_total=0, pregame_spread=0,
+        )
+
+    # Load rosters and stats (recent 15 games for recency)
+    home_roster = ASG_TEAMS.get(home_key, [])
+    away_roster = ASG_TEAMS.get(away_key, [])
+    home_ids = _find_player_ids(home_roster)
+    away_ids = _find_player_ids(away_roster)
+    home_stats = _load_player_stats(home_ids, recent_n=15)
+    away_stats = _load_player_stats(away_ids, recent_n=15)
+
+    def _team_strength(stats: list) -> float:
+        if not stats:
+            return 0
+        n = len(stats)
+        ppg = sum(s.get("ppg", 0) for s in stats) / n
+        fg = sum(s.get("fg_pct", 0) for s in stats) / n
+        fg3 = sum(s.get("fg3_pct", 0) for s in stats) / n
+        apg = sum(s.get("apg", 0) for s in stats) / n
+        rpg = sum(s.get("rpg", 0) for s in stats) / n
+        pm = sum(s.get("plus_minus", 0) for s in stats) / n
+        return ppg * 2.0 + fg3 * 0.5 + fg * 0.3 + apg * 1.5 + rpg * 0.8 + pm * 1.0
+
+    h_str = _team_strength(home_stats)
+    a_str = _team_strength(away_stats)
+    total_str = h_str + a_str if (h_str + a_str) > 0 else 1.0
+
+    # All-Star round-robin games are 12 minutes (one quarter).
+    # All-Star pace is typically much higher (~3.0 PPM per team vs ~2.3 regular).
+    GAME_MINUTES = 12.0
+    ALLSTAR_PPM = 3.0  # points per minute per team (All-Star pace)
+    expected_total = GAME_MINUTES * ALLSTAR_PPM * 2  # ~72 combined for 12-min game
+
+    h_proj = expected_total * (h_str / total_str)
+    a_proj = expected_total * (a_str / total_str)
+    pregame_spread = h_proj - a_proj
+
+    # If the game is in progress, blend with pace extrapolation
+    elapsed = 0.0
+    if period > 0 and clock:
+        try:
+            parts = clock.split(":")
+            remaining = int(parts[0]) * 60 + int(parts[1])
+            elapsed = GAME_MINUTES - remaining / 60.0
+        except Exception:
+            elapsed = 0.0
+
+    if elapsed > 0.5:  # at least 30 seconds played
+        game_frac = elapsed / GAME_MINUTES
+        # Pace projection from actual scores
+        pace_h = home_score / game_frac if game_frac > 0 else h_proj
+        pace_a = away_score / game_frac if game_frac > 0 else a_proj
+        # Blend: pregame fades, pace grows
+        live_wt = min(0.95, game_frac * 1.2)
+        pre_wt = 1.0 - live_wt
+        final_h = pre_wt * h_proj + live_wt * pace_h
+        final_a = pre_wt * a_proj + live_wt * pace_a
+    else:
+        final_h = h_proj
+        final_a = a_proj
+        live_wt = 0.0
+        pre_wt = 1.0
+
+    proj_total = final_h + final_a
+    proj_spread = final_h - final_a
+    h_win_prob = h_str / total_str
+
+    # Signals
+    if proj_spread > 3:
+        spread_sig = f"Home ({home_key.split('(')[0].strip()}) favored"
+    elif proj_spread < -3:
+        spread_sig = f"Away ({away_key.split('(')[0].strip()}) favored"
+    else:
+        spread_sig = "Close matchup"
+
+    return LivePrediction(
+        projected_home_score=round(final_h, 1),
+        projected_away_score=round(final_a, 1),
+        projected_total=round(proj_total, 1),
+        projected_spread=round(proj_spread, 1),
+        pregame_home=round(h_proj, 1),
+        pregame_away=round(a_proj, 1),
+        pregame_total=round(h_proj + a_proj, 1),
+        pregame_spread=round(pregame_spread, 1),
+        pace_home=round(final_h, 1),
+        pace_away=round(final_a, 1),
+        pace_total=round(proj_total, 1),
+        pace_spread=round(proj_spread, 1),
+        minutes_elapsed=elapsed,
+        blend_weights={"pregame": pre_wt, "pace": live_wt, "quarter": 0.0},
+        spread_signal=spread_sig,
+        over_under_signal=(
+            f"Win prob: {h_win_prob * 100:.0f}% / {(1 - h_win_prob) * 100:.0f}%"
+        ),
+    )
 
 
 # ── main widget ──────────────────────────────────────────────────────
@@ -561,12 +781,14 @@ class GamecastView(QWidget):
 
         for g in games:
             if g.status == "in_progress":
-                tag = f"LIVE Q{g.period} {g.clock} ({g.away_score}-{g.home_score})"
+                period_lbl = "P" if _is_allstar_game(g) else "Q"
+                tag = f"LIVE {period_lbl}{g.period} {g.clock} ({g.away_score}-{g.home_score})"
             elif g.status == "final":
                 tag = f"FINAL ({g.away_score}-{g.home_score})"
             else:
                 tag = _to_pacific_str(g.start_time) if g.start_time else "Upcoming"
-            label = f"{g.away_abbr} @ {g.home_abbr} — {tag}"
+            prefix = "[ASG] " if _is_allstar_game(g) else ""
+            label = f"{prefix}{g.away_abbr} @ {g.home_abbr} — {tag}"
             self.game_combo.addItem(label, g)
 
         self.game_combo.blockSignals(False)
@@ -758,12 +980,16 @@ class GamecastView(QWidget):
         self.away_score_lbl.setText(str(game.away_score))
         self.home_score_lbl.setText(str(game.home_score))
 
+        is_asg = _is_allstar_game(game)
         if game.status == "in_progress":
-            self.status_lbl.setText(f"<b style='color:#e74c3c;'>LIVE</b><br>Q{game.period} {game.clock}")
+            period_lbl = f"P{game.period}" if is_asg else f"Q{game.period}"
+            self.status_lbl.setText(
+                f"<b style='color:#e74c3c;'>LIVE</b><br>{period_lbl} {game.clock}"
+            )
         elif game.status == "final":
             self.status_lbl.setText("<b>FINAL</b>")
         else:
-            self.status_lbl.setText("Upcoming")
+            self.status_lbl.setText("All-Star" if is_asg else "Upcoming")
 
         # Quarter scores line
         if game.away_linescores or game.home_linescores:
@@ -1145,8 +1371,9 @@ class GamecastView(QWidget):
             self.game_combo.setItemData(i, updated)
             # Rebuild the label
             if updated.status == "in_progress":
+                plbl = "P" if _is_allstar_game(updated) else "Q"
                 tag = (
-                    f"LIVE Q{updated.period} {updated.clock} "
+                    f"LIVE {plbl}{updated.period} {updated.clock} "
                     f"({updated.away_score}-{updated.home_score})"
                 )
             elif updated.status == "final":
@@ -1156,8 +1383,9 @@ class GamecastView(QWidget):
                     _to_pacific_str(updated.start_time)
                     if updated.start_time else "Upcoming"
                 )
+            prefix = "[ASG] " if _is_allstar_game(updated) else ""
             self.game_combo.setItemText(
-                i, f"{updated.away_abbr} @ {updated.home_abbr} — {tag}",
+                i, f"{prefix}{updated.away_abbr} @ {updated.home_abbr} — {tag}",
             )
         self.game_combo.blockSignals(False)
 
