@@ -341,8 +341,11 @@ def predict_matchup(
                         base_weight = 1.0 - ml_wt
                     spread = base_weight * spread + ml_wt * ml_spread
                     total = base_weight * total + ml_wt * ml_total
-        except Exception:
-            pass  # Graceful fallback: use base model only
+        except Exception as _ml_exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "ML ensemble blending failed (using base model): %s", _ml_exc
+            )
 
     # ============ SANITY CLAMPS ============
     spread = max(-w.spread_clamp, min(w.spread_clamp, spread))
@@ -643,6 +646,21 @@ def _build_ml_features_live(
     f["home_loose_balls"] = _s(hh.get("loose_balls_recovered"))
     f["away_loose_balls"] = _s(ah.get("loose_balls_recovered"))
 
+    # Momentum / rest / win-rate: not available in the live-features
+    # call (no PrecomputedGame), but the training data always has them.
+    # To keep the feature-column set aligned, include them with neutral
+    # defaults.  They'll be zero/0.5 = "no information" so the trained
+    # model won't over-rely on them at inference time.
+    f.setdefault("home_win_streak", 0.0)
+    f.setdefault("away_win_streak", 0.0)
+    f.setdefault("diff_win_streak", 0.0)
+    f.setdefault("home_rest_days", 3.0)
+    f.setdefault("away_rest_days", 3.0)
+    f.setdefault("diff_rest_days", 0.0)
+    f.setdefault("home_win_pct", 0.5)
+    f.setdefault("away_win_pct", 0.5)
+    f.setdefault("diff_win_pct", 0.0)
+
     return f
 
 
@@ -876,6 +894,13 @@ class PrecomputedGame:
     # Roster change detection
     home_roster_changed: bool = False
     away_roster_changed: bool = False
+    # Momentum & rest (for ML features)
+    home_win_streak: int = 0
+    away_win_streak: int = 0
+    home_rest_days: int = 3
+    away_rest_days: int = 3
+    home_win_pct: float = 0.5
+    away_win_pct: float = 0.5
 
 
 def precompute_game_data(
@@ -993,6 +1018,18 @@ def precompute_game_data(
             home_rc = False
             away_rc = False
 
+        # Momentum: recent win streak & win pct from profile
+        home_wins = home_profile.get("wins", 0)
+        away_wins = away_profile.get("wins", 0)
+        home_wp = home_wins / home_gp if home_gp > 0 else 0.5
+        away_wp = away_wins / away_gp if away_gp > 0 else 0.5
+        home_ws = home_profile.get("win_streak", 0)
+        away_ws = away_profile.get("win_streak", 0)
+
+        # Rest days from fatigue info
+        home_rd = home_fatigue_info.get("rest_days", 3)
+        away_rd = away_fatigue_info.get("rest_days", 3)
+
         precomputed.append(PrecomputedGame(
             game_date=gd,
             home_team_id=home_id,
@@ -1030,6 +1067,12 @@ def precompute_game_data(
             away_games_played=away_gp,
             home_roster_changed=home_rc,
             away_roster_changed=away_rc,
+            home_win_streak=home_ws,
+            away_win_streak=away_ws,
+            home_rest_days=home_rd,
+            away_rest_days=away_rd,
+            home_win_pct=home_wp,
+            away_win_pct=away_wp,
         ))
 
     progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")

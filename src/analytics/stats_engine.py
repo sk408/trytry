@@ -444,12 +444,16 @@ def get_team_matchup_stats(
     total_minutes_weight = 0.0
 
     # Helper: compute a single player's contribution
+    # Reads blend weights from WeightConfig so they can be optimised.
+    from src.analytics.weight_config import get_weight_config as _gwc
+    _wc = _gwc()
+
     def _player_contribution(p: PlayerStats, extra_points: float = 0.0) -> float:
-        base = p.ppg * 0.4
+        base = p.ppg * _wc.player_base_weight
         loc_val = p.ppg_home if is_home else p.ppg_away
-        location = (loc_val if loc_val > 0 else p.ppg) * 0.3
+        location = (loc_val if loc_val > 0 else p.ppg) * _wc.player_location_weight
         vs_val = p.ppg_vs_opp if (p.games_vs_opp > 0 and p.ppg_vs_opp > 0) else p.ppg
-        vs_opp = vs_val * 0.3
+        vs_opp = vs_val * _wc.player_vs_opp_weight
         return base + location + vs_opp + extra_points
 
     # ── Active players (play_probability == 1.0): full contribution ──
@@ -467,12 +471,12 @@ def get_team_matchup_stats(
             extra_minutes = pos_injured_minutes * pos_share
             max_extra = max(0, 40 - p.mpg)
             extra_minutes = min(extra_minutes, max_extra)
-            extra_points = extra_minutes * get_ppm(p) * 0.85
+            extra_points = extra_minutes * get_ppm(p) * _wc.injury_minute_efficiency
 
         # 2. Usage boost for high scorers when other high scorers are out
         if high_scorer_injured_ppg > 0 and p.ppg >= 12 and total_high_scorer_ppg > 0:
             usage_share = p.ppg / total_high_scorer_ppg
-            usage_boost = high_scorer_injured_ppg * usage_share * 0.30
+            usage_boost = high_scorer_injured_ppg * usage_share * _wc.injury_usage_boost
             extra_points += usage_boost
 
         # 3. Adjacent position spillover
@@ -575,7 +579,7 @@ def get_team_matchup_stats(
                 net_diff = float(impact_row[0])
                 on_minutes = float(impact_row[1] or inj_player.mpg)
                 minute_fraction = on_minutes / 48.0
-                point_impact = net_diff * minute_fraction * 0.5 * af
+                point_impact = net_diff * minute_fraction * _wc.injury_onoff_multiplier * af
                 total_onoff_penalty += max(0, point_impact)
                 players_with_onoff += 1
 

@@ -1,10 +1,43 @@
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date
 from typing import Callable, Optional, List
 
 import pandas as pd
+
+
+# ====================================================================
+#  Centralized rate limiter for NBA API requests
+# ====================================================================
+
+class _RateLimiter:
+    """Thread-safe token-bucket rate limiter.
+
+    Ensures at most ``calls_per_second`` requests are made to the NBA
+    API.  All ``nba_api`` calls should go through ``limiter.wait()``
+    before executing.
+    """
+
+    def __init__(self, calls_per_second: float = 1.0) -> None:
+        self._min_interval = 1.0 / calls_per_second
+        self._last_call = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        """Block until it is safe to make the next API call."""
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_call
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_call = time.monotonic()
+
+
+# Global rate limiter instance — 1 request per 0.6s (~1.67 req/s).
+# This is conservative enough to avoid 429 responses from stats.nba.com.
+_api_limiter = _RateLimiter(calls_per_second=1.67)
 
 
 def _utc_to_pacific(dt) -> str:
@@ -145,6 +178,7 @@ def _fetch_team_roster(commonteamroster, team_id: int, season: str, progress: Ca
     for attempt in range(3):
         try:
             timeout = 12 + attempt * 6  # backoff on timeout
+            _api_limiter.wait()
             roster = commonteamroster.CommonTeamRoster(team_id=team_id, season=season, timeout=timeout)
             df = roster.get_data_frames()[0]
             try:
@@ -180,6 +214,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
     """
     season = season or get_current_season()
     _, _, playergamelog, _, _, _ = _require_nba_api()
+    _api_limiter.wait()
     logs = playergamelog.PlayerGameLog(player_id=player_id, season=season).get_data_frames()[0]
     
     # Extract all available stats
@@ -209,8 +244,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> pd.D
         "DREB",
         # Impact
         "PLUS_MINUS",
-        # Game result and fouls
-        "WL",
+        # Fouls
         "PF",
     ]
     
@@ -286,6 +320,7 @@ def fetch_schedule(
     tricode_to_id = {t["abbreviation"]: int(t["id"]) for t in teams_list}
 
     # Played games from LeagueGameFinder
+    _api_limiter.wait()
     finder = leaguegamefinder.LeagueGameFinder(season_nullable=season)
     games = finder.get_data_frames()[0]
     cols = ["TEAM_ID", "GAME_DATE", "MATCHUP"]
@@ -497,6 +532,7 @@ def fetch_team_estimated_metrics(
     try:
         from nba_api.stats.endpoints import teamestimatedmetrics
         progress("Fetching TeamEstimatedMetrics...")
+        _api_limiter.wait()
         resp = teamestimatedmetrics.TeamEstimatedMetrics(
             season=season, timeout=30
         )
@@ -539,6 +575,7 @@ def fetch_league_dash_team_stats(
         if location:
             kwargs["location_nullable"] = location
 
+        _api_limiter.wait()
         resp = leaguedashteamstats.LeagueDashTeamStats(**kwargs)
         df = resp.get_data_frames()[0]
         progress(f"  Got {label}: {len(df)} teams")
@@ -560,6 +597,7 @@ def fetch_team_clutch_stats(
     try:
         from nba_api.stats.endpoints import leaguedashteamclutch
         progress("Fetching LeagueDashTeamClutch (Advanced)...")
+        _api_limiter.wait()
         resp = leaguedashteamclutch.LeagueDashTeamClutch(
             season=season,
             measure_type_detailed_defense="Advanced",
@@ -589,6 +627,7 @@ def fetch_team_hustle_stats(
     try:
         from nba_api.stats.endpoints import leaguehustlestatsteam
         progress("Fetching LeagueHustleStatsTeam...")
+        _api_limiter.wait()
         resp = leaguehustlestatsteam.LeagueHustleStatsTeam(
             season=season, per_mode_time="PerGame", timeout=30,
         )
@@ -613,6 +652,7 @@ def fetch_player_on_off(
     progress = progress_cb or (lambda _: None)
     try:
         from nba_api.stats.endpoints import teamplayeronoffsummary
+        _api_limiter.wait()
         resp = teamplayeronoffsummary.TeamPlayerOnOffSummary(
             team_id=team_id, season=season,
             measure_type_detailed_defense="Advanced",
@@ -641,6 +681,7 @@ def fetch_player_estimated_metrics(
     try:
         from nba_api.stats.endpoints import playerestimatedmetrics
         progress("Fetching PlayerEstimatedMetrics...")
+        _api_limiter.wait()
         resp = playerestimatedmetrics.PlayerEstimatedMetrics(
             season=season, timeout=30
         )

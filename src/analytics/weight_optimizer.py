@@ -425,6 +425,18 @@ TOP_WEIGHTS: List[Tuple[str, float, float]] = [
     # ML ensemble blending
     ("ml_ensemble_weight",     0.0,   0.6),
     ("ml_disagree_damp",       0.3,   1.0),
+    # Four Factors sub-weights (previously fixed at defaults, now tunable)
+    ("ff_efg_weight",          0.20,  0.55),
+    ("ff_tov_weight",          0.10,  0.40),
+    ("ff_oreb_weight",         0.05,  0.35),
+    ("ff_fta_weight",          0.05,  0.30),
+    # Sanity clamps (let optimizer find best bounds)
+    ("total_min",              170.0, 200.0),
+    ("total_max",              240.0, 260.0),
+    # Player contribution weights
+    ("player_base_weight",     0.30,  0.55),
+    ("player_location_weight", 0.15,  0.35),
+    ("player_vs_opp_weight",   0.15,  0.35),
 ]
 
 

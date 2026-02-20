@@ -266,7 +266,12 @@ def get_team_record_before_date(team_id: int, before_date: date) -> Tuple[int, i
 
 
 def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
-    """Get team's statistical profile before a date (PPG, opponent PPG, etc.)."""
+    """Get team's statistical profile before a date (PPG, opponent PPG, etc.).
+
+    Now also returns ``wins``, ``losses``, and ``win_streak`` (positive
+    for winning streaks, negative for losing streaks) so the ML model
+    can use momentum features.
+    """
     from src.analytics.cache import backtest_cache
 
     cache_key = ("profile", team_id, str(before_date))
@@ -290,9 +295,39 @@ def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
             conn,
             params=[team_id, str(before_date)],
         )
-    
+
+        # Win/loss record and streak — need per-game W/L
+        wl_rows = conn.execute(
+            """
+            SELECT ps.game_date, ps.win_loss
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? AND ps.game_date < ? AND ps.win_loss IS NOT NULL
+            GROUP BY ps.game_date
+            ORDER BY ps.game_date DESC
+            """,
+            (team_id, str(before_date)),
+        ).fetchall()
+
+    wins = sum(1 for _, wl in wl_rows if wl == "W")
+    losses = sum(1 for _, wl in wl_rows if wl == "L")
+
+    # Compute current streak (positive=winning, negative=losing)
+    win_streak = 0
+    if wl_rows:
+        first_wl = wl_rows[0][1]
+        direction = 1 if first_wl == "W" else -1
+        for _, wl in wl_rows:
+            if (wl == "W" and direction > 0) or (wl == "L" and direction < 0):
+                win_streak += direction
+            else:
+                break
+
     if df.empty or df.iloc[0]["games"] == 0:
-        result = {"ppg": 0.0, "rpg": 0.0, "apg": 0.0, "games": 0}
+        result = {
+            "ppg": 0.0, "rpg": 0.0, "apg": 0.0, "games": 0,
+            "wins": 0, "losses": 0, "win_streak": 0,
+        }
     else:
         row = df.iloc[0]
         result = {
@@ -300,6 +335,9 @@ def get_team_profile(team_id: int, before_date: date) -> Dict[str, float]:
             "rpg": float(row["rpg"] or 0),
             "apg": float(row["apg"] or 0),
             "games": int(row["games"] or 0),
+            "wins": wins,
+            "losses": losses,
+            "win_streak": win_streak,
         }
     backtest_cache.put(cache_key, result)
     return result

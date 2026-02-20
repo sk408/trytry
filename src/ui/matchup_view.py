@@ -144,7 +144,18 @@ class MatchupView(QWidget):
         self.total_label = self.total_card.findChild(QLabel, "card_value")
         self.home_proj_label = self.home_proj_card.findChild(QLabel, "card_value")
         self.away_proj_label = self.away_proj_card.findChild(QLabel, "card_value")
-        
+
+        # Model vs Market edge labels
+        self.edge_spread_label = QLabel("")
+        self.edge_spread_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.edge_spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.edge_total_label = QLabel("")
+        self.edge_total_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.edge_total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.edge_confidence_label = QLabel("")
+        self.edge_confidence_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self.edge_confidence_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         # Injury impact labels
         self.home_injury_label = QLabel("No injuries")
         self.home_injury_label.setStyleSheet("color: #10b981; font-size: 12px;")
@@ -199,6 +210,7 @@ class MatchupView(QWidget):
 
         # Prediction summary – cards in a row
         pred_box = QGroupBox("Prediction Summary")
+        pred_outer = QVBoxLayout()
         pred_layout = QHBoxLayout()
         pred_layout.setSpacing(12)
 
@@ -224,7 +236,17 @@ class MatchupView(QWidget):
         away_col.addWidget(self.away_injury_label)
         pred_layout.addLayout(away_col)
 
-        pred_box.setLayout(pred_layout)
+        pred_outer.addLayout(pred_layout)
+
+        # Model vs Market edge row
+        edge_row = QHBoxLayout()
+        edge_row.setSpacing(24)
+        edge_row.addWidget(self.edge_spread_label)
+        edge_row.addWidget(self.edge_total_label)
+        edge_row.addWidget(self.edge_confidence_label)
+        pred_outer.addLayout(edge_row)
+
+        pred_box.setLayout(pred_outer)
         
         # Historical accuracy box
         history_box = QGroupBox("Historical Performance (Backtest)")
@@ -267,8 +289,18 @@ class MatchupView(QWidget):
         tables_layout.addWidget(home_box)
         tables_layout.addWidget(away_box)
 
+        # Data staleness banner
+        self.staleness_banner = QLabel("")
+        self.staleness_banner.setWordWrap(True)
+        self.staleness_banner.setVisible(False)
+        self.staleness_banner.setStyleSheet(
+            "background: #44370a; color: #fbbf24; border: 1px solid #a16207;"
+            " border-radius: 6px; padding: 6px 10px; font-size: 11px;"
+        )
+
         # Main layout
         layout = QVBoxLayout()
+        layout.addWidget(self.staleness_banner)
         layout.addLayout(game_row)
         layout.addLayout(form)
         layout.addLayout(btn_row)
@@ -380,6 +412,9 @@ class MatchupView(QWidget):
             self.spread_label.setText("Different teams")
             return
 
+        # Check data staleness
+        self._check_staleness()
+
         # Get comprehensive stats for both teams
         home_stats = get_team_matchup_stats(home_id, opponent_team_id=away_id, is_home=True)
         away_stats = get_team_matchup_stats(away_id, opponent_team_id=home_id, is_home=False)
@@ -441,7 +476,10 @@ class MatchupView(QWidget):
             self.spread_label.setStyleSheet("color: #ef4444; font-size: 24px; font-weight: 700;")
         else:
             self.spread_label.setStyleSheet("color: #f59e0b; font-size: 24px; font-weight: 700;")
-        
+
+        # Model vs Market edge — try to fetch Vegas line from ESPN
+        self._update_edge(home_id, away_id, display_spread, total, pred)
+
         # Update injury impact labels
         self._update_injury_labels(home_stats, self.home_injury_label)
         self._update_injury_labels(away_stats, self.away_injury_label)
@@ -453,6 +491,121 @@ class MatchupView(QWidget):
         self._populate_table(self.home_table, home_stats, away_id, is_home=True)
         self._populate_table(self.away_table, away_stats, home_id, is_home=False)
     
+    def _check_staleness(self) -> None:
+        """Show a warning banner if underlying data is stale."""
+        import json, os
+        from datetime import datetime as _dt, timedelta
+        warnings = []
+        try:
+            state_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", "data", "pipeline_state.json"
+            )
+            if os.path.exists(state_path):
+                with open(state_path, "r") as f:
+                    state = json.load(f)
+                now = _dt.now()
+
+                last_sync = state.get("last_sync_at")
+                if last_sync:
+                    dt = _dt.fromisoformat(last_sync)
+                    age = now - dt
+                    if age > timedelta(hours=12):
+                        hrs = age.total_seconds() / 3600
+                        warnings.append(
+                            f"Player stats last synced {hrs:.0f}h ago"
+                        )
+
+                last_opt = state.get("last_optimize_at")
+                if last_opt:
+                    dt = _dt.fromisoformat(last_opt)
+                    age = now - dt
+                    if age > timedelta(hours=24):
+                        warnings.append("Weights not optimized in 24h+")
+
+                last_inj = state.get("last_injury_history_at")
+                if last_inj:
+                    dt = _dt.fromisoformat(last_inj)
+                    age = now - dt
+                    if age > timedelta(hours=12):
+                        warnings.append("Injury data may be stale")
+        except Exception:
+            pass
+
+        if warnings:
+            self.staleness_banner.setText(
+                "\u26a0 Data freshness: " + " | ".join(warnings)
+                + "  — Run a full sync for best accuracy."
+            )
+            self.staleness_banner.setVisible(True)
+        else:
+            self.staleness_banner.setVisible(False)
+
+    def _update_edge(self, home_id: int, away_id: int,
+                     model_spread: float, model_total: float,
+                     pred) -> None:
+        """Compare model prediction to Vegas lines from ESPN and display edge."""
+        try:
+            from src.data.gamecast import get_live_games, get_game_odds
+            # Find matching ESPN game by team id
+            live_games = get_live_games()
+            espn_game_id = None
+            for g in live_games:
+                if str(home_id) == g.home_team_id or str(away_id) == g.away_team_id:
+                    espn_game_id = g.game_id
+                    break
+            if not espn_game_id:
+                self.edge_spread_label.setText("Vegas line: not available (no ESPN match)")
+                self.edge_total_label.setText("")
+                self.edge_confidence_label.setText("")
+                return
+            odds = get_game_odds(espn_game_id)
+            if not odds or (odds.spread == 0 and odds.over_under == 0):
+                self.edge_spread_label.setText("Vegas line: not available")
+                self.edge_total_label.setText("")
+                self.edge_confidence_label.setText("")
+                return
+
+            # Spread edge: model_spread is already in betting convention (neg = home fav)
+            # ESPN odds.spread is home perspective (neg = home fav)
+            spread_edge = model_spread - odds.spread
+            spread_color = "#10b981" if abs(spread_edge) >= 2 else "#f59e0b"
+            self.edge_spread_label.setText(
+                f"Spread — Model: {model_spread:+.1f} | Vegas: {odds.spread:+.1f} | "
+                f"Edge: {spread_edge:+.1f}"
+            )
+            self.edge_spread_label.setStyleSheet(
+                f"color: {spread_color}; font-size: 12px; font-weight: 600;"
+            )
+
+            # Total edge
+            total_edge = model_total - odds.over_under
+            total_color = "#10b981" if abs(total_edge) >= 3 else "#f59e0b"
+            ou_side = "OVER" if total_edge > 0 else "UNDER"
+            self.edge_total_label.setText(
+                f"Total — Model: {model_total:.1f} | Vegas O/U: {odds.over_under:.1f} | "
+                f"Edge: {total_edge:+.1f} ({ou_side})"
+            )
+            self.edge_total_label.setStyleSheet(
+                f"color: {total_color}; font-size: 12px; font-weight: 600;"
+            )
+
+            # Confidence band info
+            if pred.spread_std > 0:
+                self.edge_confidence_label.setText(
+                    f"ML uncertainty: spread ±{pred.spread_std:.1f} | "
+                    f"total ±{pred.total_std:.1f}"
+                )
+                self.edge_confidence_label.setStyleSheet(
+                    "color: #94a3b8; font-size: 11px;"
+                )
+            else:
+                self.edge_confidence_label.setText("")
+
+        except Exception as exc:
+            self.edge_spread_label.setText(f"Edge lookup failed: {exc}")
+            self.edge_total_label.setText("")
+            self.edge_confidence_label.setText("")
+
     def _update_backtest(self, home_id: int, away_id: int) -> None:
         """Update the historical performance section."""
         try:

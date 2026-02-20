@@ -48,6 +48,15 @@ try:
 except ImportError:
     _HAS_SHAP = False
 
+# scikit-learn Ridge for linear stacking (always available with sklearn)
+try:
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+    import pickle as _pickle
+    _HAS_SKLEARN = True
+except ImportError:
+    _HAS_SKLEARN = False
+
 
 # ====================================================================
 #  Paths
@@ -56,6 +65,9 @@ except ImportError:
 _MODEL_DIR = Path("data/ml_models")
 _SPREAD_MODEL_PATH = _MODEL_DIR / "spread_model.json"
 _TOTAL_MODEL_PATH = _MODEL_DIR / "total_model.json"
+_RIDGE_SPREAD_PATH = _MODEL_DIR / "ridge_spread.pkl"
+_RIDGE_TOTAL_PATH = _MODEL_DIR / "ridge_total.pkl"
+_SCALER_PATH = _MODEL_DIR / "scaler.pkl"
 _META_PATH = _MODEL_DIR / "model_meta.json"
 _FEATURE_COLS_PATH = _MODEL_DIR / "feature_columns.json"
 
@@ -212,6 +224,24 @@ def extract_features(g) -> Dict[str, float]:
     f["home_roster_changed"] = 1.0 if getattr(g, "home_roster_changed", False) else 0.0
     f["away_roster_changed"] = 1.0 if getattr(g, "away_roster_changed", False) else 0.0
 
+    # ── Momentum (recent win streak) ──
+    # Positive = on a winning streak, negative = losing streak.
+    f["home_win_streak"] = _safe(getattr(g, "home_win_streak", 0))
+    f["away_win_streak"] = _safe(getattr(g, "away_win_streak", 0))
+    f["diff_win_streak"] = f["home_win_streak"] - f["away_win_streak"]
+
+    # ── Rest differential ──
+    # Days since last game for each team.  Larger = more rested.
+    f["home_rest_days"] = _safe(getattr(g, "home_rest_days", 3))
+    f["away_rest_days"] = _safe(getattr(g, "away_rest_days", 3))
+    f["diff_rest_days"] = f["home_rest_days"] - f["away_rest_days"]
+
+    # ── Season win rate ──
+    # Games-played-weighted winning percentage entering this game.
+    f["home_win_pct"] = _safe(getattr(g, "home_win_pct", 0.5))
+    f["away_win_pct"] = _safe(getattr(g, "away_win_pct", 0.5))
+    f["diff_win_pct"] = f["home_win_pct"] - f["away_win_pct"]
+
     return f
 
 
@@ -251,6 +281,81 @@ def build_training_data(
 #  Training
 # ====================================================================
 
+# Optuna hyperparameter tuning (optional)
+try:
+    import optuna as _optuna
+    _optuna.logging.set_verbosity(_optuna.logging.WARNING)
+    _HAS_OPTUNA = True
+except ImportError:
+    _HAS_OPTUNA = False
+
+
+def _tune_xgb_hyperparams(
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_val: pd.DataFrame,
+    y_val: np.ndarray,
+    n_trials: int = 30,
+    n_jobs: int = 1,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> dict:
+    """Use Optuna to find good XGBoost hyperparameters.
+
+    Returns a dict of XGBRegressor kwargs.  Falls back to the manual
+    defaults if Optuna is unavailable or tuning fails.
+    """
+    defaults = dict(
+        n_estimators=500,
+        max_depth=3,
+        learning_rate=0.05,
+        subsample=0.7,
+        colsample_bytree=0.6,
+        min_child_weight=5,
+        reg_alpha=0.5,
+        reg_lambda=2.0,
+    )
+    progress = progress_cb or (lambda _: None)
+
+    if not _HAS_OPTUNA or not _HAS_XGB:
+        return defaults
+
+    try:
+        def _objective(trial):
+            params = {
+                "n_estimators": 500,
+                "max_depth": trial.suggest_int("max_depth", 2, 5),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.15, log=True),
+                "subsample": trial.suggest_float("subsample", 0.5, 0.9),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.4, 0.9),
+                "min_child_weight": trial.suggest_int("min_child_weight", 3, 15),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.01, 2.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 5.0, log=True),
+                "random_state": 42,
+                "verbosity": 0,
+                "n_jobs": n_jobs,
+                "early_stopping_rounds": 20,
+            }
+            model = xgb.XGBRegressor(**params)
+            model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+            pred = model.predict(X_val)
+            return float(np.mean(np.abs(pred - y_val)))
+
+        study = _optuna.create_study(direction="minimize")
+        study.optimize(_objective, n_trials=n_trials, show_progress_bar=False)
+
+        best = study.best_params
+        best["n_estimators"] = 500
+        best["random_state"] = 42
+        best["verbosity"] = 0
+        best["n_jobs"] = n_jobs
+        best["early_stopping_rounds"] = 20
+        progress(f"  Optuna best val MAE: {study.best_value:.2f} (params: {best})")
+        return best
+    except Exception as exc:
+        progress(f"  Optuna tuning failed ({exc}), using defaults")
+        return defaults
+
+
 @dataclass
 class MLTrainingResult:
     """Results from training the ML ensemble models."""
@@ -272,6 +377,7 @@ def train_models(
     val_fraction: float = 0.2,
     progress_cb: Optional[Callable[[str], None]] = None,
     max_workers: int = 1,
+    tune_hyperparams: bool = False,
 ) -> MLTrainingResult:
     """Train XGBoost spread and total models on precomputed games.
 
@@ -318,21 +424,30 @@ def train_models(
     # Key changes: shallower trees, higher min_child_weight, stronger L1/L2,
     # lower column sampling, and early stopping.
     n_jobs = max(1, max_workers)
+
+    # Optional Optuna hyperparameter tuning
+    if tune_hyperparams and _HAS_OPTUNA:
+        progress("Tuning spread model hyperparameters with Optuna...")
+        spread_params = _tune_xgb_hyperparams(
+            X_train, y_spread_train, X_val, y_spread_val,
+            n_trials=30, n_jobs=n_jobs, progress_cb=progress,
+        )
+        progress("Tuning total model hyperparameters with Optuna...")
+        total_params = _tune_xgb_hyperparams(
+            X_train, y_total_train, X_val, y_total_val,
+            n_trials=30, n_jobs=n_jobs, progress_cb=progress,
+        )
+    else:
+        spread_params = dict(
+            n_estimators=500, max_depth=3, learning_rate=0.05,
+            subsample=0.7, colsample_bytree=0.6, min_child_weight=5,
+            reg_alpha=0.5, reg_lambda=2.0, random_state=42,
+            verbosity=0, n_jobs=n_jobs, early_stopping_rounds=20,
+        )
+        total_params = dict(spread_params)
+
     progress(f"Training spread model (n_jobs={n_jobs})...")
-    spread_model = xgb.XGBRegressor(
-        n_estimators=500,           # more trees, but early stopping will cut
-        max_depth=3,                # was 5 → shallower to reduce memorisation
-        learning_rate=0.05,
-        subsample=0.7,              # was 0.8 → more row dropout
-        colsample_bytree=0.6,      # was 0.8 → more feature dropout
-        min_child_weight=5,         # new → prevents tiny leaf groups
-        reg_alpha=0.5,              # was 0.1 → stronger L1
-        reg_lambda=2.0,             # was 1.0 → stronger L2
-        random_state=42,
-        verbosity=0,
-        n_jobs=n_jobs,
-        early_stopping_rounds=20,   # new → stop when val stops improving
-    )
+    spread_model = xgb.XGBRegressor(**spread_params)
     spread_model.fit(
         X_train, y_spread_train,
         eval_set=[(X_val, y_spread_val)],
@@ -362,20 +477,7 @@ def train_models(
 
     # 5. Train total model (same regularisation strategy as spread)
     progress(f"Training total model (n_jobs={n_jobs})...")
-    total_model = xgb.XGBRegressor(
-        n_estimators=500,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.7,
-        colsample_bytree=0.6,
-        min_child_weight=5,
-        reg_alpha=0.5,
-        reg_lambda=2.0,
-        random_state=42,
-        verbosity=0,
-        n_jobs=n_jobs,
-        early_stopping_rounds=20,
-    )
+    total_model = xgb.XGBRegressor(**total_params)
     total_model.fit(
         X_train, y_total_train,
         eval_set=[(X_val, y_total_val)],
@@ -399,7 +501,36 @@ def train_models(
         for k, v in sorted_imp[:10]
     ]
 
-    # 6. SHAP analysis (if available)
+    # 6. Train Ridge linear models (stacking diversity)
+    if _HAS_SKLEARN:
+        progress("Training Ridge linear models (stacking)...")
+        try:
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
+
+            ridge_spread = Ridge(alpha=10.0)
+            ridge_spread.fit(X_train_scaled, y_spread_train)
+            ridge_total = Ridge(alpha=10.0)
+            ridge_total.fit(X_train_scaled, y_total_train)
+
+            ridge_s_val = ridge_spread.predict(X_val_scaled)
+            ridge_t_val = ridge_total.predict(X_val_scaled)
+            progress(
+                f"  Ridge spread MAE: {np.mean(np.abs(ridge_s_val - y_spread_val)):.2f}, "
+                f"total MAE: {np.mean(np.abs(ridge_t_val - y_total_val)):.2f}"
+            )
+
+            with open(_RIDGE_SPREAD_PATH, "wb") as fp:
+                _pickle.dump(ridge_spread, fp)
+            with open(_RIDGE_TOTAL_PATH, "wb") as fp:
+                _pickle.dump(ridge_total, fp)
+            with open(_SCALER_PATH, "wb") as fp:
+                _pickle.dump(scaler, fp)
+        except Exception as exc:
+            progress(f"  Ridge training failed: {exc}")
+
+    # 7. SHAP analysis (if available)
     if _HAS_SHAP:
         progress("Computing SHAP values for spread model...")
         try:
@@ -431,7 +562,7 @@ def train_models(
         except Exception as exc:
             progress(f"    SHAP total failed: {exc}")
 
-    # 7. Save metadata
+    # 8. Save metadata
     meta = {
         "n_train": n_train,
         "n_val": n_val,
@@ -441,6 +572,7 @@ def train_models(
         "total_train_mae": result.total_train_mae,
         "total_val_mae": result.total_val_mae,
         "feature_columns": feature_cols,
+        "has_ridge": _HAS_SKLEARN and _RIDGE_SPREAD_PATH.exists(),
         "trained_at": date.today().isoformat(),
     }
     with open(_META_PATH, "w") as fp:
@@ -461,12 +593,16 @@ def train_models(
 # Module-level model cache (loaded once, reused)
 _spread_model: Optional[xgb.XGBRegressor] = None
 _total_model: Optional[xgb.XGBRegressor] = None
+_ridge_spread = None  # Ridge model (optional)
+_ridge_total = None
+_ridge_scaler = None
 _feature_cols: Optional[List[str]] = None
 
 
 def _ensure_models_loaded() -> bool:
     """Load models from disk if not already cached. Returns True if models are ready."""
     global _spread_model, _total_model, _feature_cols
+    global _ridge_spread, _ridge_total, _ridge_scaler
 
     if _spread_model is not None and _total_model is not None:
         return True
@@ -490,6 +626,19 @@ def _ensure_models_loaded() -> bool:
         with open(_FEATURE_COLS_PATH) as fp:
             _feature_cols = json.load(fp)
 
+        # Load Ridge models if available (optional, not required)
+        if _HAS_SKLEARN:
+            try:
+                if _RIDGE_SPREAD_PATH.exists() and _RIDGE_TOTAL_PATH.exists() and _SCALER_PATH.exists():
+                    with open(_RIDGE_SPREAD_PATH, "rb") as fp:
+                        _ridge_spread = _pickle.load(fp)
+                    with open(_RIDGE_TOTAL_PATH, "rb") as fp:
+                        _ridge_total = _pickle.load(fp)
+                    with open(_SCALER_PATH, "rb") as fp:
+                        _ridge_scaler = _pickle.load(fp)
+            except Exception:
+                pass  # Ridge is optional; XGBoost alone is sufficient
+
         return True
     except Exception:
         _spread_model = None
@@ -501,8 +650,12 @@ def _ensure_models_loaded() -> bool:
 def reload_models() -> bool:
     """Force reload models from disk. Returns True if successful."""
     global _spread_model, _total_model, _feature_cols
+    global _ridge_spread, _ridge_total, _ridge_scaler
     _spread_model = None
     _total_model = None
+    _ridge_spread = None
+    _ridge_total = None
+    _ridge_scaler = None
     _feature_cols = None
     return _ensure_models_loaded()
 
@@ -526,12 +679,29 @@ def predict_ml(features: Dict[str, float]) -> Tuple[float, float, float]:
     row = {col: features.get(col, 0.0) for col in _feature_cols}
     X = pd.DataFrame([row])[_feature_cols]
 
-    # Predict
-    ml_spread = float(_spread_model.predict(X)[0])
-    ml_total = float(_total_model.predict(X)[0])
+    # Predict — XGBoost
+    xgb_spread = float(_spread_model.predict(X)[0])
+    xgb_total = float(_total_model.predict(X)[0])
 
-    # Confidence: fraction of non-zero features present
-    n_present = sum(1 for col in _feature_cols if features.get(col, 0.0) != 0.0)
+    # Blend with Ridge if available (70% XGBoost, 30% Ridge).
+    # Ridge provides linear-model diversity, reducing ensemble variance.
+    if _ridge_spread is not None and _ridge_scaler is not None:
+        try:
+            X_scaled = _ridge_scaler.transform(X)
+            ridge_s = float(_ridge_spread.predict(X_scaled)[0])
+            ridge_t = float(_ridge_total.predict(X_scaled)[0])
+            ml_spread = 0.70 * xgb_spread + 0.30 * ridge_s
+            ml_total = 0.70 * xgb_total + 0.30 * ridge_t
+        except Exception:
+            ml_spread, ml_total = xgb_spread, xgb_total
+    else:
+        ml_spread, ml_total = xgb_spread, xgb_total
+
+    # Confidence: fraction of features that were explicitly provided
+    # (not defaulted to 0).  Previous logic counted non-zero values, which
+    # incorrectly treated legitimate zeros (e.g. diff_fatigue=0 when both
+    # teams are equally rested) as missing.  Now we check for NaN sentinel.
+    n_present = sum(1 for col in _feature_cols if col in features)
     confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
 
     return ml_spread, ml_total, confidence
@@ -555,10 +725,23 @@ def predict_ml_with_uncertainty(
     row = {col: features.get(col, 0.0) for col in _feature_cols}
     X = pd.DataFrame([row])[_feature_cols]
 
-    ml_spread = float(_spread_model.predict(X)[0])
-    ml_total = float(_total_model.predict(X)[0])
+    xgb_spread = float(_spread_model.predict(X)[0])
+    xgb_total = float(_total_model.predict(X)[0])
 
-    n_present = sum(1 for col in _feature_cols if features.get(col, 0.0) != 0.0)
+    # Blend with Ridge if available (same 70/30 split as predict_ml)
+    if _ridge_spread is not None and _ridge_scaler is not None:
+        try:
+            X_scaled = _ridge_scaler.transform(X)
+            ridge_s = float(_ridge_spread.predict(X_scaled)[0])
+            ridge_t = float(_ridge_total.predict(X_scaled)[0])
+            ml_spread = 0.70 * xgb_spread + 0.30 * ridge_s
+            ml_total = 0.70 * xgb_total + 0.30 * ridge_t
+        except Exception:
+            ml_spread, ml_total = xgb_spread, xgb_total
+    else:
+        ml_spread, ml_total = xgb_spread, xgb_total
+
+    n_present = sum(1 for col in _feature_cols if col in features)
     confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
 
     # Estimate uncertainty from per-tree margin contributions.

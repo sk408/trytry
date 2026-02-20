@@ -68,8 +68,20 @@ class WeightConfig:
 
     # --- Sanity clamps ---
     spread_clamp: float = 18.0
-    total_min: float = 195.0
-    total_max: float = 248.0
+    total_min: float = 180.0       # was 195 — allow for rare low-scoring games
+    total_max: float = 255.0       # was 248 — allow for rare high-scoring games
+
+    # --- Player contribution blend weights ---
+    # Used in aggregate_projection: overall/location/vs-opponent split
+    player_base_weight: float = 0.40
+    player_location_weight: float = 0.30
+    player_vs_opp_weight: float = 0.30
+
+    # --- Injury recovery ---
+    injury_usage_boost: float = 0.30        # fraction of absent star's PPG redistributed
+    injury_minute_efficiency: float = 0.85  # production efficiency for redistributed minutes
+    injury_recovery_factor: float = 0.30    # fraction of lost production recovered by team
+    injury_onoff_multiplier: float = 0.50   # scale for on/off net-rating impact
 
     # ------------------------------------------------------------------
     # Serialisation helpers

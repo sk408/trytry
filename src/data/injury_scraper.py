@@ -197,33 +197,69 @@ def _fetch_rotowire_injuries(timeout: int = 15, progress: Optional[Callable[[str
     return results
 
 
+def _normalise_player_key(name: str, team: str) -> str:
+    """Create a consistent lookup key from player name and team."""
+    return f"{name.strip().lower()}|{team.strip().lower()}"
+
+
 def fetch_injuries(
     timeout: int = 15,
     progress_cb: Optional[Callable[[str], None]] = None
 ) -> List[Dict[str, str]]:
     """
-    Try multiple sources for injury data.
-    Returns first successful result, or empty list if all fail.
+    Fetch injury data from **all** available sources and merge by player.
+
+    Previously used a first-hit-wins strategy which missed injuries only
+    reported by one source.  Now merges all sources, preferring the most
+    severe status when a player appears in multiple sources (e.g. ESPN
+    says "Questionable" but RotoWire says "Out" → keep "Out").
     """
     log = progress_cb or (lambda _: None)
-    
-    # Try sources in order of reliability
+
+    severity_order = {
+        "out": 0,
+        "doubtful": 1,
+        "questionable": 2,
+        "day-to-day": 3,
+        "probable": 4,
+        "gtd": 2,  # game-time decision ≈ questionable
+    }
+
     sources = [
         ("ESPN", _fetch_espn_injuries),
         ("CBS Sports", _fetch_cbs_injuries),
         ("RotoWire", _fetch_rotowire_injuries),
     ]
-    
+
+    merged: Dict[str, Dict[str, str]] = {}  # key -> best entry
+
     for name, fetcher in sources:
         try:
             results = fetcher(timeout=timeout, progress=log)
-            if results:
-                log(f"Successfully loaded {len(results)} injuries from {name}")
-                return results
+            if not results:
+                continue
+            for entry in results:
+                key = _normalise_player_key(entry["player"], entry.get("team", ""))
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = dict(entry)
+                else:
+                    # Keep the more severe status
+                    new_sev = severity_order.get(entry["status"].strip().lower(), 5)
+                    old_sev = severity_order.get(existing["status"].strip().lower(), 5)
+                    if new_sev < old_sev:
+                        merged[key] = dict(entry)
+                    # Fill in missing injury detail from new source
+                    if not existing.get("injury") and entry.get("injury"):
+                        merged[key]["injury"] = entry["injury"]
         except Exception as exc:
             log(f"{name} error: {exc}")
             continue
-    
+
+    if merged:
+        log(f"Merged {len(merged)} unique injuries from all sources")
+        return list(merged.values())
+
     log("All injury sources failed - injuries not updated")
     return []
 

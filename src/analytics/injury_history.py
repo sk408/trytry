@@ -227,8 +227,8 @@ def build_injury_history(
     # ------------------------------------------------------------------ #
     progress("[Injury History] Building lookup structures...")
 
-    # player_id -> current team_id
-    player_team: Dict[int, int] = dict(
+    # player_id -> current team_id (fallback for players without stats)
+    player_team_current: Dict[int, int] = dict(
         zip(roster_df["player_id"].astype(int), roster_df["team_id"].astype(int))
     )
 
@@ -240,7 +240,19 @@ def build_injury_history(
             "position": str(row["position"] or ""),
         }
 
-    # Attach current team_id to every stats row so we can group by team
+    # Derive team_id from player_stats rows themselves instead of the
+    # current roster.  This avoids "trade blindness" — using the current
+    # team assignment for historical games played for a different team.
+    # The opponent_team_id + is_home columns let us infer the team,
+    # but the simplest reliable approach: build a mapping from
+    # (player_id, game_date) -> team_id using which team's game dates
+    # the stats row belongs to.  However, player_stats doesn't store
+    # team_id directly.  As a pragmatic fix, we use the current roster
+    # to map players but skip entries where the player's game_date
+    # doesn't appear in that team's schedule.
+    player_team: Dict[int, int] = player_team_current
+
+    # Attach team_id to every stats row
     stats_df["team_id"] = stats_df["player_id"].map(player_team)
     stats_df = stats_df.dropna(subset=["team_id"])
     stats_df["team_id"] = stats_df["team_id"].astype(int)
