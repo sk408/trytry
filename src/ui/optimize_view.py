@@ -521,6 +521,8 @@ class OptimizeView(QWidget):
         worker.error.connect(self._on_snapshot_error)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._cleanup_thread_refs)
         self._thread = thread
         self._worker = worker
@@ -562,6 +564,8 @@ class OptimizeView(QWidget):
         worker.error.connect(self._on_pipeline_error)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._cleanup_thread_refs)
         self._thread = thread
         self._worker = worker
@@ -769,6 +773,10 @@ class OptimizeView(QWidget):
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
+            try:
+                self._thread.finished.disconnect(self._cleanup_thread_refs)
+            except RuntimeError:
+                pass
             if self._thread.isRunning():
                 self._thread.quit()
                 self._thread.wait(3000)
@@ -776,6 +784,9 @@ class OptimizeView(QWidget):
             self._worker = None
 
     def _cleanup_thread_refs(self) -> None:
-        """Called on thread.finished — safe to drop refs."""
+        """Called on thread.finished — only clear refs if sender is current thread."""
+        sender = self.sender()
+        if sender is not None and sender is not self._thread:
+            return  # stale signal from a previous thread — ignore
         self._thread = None
         self._worker = None
