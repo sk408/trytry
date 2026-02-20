@@ -24,6 +24,7 @@ from src.ui.gamecast_view import GamecastView
 from src.ui.live_view import LiveView
 from src.ui.matchup_view import MatchupView
 from src.ui.notification_widget import NotificationBell, NotificationPanel
+from src.ui.optimize_view import OptimizeView
 from src.ui.players_view import PlayersView
 from datetime import date as _date
 
@@ -408,6 +409,7 @@ class MainWindow(QMainWindow):
         if _date.today() < _date(2026, 2, 17):  # hide after All-Star Weekend
             self.tabs.addTab(AllStarView(), "  All-Star  ")
         self.tabs.addTab(AccuracyView(), "  Accuracy  ")
+        self.tabs.addTab(OptimizeView(), "  Optimize  ")
         self.tabs.addTab(AutotuneView(), "  Autotune  ")
         self.tabs.addTab(AdminView(), "  Admin  ")
 
