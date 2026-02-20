@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.spec
+
+# Database & data artifacts
+data/nba_analytics.db
+data/backtest_cache/*.pkl
+data/cache/player_photos/
+data/cache/team_logos/
+data/ml_models/*.json
+data/app_settings.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Env
+.env
+venv/
+.venv/
