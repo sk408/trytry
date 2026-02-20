@@ -387,13 +387,13 @@ class OptimizeView(QWidget):
 
         before_row = QHBoxLayout()
         before_row.setSpacing(8)
-        _, self.b_games, _ = _make_metric_card("Games")
-        _, self.b_winner, _ = _make_metric_card("Winner %")
-        _, self.b_spread, _ = _make_metric_card("Avg Spread Err")
-        _, self.b_total10, _ = _make_metric_card("Total in 10 %")
-        _, self.b_totalerr, _ = _make_metric_card("Avg Total Err")
-        for w in [self.b_games, self.b_winner, self.b_spread, self.b_total10, self.b_totalerr]:
-            before_row.addWidget(w.parent())
+        c1, self.b_games, _ = _make_metric_card("Games")
+        c2, self.b_winner, _ = _make_metric_card("Winner %")
+        c3, self.b_spread, _ = _make_metric_card("Avg Spread Err")
+        c4, self.b_total10, _ = _make_metric_card("Total in 10 %")
+        c5, self.b_totalerr, _ = _make_metric_card("Avg Total Err")
+        for card in [c1, c2, c3, c4, c5]:
+            before_row.addWidget(card)
         cards_layout.addLayout(before_row)
 
         # AFTER section
@@ -403,13 +403,13 @@ class OptimizeView(QWidget):
 
         after_row = QHBoxLayout()
         after_row.setSpacing(8)
-        _, self.a_games, self.d_games = _make_metric_card("Games")
-        _, self.a_winner, self.d_winner = _make_metric_card("Winner %")
-        _, self.a_spread, self.d_spread = _make_metric_card("Avg Spread Err")
-        _, self.a_total10, self.d_total10 = _make_metric_card("Total in 10 %")
-        _, self.a_totalerr, self.d_totalerr = _make_metric_card("Avg Total Err")
-        for w in [self.a_games, self.a_winner, self.a_spread, self.a_total10, self.a_totalerr]:
-            after_row.addWidget(w.parent())
+        c1, self.a_games, self.d_games = _make_metric_card("Games")
+        c2, self.a_winner, self.d_winner = _make_metric_card("Winner %")
+        c3, self.a_spread, self.d_spread = _make_metric_card("Avg Spread Err")
+        c4, self.a_total10, self.d_total10 = _make_metric_card("Total in 10 %")
+        c5, self.a_totalerr, self.d_totalerr = _make_metric_card("Avg Total Err")
+        for card in [c1, c2, c3, c4, c5]:
+            after_row.addWidget(card)
         cards_layout.addLayout(after_row)
 
         cards_layout.addStretch()
