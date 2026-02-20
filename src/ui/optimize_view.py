@@ -1,9 +1,12 @@
 """Unified Optimize tab — one-click improvement with before/after comparison."""
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont
@@ -485,6 +488,7 @@ class OptimizeView(QWidget):
         self._before = None
         self._after = None
         self._current_step = -1
+        log.info("[Optimize] ‘Optimize Everything’ clicked — starting 2-phase pipeline")
 
         # Reset UI
         self.optimize_btn.setEnabled(False)
@@ -512,6 +516,7 @@ class OptimizeView(QWidget):
 
     def _start_snapshot(self) -> None:
         self._cleanup_thread()
+        log.info("[Optimize] Phase 1 — starting baseline snapshot worker")
         thread = QThread()
         worker = _SnapshotWorker()
         worker.moveToThread(thread)
@@ -531,6 +536,8 @@ class OptimizeView(QWidget):
     def _on_snapshot_done(self, snap: Snapshot) -> None:
         self._before = snap
         self._fill_before_cards(snap)
+        log.info("[Optimize] Phase 1 done — baseline: %d games, %.1f%% winner, "
+                 "%.2f avg spread err", snap.total_games, snap.winner_pct, snap.avg_spread_error)
         self.log.append(f"Baseline captured: {snap.total_games} games, "
                         f"{snap.winner_pct:.1f}% winner accuracy\n")
 
@@ -539,6 +546,7 @@ class OptimizeView(QWidget):
         self._start_pipeline()
 
     def _on_snapshot_error(self, msg: str) -> None:
+        log.warning("[Optimize] Phase 1 failed — %s", msg.split('\n')[0])
         self.log.append(f"Baseline capture failed: {msg}")
         self.log.append("Proceeding without baseline...\n")
         # Still run the pipeline even without a baseline
@@ -549,6 +557,8 @@ class OptimizeView(QWidget):
 
     def _start_pipeline(self) -> None:
         self._cleanup_thread()
+        log.info("[Optimize] Phase 2 — starting pipeline worker (trials=%d, force=%s)",
+                 self.trials_spin.value(), self.force_checkbox.isChecked())
         thread = QThread()
         worker = _PipelineWorker(
             n_trials=self.trials_spin.value(),
@@ -586,6 +596,7 @@ class OptimizeView(QWidget):
         self.step_tracker.mark_all_done(summary.get("steps", {}))
 
         total_s = summary.get("total_seconds", 0)
+        log.info("[Optimize] Phase 2 done — pipeline completed in %.0fs", total_s)
         self.log.append(f"\nPipeline completed in {total_s:.0f} seconds.")
 
         # Extract after snapshot from the pipeline's backtest results
@@ -596,6 +607,16 @@ class OptimizeView(QWidget):
             if self._before:
                 self._fill_deltas()
                 self._fill_team_comparison()
+                # Log the before/after comparison for traceability
+                b, a = self._before, self._after
+                log.info("[Optimize] BEFORE: winner=%.1f%%, spread_err=%.2f, total_err=%.2f",
+                         b.winner_pct, b.avg_spread_error, b.avg_total_error)
+                log.info("[Optimize] AFTER:  winner=%.1f%%, spread_err=%.2f, total_err=%.2f",
+                         a.winner_pct, a.avg_spread_error, a.avg_total_error)
+                log.info("[Optimize] DELTA:  winner=%+.1f%%, spread_err=%+.2f, total_err=%+.2f",
+                         a.winner_pct - b.winner_pct,
+                         a.avg_spread_error - b.avg_spread_error,
+                         a.avg_total_error - b.avg_total_error)
 
         # Fill step detail table
         self._fill_step_table(summary)
@@ -608,6 +629,7 @@ class OptimizeView(QWidget):
 
     def _on_pipeline_error(self, msg: str) -> None:
         self.progress_bar.setVisible(False)
+        log.error("[Optimize] Pipeline error: %s", msg.split('\n')[0])
         self.log.append(f"\nPipeline error: {msg}")
         self.status_lbl.setText("Pipeline failed — see log for details")
         self._finish()
@@ -773,6 +795,7 @@ class OptimizeView(QWidget):
 
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
+            log.debug("[Optimize-Thread] Cleaning up previous thread (disconnecting stale finished signal)")
             try:
                 self._thread.finished.disconnect(self._cleanup_thread_refs)
             except RuntimeError:
@@ -787,6 +810,8 @@ class OptimizeView(QWidget):
         """Called on thread.finished — only clear refs if sender is current thread."""
         sender = self.sender()
         if sender is not None and sender is not self._thread:
+            log.debug("[Optimize-Thread] Ignoring stale thread.finished signal (sender != current thread)")
             return  # stale signal from a previous thread — ignore
+        log.debug("[Optimize-Thread] Thread finished — clearing refs")
         self._thread = None
         self._worker = None

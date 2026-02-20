@@ -391,6 +391,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("NBA Betting Analytics")
         self.resize(1280, 860)
+        log.info("[MainWindow] Initializing — building tabs and services")
 
         # Active thread registry for graceful shutdown
         self._active_threads: set[QThread] = set()
@@ -412,6 +413,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(OptimizeView(), "  Optimize  ")
         self.tabs.addTab(AutotuneView(), "  Autotune  ")
         self.tabs.addTab(AdminView(), "  Admin  ")
+        log.info("[MainWindow] %d tabs created", self.tabs.count())
 
         # Connect schedule -> matchup navigation
         self.schedule_view.game_selected.connect(self._on_schedule_game_selected)
@@ -455,6 +457,8 @@ class MainWindow(QMainWindow):
         self._injury_timer = QTimer(self)
         self._injury_timer.timeout.connect(self._run_injury_check)
         QTimer.singleShot(_INJURY_FIRST_DELAY_MS, self._start_injury_timer)
+        log.info("[MainWindow] Startup complete — injury monitor scheduled in %ds",
+                 _INJURY_FIRST_DELAY_MS // 1000)
 
     # ── Thread registry ──
 
@@ -518,11 +522,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         """Flush caches, stop threads, and quit gracefully."""
+        log.info("[MainWindow] Close requested — shutting down")
         # Stop monitor timers
         self._injury_timer.stop()
 
         running = [t for t in self._active_threads if t.isRunning()]
         if running:
+            log.info("[MainWindow] %d background thread(s) still running", len(running))
             reply = QMessageBox.question(
                 self,
                 "Background Tasks Running",
@@ -568,11 +574,19 @@ class MainWindow(QMainWindow):
             pass
 
         event.accept()
+        log.info("[MainWindow] Shutdown complete")
         QApplication.quit()
 
 
 def run_app() -> None:
     migrations.init_db()
+    # Configure root logger so all traceability messages reach the console
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    log.info("[App] Starting NBA Betting Analytics")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyleSheet(GLOBAL_STYLESHEET)
     # Slightly larger default font

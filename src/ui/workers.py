@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import threading
 import traceback
 
 from PySide6.QtCore import QObject, QThread, Signal
+
+_log = logging.getLogger(__name__)
 
 from src.data.sync_service import (
     SyncCancelled,
@@ -296,6 +299,8 @@ class ScheduleFetchWorker(QObject):
 def start_schedule_fetch_worker(on_finished, on_error,
                                 include_future_days=14, force_refresh=False):
     """Convenience launcher — returns ``(thread, worker)``."""
+    _log.info("[Schedule-Worker] Launching async schedule fetch (future_days=%d, force=%s)",
+              include_future_days, force_refresh)
     thread = QThread()
     worker = ScheduleFetchWorker(include_future_days, force_refresh)
     worker.moveToThread(thread)

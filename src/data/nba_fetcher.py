@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import date
 from typing import Callable, Optional, List
 
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 
 # ====================================================================
@@ -43,6 +46,7 @@ _api_limiter = _RateLimiter(calls_per_second=1.67)
 # Without this, stats.nba.com rejects requests as bot traffic.
 from src.data._http_headers import patch_nba_api_headers
 patch_nba_api_headers()
+_log.info("[NBA-API] Browser-like headers patched via _http_headers module")
 
 
 def _utc_to_pacific(dt) -> str:

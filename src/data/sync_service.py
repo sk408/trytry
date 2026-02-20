@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import date, datetime, timedelta
 from typing import Callable, Iterable, List, Optional, Set
 
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 from src.data.injury_scraper import get_all_injuries
 from src.data.live_scores import fetch_live_games
@@ -298,6 +301,8 @@ def sync_player_logs(
     # ── Phase 1: Read-only lookups (short-lived connection) ──
     # Hold the DB lock only for the brief read queries, then release it
     # so the UI thread can access the database freely while we do network I/O.
+    _log.info("[Sync-Logs] Phase 1 — short-lived DB read for %d players (skip_cached=%s, force=%s)",
+              total, skip_cached, force)
     players_to_skip: Set[int] = set()
     with get_conn() as conn:
         abbr_to_id = _team_abbr_lookup(conn)
@@ -334,6 +339,8 @@ def sync_player_logs(
             if players_to_skip:
                 progress(f"Skipping {len(players_to_skip)} cached players (no recent games)")
     # Connection released — DB lock is free during the fetch loop.
+    _log.info("[Sync-Logs] Phase 1 done — DB lock released, %d players to skip, %d to fetch",
+              len(players_to_skip), total - len(players_to_skip))
 
     # ── Phase 2: Fetch + write loop ──
     # Network I/O and rate-limit sleeps happen OUTSIDE any DB connection.
@@ -453,6 +460,8 @@ def sync_player_logs(
 
     if skip_cached or force:
         progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
+        _log.info("[Sync-Logs] Phase 3 done — %d synced, %d skipped",
+                  players_synced, players_skipped)
 
 
 def _normalise_status_level(raw_status: str) -> str:

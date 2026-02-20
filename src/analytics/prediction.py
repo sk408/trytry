@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Callable, Dict, Iterable, Optional
+
+_log = logging.getLogger(__name__)
 
 from src.analytics.stats_engine import (
     aggregate_projection,
@@ -361,12 +364,17 @@ def predict_matchup(
                         )
                         ml_wt *= uncertainty_scale
                         base_weight = 1.0 - ml_wt
+                    _log.debug("[ML-Blend] conf=%.2f ml_wt=%.3f spread: base=%.1f ml=%.1f → %.1f | "
+                               "total: base=%.1f ml=%.1f → %.1f",
+                               ml_conf, ml_wt, spread, ml_spread,
+                               base_weight * spread + ml_wt * ml_spread,
+                               total, ml_total,
+                               base_weight * total + ml_wt * ml_total)
                     spread = base_weight * spread + ml_wt * ml_spread
                     total = base_weight * total + ml_wt * ml_total
         except Exception as _ml_exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "ML ensemble blending failed (using base model): %s", _ml_exc
+            _log.warning(
+                "[ML-Blend] ML ensemble blending failed (using base model): %s", _ml_exc
             )
 
     # ============ SANITY CLAMPS ============

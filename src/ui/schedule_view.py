@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 from PySide6.QtCore import Signal, QThread
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QFont, QIcon
@@ -88,6 +91,7 @@ class ScheduleView(QWidget):
 
     def refresh(self, *, force: bool = False) -> None:
         """Kick off a background schedule fetch."""
+        _log.info("[Schedule] Starting async schedule fetch (force=%s)", force)
         self.refresh_button.setEnabled(False)
         self.status_label.setText("Loading schedule…")
         thread, worker = start_schedule_fetch_worker(
@@ -102,11 +106,13 @@ class ScheduleView(QWidget):
 
     def _cleanup_sched_refs(self) -> None:
         """Drop thread/worker refs once the thread has fully stopped."""
+        _log.debug("[Schedule] Thread finished — clearing worker refs (GC-safe)")
         self._sched_thread = None
         self._sched_worker = None
 
     def _on_schedule_loaded(self, df: "pd.DataFrame") -> None:
         """Slot called on the main thread when the schedule arrives."""
+        _log.info("[Schedule] Loaded %d games", len(df) if df is not None else 0)
         self.refresh_button.setEnabled(True)
         self.status_label.setText("")
         self._populate_table(df)

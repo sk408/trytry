@@ -57,6 +57,8 @@ try:
 except ImportError:
     _HAS_SKLEARN = False
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
 
 # ====================================================================
 #  Paths
@@ -628,6 +630,8 @@ def _ensure_models_loaded() -> bool:
         with open(_FEATURE_COLS_PATH) as fp:
             _feature_cols = json.load(fp)
 
+        _log.info("[ML-Load] XGBoost models loaded (%d features)", len(_feature_cols))
+
         # Load Ridge models if available (optional, not required)
         if _HAS_SKLEARN:
             try:
@@ -638,11 +642,13 @@ def _ensure_models_loaded() -> bool:
                         _ridge_total = _pickle.load(fp)
                     with open(_SCALER_PATH, "rb") as fp:
                         _ridge_scaler = _pickle.load(fp)
+                    _log.info("[ML-Load] Ridge ensemble models loaded (70/30 XGB/Ridge blend active)")
             except Exception:
-                pass  # Ridge is optional; XGBoost alone is sufficient
+                _log.debug("[ML-Load] Ridge models not available — XGBoost-only mode")
 
         return True
-    except Exception:
+    except Exception as exc:
+        _log.warning("[ML-Load] Failed to load models: %s", exc)
         _spread_model = None
         _total_model = None
         _feature_cols = None
@@ -653,6 +659,7 @@ def reload_models() -> bool:
     """Force reload models from disk. Returns True if successful."""
     global _spread_model, _total_model, _feature_cols
     global _ridge_spread, _ridge_total, _ridge_scaler
+    _log.info("[ML-Reload] Acquiring model lock for reload (thread-safe)")
     with _model_lock:
         _spread_model = None
         _total_model = None
@@ -660,7 +667,9 @@ def reload_models() -> bool:
         _ridge_total = None
         _ridge_scaler = None
         _feature_cols = None
-        return _ensure_models_loaded()
+        ok = _ensure_models_loaded()
+        _log.info("[ML-Reload] Reload complete — success=%s", ok)
+        return ok
 
 
 def is_ml_available() -> bool:
@@ -685,6 +694,7 @@ def predict_ml(features: Dict[str, float]) -> Tuple[float, float, float]:
     r_spread, r_total, r_scaler = _ridge_spread, _ridge_total, _ridge_scaler
 
     if s_model is None or t_model is None or feat_cols is None:
+        _log.debug("[ML-Predict] Thread-safe snapshot found None refs — returning defaults")
         return 0.0, 0.0, 0.0
 
     # Build feature vector aligned to training columns
@@ -740,6 +750,7 @@ def predict_ml_with_uncertainty(
     r_spread, r_total, r_scaler = _ridge_spread, _ridge_total, _ridge_scaler
 
     if s_model is None or t_model is None or feat_cols is None:
+        _log.debug("[ML-PredictUnc] Thread-safe snapshot found None refs — returning defaults")
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
     row = {col: features.get(col, 0.0) for col in feat_cols}
