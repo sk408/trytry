@@ -97,19 +97,21 @@ class ScheduleView(QWidget):
         )
         self._sched_thread = thread   # prevent GC
         self._sched_worker = worker   # prevent GC (PySide6 weak-refs slots)
+        thread.finished.connect(self._cleanup_sched_refs)
         thread.start()
+
+    def _cleanup_sched_refs(self) -> None:
+        """Drop thread/worker refs once the thread has fully stopped."""
+        self._sched_thread = None
+        self._sched_worker = None
 
     def _on_schedule_loaded(self, df: "pd.DataFrame") -> None:
         """Slot called on the main thread when the schedule arrives."""
-        self._sched_thread = None
-        self._sched_worker = None
         self.refresh_button.setEnabled(True)
         self.status_label.setText("")
         self._populate_table(df)
 
     def _on_schedule_error(self, msg: str) -> None:
-        self._sched_thread = None
-        self._sched_worker = None
         self.refresh_button.setEnabled(True)
         self.status_label.setText("")
         self.table.setRowCount(1)
