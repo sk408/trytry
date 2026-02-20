@@ -294,7 +294,11 @@ def sync_player_logs(
     progress = progress_cb or (lambda _msg: None)
     player_ids = list(player_ids)
     total = len(player_ids)
-    
+
+    # ── Phase 1: Read-only lookups (short-lived connection) ──
+    # Hold the DB lock only for the brief read queries, then release it
+    # so the UI thread can access the database freely while we do network I/O.
+    players_to_skip: Set[int] = set()
     with get_conn() as conn:
         abbr_to_id = _team_abbr_lookup(conn)
 
@@ -307,9 +311,8 @@ def sync_player_logs(
                 progress(f"Game logs fresh (no new completed games since last sync, "
                          f"{cached_count} players cached) — skipping")
                 return
-        
+
         # Determine which players to skip
-        players_to_skip: Set[int] = set()
         if skip_cached and not force:
             cached_players = _get_cached_players(conn, max_age_hours=cache_max_age_hours)
             recent_game_players = _get_players_with_recent_games(conn, days=force_recent_days)
@@ -327,124 +330,129 @@ def sync_player_logs(
 
             # Skip cached players UNLESS they have recent games
             players_to_skip = cached_players - recent_game_players
-            
+
             if players_to_skip:
                 progress(f"Skipping {len(players_to_skip)} cached players (no recent games)")
-        
-        players_synced = 0
-        players_skipped = 0
-        
-        for idx, player_id in enumerate(player_ids, start=1):
-            # Skip if cached
-            if player_id in players_to_skip:
-                players_skipped += 1
-                continue
-            
-            _check_cancel(cancel_check)
+    # Connection released — DB lock is free during the fetch loop.
 
-            players_synced += 1
-            if players_synced == 1 or players_synced % 25 == 0:
-                progress(f"Syncing game logs {players_synced}/{total - len(players_to_skip)}...")
+    # ── Phase 2: Fetch + write loop ──
+    # Network I/O and rate-limit sleeps happen OUTSIDE any DB connection.
+    # Each player's write uses a brief, dedicated connection.
+    players_synced = 0
+    players_skipped = 0
 
-            # Fetch with retries
-            logs = None
-            for attempt in range(max_retries + 1):
-                try:
-                    logs = fetch_player_game_logs(player_id, season)
-                    break
-                except Exception as exc:
-                    if attempt < max_retries:
-                        time.sleep(1.0 + attempt)  # backoff before retry
-                    else:
-                        progress(f"Player {player_id} logs failed after {max_retries+1} attempts: {exc}")
+    _UPSERT_SQL = """
+        INSERT INTO player_stats
+            (player_id, opponent_team_id, is_home, game_date, game_id,
+             points, rebounds, assists, minutes,
+             steals, blocks, turnovers,
+             fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
+             oreb, dreb, plus_minus,
+             win_loss, personal_fouls)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(player_id, opponent_team_id, game_date) DO UPDATE SET
+            game_id = excluded.game_id,
+            steals = excluded.steals,
+            blocks = excluded.blocks,
+            turnovers = excluded.turnovers,
+            fg_made = excluded.fg_made,
+            fg_attempted = excluded.fg_attempted,
+            fg3_made = excluded.fg3_made,
+            fg3_attempted = excluded.fg3_attempted,
+            ft_made = excluded.ft_made,
+            ft_attempted = excluded.ft_attempted,
+            oreb = excluded.oreb,
+            dreb = excluded.dreb,
+            plus_minus = excluded.plus_minus,
+            win_loss = excluded.win_loss,
+            personal_fouls = excluded.personal_fouls
+    """
 
-            if logs is None or logs.empty:
-                time.sleep(sleep_between)
-                continue
+    for idx, player_id in enumerate(player_ids, start=1):
+        # Skip if cached
+        if player_id in players_to_skip:
+            players_skipped += 1
+            continue
 
-            # Map opponent abbreviation to team_id
-            logs["opponent_team_id"] = logs["opponent_abbr"].map(abbr_to_id)
-            logs = logs.dropna(subset=["opponent_team_id"])
-            
-            # Build payload with all stats (including WL and PF)
-            payload = []
-            for row in logs.itertuples(index=False):
-                payload.append((
-                    player_id,
-                    int(row.opponent_team_id),
-                    int(row.is_home),
-                    row.game_date,
-                    getattr(row, 'game_id', ''),
-                    # Basic stats
-                    float(row.points),
-                    float(row.rebounds),
-                    float(row.assists),
-                    float(row.minutes),
-                    # Defensive stats
-                    float(getattr(row, 'steals', 0) or 0),
-                    float(getattr(row, 'blocks', 0) or 0),
-                    float(getattr(row, 'turnovers', 0) or 0),
-                    # Shooting stats
-                    int(getattr(row, 'fg_made', 0) or 0),
-                    int(getattr(row, 'fg_attempted', 0) or 0),
-                    int(getattr(row, 'fg3_made', 0) or 0),
-                    int(getattr(row, 'fg3_attempted', 0) or 0),
-                    int(getattr(row, 'ft_made', 0) or 0),
-                    int(getattr(row, 'ft_attempted', 0) or 0),
-                    # Rebound breakdown
-                    float(getattr(row, 'oreb', 0) or 0),
-                    float(getattr(row, 'dreb', 0) or 0),
-                    # Impact
-                    float(getattr(row, 'plus_minus', 0) or 0),
-                    # Win/Loss and personal fouls (NEW)
-                    str(getattr(row, 'win_loss', '') or '') or None,
-                    float(getattr(row, 'personal_fouls', 0) or 0),
-                ))
-            
-            conn.executemany(
-                """
-                INSERT INTO player_stats
-                    (player_id, opponent_team_id, is_home, game_date, game_id,
-                     points, rebounds, assists, minutes,
-                     steals, blocks, turnovers,
-                     fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
-                     oreb, dreb, plus_minus,
-                     win_loss, personal_fouls)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(player_id, opponent_team_id, game_date) DO UPDATE SET
-                    game_id = excluded.game_id,
-                    steals = excluded.steals,
-                    blocks = excluded.blocks,
-                    turnovers = excluded.turnovers,
-                    fg_made = excluded.fg_made,
-                    fg_attempted = excluded.fg_attempted,
-                    fg3_made = excluded.fg3_made,
-                    fg3_attempted = excluded.fg3_attempted,
-                    ft_made = excluded.ft_made,
-                    ft_attempted = excluded.ft_attempted,
-                    oreb = excluded.oreb,
-                    dreb = excluded.dreb,
-                    plus_minus = excluded.plus_minus,
-                    win_loss = excluded.win_loss,
-                    personal_fouls = excluded.personal_fouls
-                """,
-                payload,
-            )
-            
-            # Update the sync cache for this player
-            latest_game = max((row[3] for row in payload), default=None) if payload else None
-            _update_player_cache(conn, player_id, len(payload), latest_game)
-            
-            # Rate limit between successful fetches
+        _check_cancel(cancel_check)
+
+        players_synced += 1
+        if players_synced == 1 or players_synced % 25 == 0:
+            progress(f"Syncing game logs {players_synced}/{total - len(players_to_skip)}...")
+
+        # ── Network fetch (NO DB lock held) ──
+        logs = None
+        for attempt in range(max_retries + 1):
+            try:
+                logs = fetch_player_game_logs(player_id, season)
+                break
+            except Exception as exc:
+                if attempt < max_retries:
+                    time.sleep(1.0 + attempt)  # backoff before retry
+                else:
+                    progress(f"Player {player_id} logs failed after {max_retries+1} attempts: {exc}")
+
+        if logs is None or logs.empty:
             time.sleep(sleep_between)
-        
-        # Record freshness snapshot AFTER writing new data
+            continue
+
+        # Map opponent abbreviation to team_id (in-memory, no DB needed)
+        logs["opponent_team_id"] = logs["opponent_abbr"].map(abbr_to_id)
+        logs = logs.dropna(subset=["opponent_team_id"])
+
+        # Build payload in memory (no DB lock needed)
+        payload = []
+        for row in logs.itertuples(index=False):
+            payload.append((
+                player_id,
+                int(row.opponent_team_id),
+                int(row.is_home),
+                row.game_date,
+                getattr(row, 'game_id', ''),
+                # Basic stats
+                float(row.points),
+                float(row.rebounds),
+                float(row.assists),
+                float(row.minutes),
+                # Defensive stats
+                float(getattr(row, 'steals', 0) or 0),
+                float(getattr(row, 'blocks', 0) or 0),
+                float(getattr(row, 'turnovers', 0) or 0),
+                # Shooting stats
+                int(getattr(row, 'fg_made', 0) or 0),
+                int(getattr(row, 'fg_attempted', 0) or 0),
+                int(getattr(row, 'fg3_made', 0) or 0),
+                int(getattr(row, 'fg3_attempted', 0) or 0),
+                int(getattr(row, 'ft_made', 0) or 0),
+                int(getattr(row, 'ft_attempted', 0) or 0),
+                # Rebound breakdown
+                float(getattr(row, 'oreb', 0) or 0),
+                float(getattr(row, 'dreb', 0) or 0),
+                # Impact
+                float(getattr(row, 'plus_minus', 0) or 0),
+                # Win/Loss and personal fouls (NEW)
+                str(getattr(row, 'win_loss', '') or '') or None,
+                float(getattr(row, 'personal_fouls', 0) or 0),
+            ))
+
+        # ── Brief DB write (short-lived connection) ──
+        latest_game = max((row[3] for row in payload), default=None) if payload else None
+        with get_conn() as conn:
+            conn.executemany(_UPSERT_SQL, payload)
+            _update_player_cache(conn, player_id, len(payload), latest_game)
+            conn.commit()
+
+        # Rate limit between successful fetches (NO DB lock held)
+        time.sleep(sleep_between)
+
+    # ── Phase 3: Finalize (short-lived connection) ──
+    with get_conn() as conn:
         gc, gd = _get_db_game_snapshot(conn)
         _set_sync_meta(conn, "game_logs", gc, gd)
         conn.commit()
-        
-        if skip_cached or force:
-            progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
+
+    if skip_cached or force:
+        progress(f"Sync complete: {players_synced} synced, {players_skipped} cached (skipped)")
 
 
 def _normalise_status_level(raw_status: str) -> str:
