@@ -262,3 +262,48 @@ def start_image_sync_worker(on_progress, on_finished, on_error):
     thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
     thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
     return thread, worker
+
+
+# ── Schedule fetch (lightweight, returns a DataFrame) ──
+
+
+class ScheduleFetchWorker(QObject):
+    """Fetch the NBA schedule off the UI thread.
+
+    Emits *finished* with the resulting ``pd.DataFrame`` (possibly empty)
+    or *error* with a message string.
+    """
+    finished = Signal(object)   # pd.DataFrame
+    error = Signal(str)
+
+    def __init__(self, include_future_days: int = 14, force_refresh: bool = False) -> None:
+        super().__init__()
+        self._future_days = include_future_days
+        self._force = force_refresh
+
+    def run(self) -> None:
+        try:
+            from src.data.sync_service import sync_schedule
+            df = sync_schedule(
+                include_future_days=self._future_days,
+                force_refresh=self._force,
+            )
+            self.finished.emit(df)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+def start_schedule_fetch_worker(on_finished, on_error,
+                                include_future_days=14, force_refresh=False):
+    """Convenience launcher — returns ``(thread, worker)``."""
+    thread = QThread()
+    worker = ScheduleFetchWorker(include_future_days, force_refresh)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)  # type: ignore[arg-type]
+    worker.finished.connect(on_finished)  # type: ignore[arg-type]
+    worker.error.connect(on_error)  # type: ignore[arg-type]
+    worker.finished.connect(thread.quit)  # type: ignore[arg-type]
+    worker.error.connect(thread.quit)  # type: ignore[arg-type]
+    thread.finished.connect(worker.deleteLater)  # type: ignore[arg-type]
+    thread.finished.connect(thread.deleteLater)  # type: ignore[arg-type]
+    return thread, worker

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from src.analytics.stats_engine import get_team_matchup_stats, TeamMatchupStats
 from src.analytics.prediction import predict_matchup
 from src.data.image_cache import get_team_logo_pixmap, get_player_photo_pixmap
-from src.data.sync_service import sync_schedule
+from src.ui.workers import start_schedule_fetch_worker
 from src.database.db import get_conn
 
 
@@ -310,10 +310,11 @@ class MatchupView(QWidget):
         self.setLayout(layout)
         
         self._games_data = []  # Store game data for selection
+        self._sched_thread = None  # keep reference alive for GC
         self.refresh()
 
     def refresh(self) -> None:
-        # Load teams for manual selection
+        # Load teams for manual selection (fast local DB query)
         teams = _teams_df()
         self.home_combo.clear()
         self.away_combo.clear()
@@ -321,17 +322,36 @@ class MatchupView(QWidget):
             label = f"{row['abbreviation']} - {row['name']}"
             self.home_combo.addItem(label, int(row["team_id"]))
             self.away_combo.addItem(label, int(row["team_id"]))
-        
-        # Load scheduled games (today + 14 days, sorted chronologically)
+
+        # Kick off async schedule fetch (doesn't block UI)
+        self._start_schedule_load()
+
+    def _start_schedule_load(self, force: bool = False) -> None:
+        """Load the game dropdown in the background."""
+        self.game_combo.blockSignals(True)
+        self.game_combo.clear()
+        self.game_combo.addItem("Loading schedule…", None)
+        self.game_combo.blockSignals(False)
+
+        thread, _worker = start_schedule_fetch_worker(
+            on_finished=self._on_schedule_loaded,
+            on_error=self._on_schedule_error,
+            force_refresh=force,
+        )
+        self._sched_thread = thread
+        thread.start()
+
+    def _on_schedule_loaded(self, sched_df: "pd.DataFrame") -> None:
+        """Populate the game dropdown from the fetched schedule."""
+        self._sched_thread = None
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("-- Select a game --", None)
-        
+
         self._games_data = []
         try:
             from datetime import date as _date
-            sched_df = sync_schedule(include_future_days=14)
-            if not sched_df.empty:
+            if sched_df is not None and not sched_df.empty:
                 sched_df = sched_df.copy()
                 sched_df["game_date"] = pd.to_datetime(sched_df["game_date"]).dt.date
                 today = _date.today()
@@ -351,7 +371,7 @@ class MatchupView(QWidget):
                     self._games_data.append(game)
         except Exception:
             pass
-        
+
         for game in self._games_data:
             gd = game["game_date"]
             date_fmt = gd.strftime("%a %m/%d") if hasattr(gd, "strftime") else str(gd)
@@ -359,8 +379,17 @@ class MatchupView(QWidget):
             time_part = f" - {time_str}" if time_str and time_str != "TBD" else ""
             label = f"{date_fmt}: {game['away_abbr']} @ {game['home_abbr']}{time_part}"
             self.game_combo.addItem(label, game)
-        
+
         self.game_combo.blockSignals(False)
+
+    def _on_schedule_error(self, msg: str) -> None:
+        """Handle schedule fetch error — show placeholder in dropdown."""
+        self._sched_thread = None
+        self.game_combo.blockSignals(True)
+        self.game_combo.clear()
+        self.game_combo.addItem("-- Select a game --", None)
+        self.game_combo.blockSignals(False)
+        self._games_data = []
 
     def _on_game_selected(self, index: int) -> None:
         """When a game is selected from dropdown, populate home/away teams."""

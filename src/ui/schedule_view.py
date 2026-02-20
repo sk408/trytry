@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QThread
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
 
 from src.data.nba_fetcher import get_current_season
 from src.data.image_cache import get_team_logo_pixmap
-from src.data.sync_service import sync_schedule
 from src.database.db import get_conn
+from src.ui.workers import start_schedule_fetch_worker
 
 
 def _relative_date_label(game_date: date, today: date) -> str:
@@ -48,6 +48,7 @@ class ScheduleView(QWidget):
         super().__init__()
         self._games_data: list[dict] = []
         self._loaded_once = False  # tracks whether we've auto-loaded
+        self._sched_thread: QThread | None = None  # keep reference alive
 
         self.table = QTableWidget()
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -62,10 +63,14 @@ class ScheduleView(QWidget):
 
         self.season_label = QLabel(f"Season: {get_current_season()}")
 
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #888; font-size: 11px;")
+
         header = QHBoxLayout()
         header.addWidget(QLabel("Schedule"))
         header.addWidget(self.season_label)
         header.addStretch()
+        header.addWidget(self.status_label)
         header.addWidget(self.open_matchup_btn)
         header.addWidget(self.refresh_button)
 
@@ -81,16 +86,37 @@ class ScheduleView(QWidget):
             self._loaded_once = True
             self.refresh()
 
-    def refresh(self) -> None:
-        try:
-            df = sync_schedule(include_future_days=14)
-        except Exception as exc:
-            self.table.setRowCount(1)
-            self.table.setColumnCount(1)
-            self.table.setItem(0, 0, QTableWidgetItem(f"Error: {exc}"))
-            self._games_data = []
-            return
-        if df.empty:
+    def refresh(self, *, force: bool = False) -> None:
+        """Kick off a background schedule fetch."""
+        self.refresh_button.setEnabled(False)
+        self.status_label.setText("Loading schedule…")
+        thread, _worker = start_schedule_fetch_worker(
+            on_finished=self._on_schedule_loaded,
+            on_error=self._on_schedule_error,
+            force_refresh=force,
+        )
+        self._sched_thread = thread   # prevent GC
+        thread.start()
+
+    def _on_schedule_loaded(self, df: "pd.DataFrame") -> None:
+        """Slot called on the main thread when the schedule arrives."""
+        self._sched_thread = None
+        self.refresh_button.setEnabled(True)
+        self.status_label.setText("")
+        self._populate_table(df)
+
+    def _on_schedule_error(self, msg: str) -> None:
+        self._sched_thread = None
+        self.refresh_button.setEnabled(True)
+        self.status_label.setText("")
+        self.table.setRowCount(1)
+        self.table.setColumnCount(1)
+        self.table.setItem(0, 0, QTableWidgetItem(f"Error: {msg}"))
+        self._games_data = []
+
+    def _populate_table(self, df: "pd.DataFrame") -> None:
+        """Build the table widget from a schedule DataFrame."""
+        if df is None or df.empty:
             self.table.setRowCount(0)
             self.table.setColumnCount(0)
             self._games_data = []
