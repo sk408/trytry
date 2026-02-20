@@ -579,8 +579,12 @@ def get_team_matchup_stats(
                 net_diff = float(impact_row[0])
                 on_minutes = float(impact_row[1] or inj_player.mpg)
                 minute_fraction = on_minutes / 48.0
+                # Positive net_diff = team is better with this player →
+                # losing them is a penalty (positive value).
+                # Negative net_diff = team is worse with this player →
+                # losing them is a boost (negative value subtracted = addition).
                 point_impact = net_diff * minute_fraction * _wc.injury_onoff_multiplier * af
-                total_onoff_penalty += max(0, point_impact)
+                total_onoff_penalty += point_impact
                 players_with_onoff += 1
 
     if players_with_onoff > 0:
@@ -967,24 +971,33 @@ def get_player_impact_data(player_id: int, season: Optional[str] = None) -> Opti
     return dict(zip(cols, row))
 
 
-def get_offensive_rating(team_id: int) -> float:
+def get_offensive_rating(team_id: int, as_of_date=None) -> float:
     """
     Get team offensive rating.
     Prefers official NBA metrics from team_metrics table; falls back to
     hand-calculated from player game logs.
-    """
-    metrics = get_team_metrics(team_id)
-    if metrics:
-        # Prefer NBA estimated metric, then dashboard advanced
-        for key in ("e_off_rating", "off_rating"):
-            val = metrics.get(key)
-            if val is not None:
-                return float(val)
 
-    # Fallback: hand-calculate from last 20 games
+    When *as_of_date* is provided, skip the team_metrics snapshot
+    (which reflects the full season) and always use the hand-calculated
+    path with a date filter — avoids data leakage in point-in-time mode.
+    """
+    if as_of_date is None:
+        metrics = get_team_metrics(team_id)
+        if metrics:
+            for key in ("e_off_rating", "off_rating"):
+                val = metrics.get(key)
+                if val is not None:
+                    return float(val)
+
+    # Hand-calculate from last 20 games (before as_of_date if set)
+    date_clause = ""
+    params: list = [team_id]
+    if as_of_date is not None:
+        date_clause = "AND ps.game_date < ?"
+        params.append(str(as_of_date))
     with get_conn() as conn:
         df = pd.read_sql(
-            """
+            f"""
             SELECT ps.game_date,
                    SUM(ps.points) as team_pts,
                    SUM(ps.fg_attempted) as team_fga,
@@ -993,12 +1006,12 @@ def get_offensive_rating(team_id: int) -> float:
                    SUM(ps.oreb) as team_oreb
             FROM player_stats ps
             JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ?
+            WHERE p.team_id = ? {date_clause}
             GROUP BY ps.game_date
             ORDER BY ps.game_date DESC
             LIMIT 20
             """,
-            conn, params=[team_id],
+            conn, params=params,
         )
     if df.empty:
         return 110.0
@@ -1007,22 +1020,31 @@ def get_offensive_rating(team_id: int) -> float:
     return (float(df["team_pts"].mean()) / poss * 100) if poss > 0 else 110.0
 
 
-def get_defensive_rating(team_id: int) -> float:
+def get_defensive_rating(team_id: int, as_of_date=None) -> float:
     """
     Get team defensive rating (opponent pts per 100 possessions).
     Lower = better defense.
     Prefers official metrics; falls back to hand-calculated.
-    """
-    metrics = get_team_metrics(team_id)
-    if metrics:
-        for key in ("e_def_rating", "def_rating"):
-            val = metrics.get(key)
-            if val is not None:
-                return float(val)
 
+    When *as_of_date* is provided, skip the team_metrics snapshot and
+    use date-filtered query to avoid data leakage.
+    """
+    if as_of_date is None:
+        metrics = get_team_metrics(team_id)
+        if metrics:
+            for key in ("e_def_rating", "def_rating"):
+                val = metrics.get(key)
+                if val is not None:
+                    return float(val)
+
+    date_clause = ""
+    params: list = [team_id]
+    if as_of_date is not None:
+        date_clause = "AND ps.game_date < ?"
+        params.append(str(as_of_date))
     with get_conn() as conn:
         df = pd.read_sql(
-            """
+            f"""
             SELECT ps.game_date,
                    SUM(ps.points) as opp_pts,
                    SUM(ps.fg_attempted) as opp_fga,
@@ -1030,12 +1052,12 @@ def get_defensive_rating(team_id: int) -> float:
                    SUM(ps.turnovers) as opp_tov,
                    SUM(ps.oreb) as opp_oreb
             FROM player_stats ps
-            WHERE ps.opponent_team_id = ?
+            WHERE ps.opponent_team_id = ? {date_clause}
             GROUP BY ps.game_date
             ORDER BY ps.game_date DESC
             LIMIT 20
             """,
-            conn, params=[team_id],
+            conn, params=params,
         )
     if df.empty:
         return 110.0
@@ -1044,48 +1066,88 @@ def get_defensive_rating(team_id: int) -> float:
     return (float(df["opp_pts"].mean()) / poss * 100) if poss > 0 else 110.0
 
 
-def get_pace(team_id: int) -> float:
-    """Get team pace (possessions per game). Prefers official metrics."""
-    metrics = get_team_metrics(team_id)
-    if metrics:
-        for key in ("e_pace", "pace"):
-            val = metrics.get(key)
-            if val is not None:
-                return float(val)
-    return 98.0  # league average fallback
+def get_pace(team_id: int, as_of_date=None) -> float:
+    """Get team pace (possessions per game). Prefers official metrics.
+
+    When *as_of_date* is set, estimate pace from game logs instead of
+    the season-end snapshot.
+    """
+    if as_of_date is None:
+        metrics = get_team_metrics(team_id)
+        if metrics:
+            for key in ("e_pace", "pace"):
+                val = metrics.get(key)
+                if val is not None:
+                    return float(val)
+
+    # Hand-calculate pace from game logs (before as_of_date if set)
+    date_clause = ""
+    params: list = [team_id]
+    if as_of_date is not None:
+        date_clause = "AND ps.game_date < ?"
+        params.append(str(as_of_date))
+    with get_conn() as conn:
+        df = pd.read_sql(
+            f"""
+            SELECT ps.game_date,
+                   SUM(ps.fg_attempted) as fga,
+                   SUM(ps.ft_attempted) as fta,
+                   SUM(ps.turnovers) as tov,
+                   SUM(ps.oreb) as oreb
+            FROM player_stats ps
+            JOIN players p ON p.player_id = ps.player_id
+            WHERE p.team_id = ? {date_clause}
+            GROUP BY ps.game_date
+            ORDER BY ps.game_date DESC
+            LIMIT 20
+            """,
+            conn, params=params,
+        )
+    if df.empty:
+        return 98.0  # league average fallback
+    # Rough pace ≈ possessions per game
+    poss = (df["fga"].astype(float) - df["oreb"].astype(float)
+            + df["tov"].astype(float) + 0.44 * df["fta"].astype(float))
+    return float(poss.mean()) if poss.mean() > 0 else 98.0
 
 
-def get_opponent_defensive_factor(team_id: int) -> float:
+def get_opponent_defensive_factor(team_id: int, as_of_date=None) -> float:
     """
     Scaling factor for how well opponents defend.
     < 1.0 = good defense, > 1.0 = bad defense.
     Prefers official opponent stats from team_metrics.
-    """
-    metrics = get_team_metrics(team_id)
-    if metrics:
-        opp_pts = metrics.get("opp_pts")
-        if opp_pts is not None:
-            # Use league average of ~112-114 PPG as baseline
-            league_avg = _get_league_avg_ppg()
-            return float(opp_pts) / league_avg if league_avg > 0 else 1.0
 
-    # Fallback: compute from game data
+    When *as_of_date* is set, use date-filtered queries to avoid leakage.
+    """
+    if as_of_date is None:
+        metrics = get_team_metrics(team_id)
+        if metrics:
+            opp_pts = metrics.get("opp_pts")
+            if opp_pts is not None:
+                league_avg = _get_league_avg_ppg()
+                return float(opp_pts) / league_avg if league_avg > 0 else 1.0
+
+    # Compute from game data (filtered by date when applicable)
+    date_clause = ""
+    if as_of_date is not None:
+        date_clause = f"AND game_date < '{as_of_date}'"
     with get_conn() as conn:
         opp_row = conn.execute(
-            """
+            f"""
             SELECT AVG(game_total) as avg_opp_pts FROM (
                 SELECT game_date, SUM(points) as game_total
-                FROM player_stats WHERE opponent_team_id = ?
+                FROM player_stats WHERE opponent_team_id = ? {date_clause}
                 GROUP BY game_date
             )
             """,
             (team_id,),
         ).fetchone()
         league_row = conn.execute(
-            """
+            f"""
             SELECT AVG(game_total) as league_avg FROM (
                 SELECT game_date, opponent_team_id, SUM(points) as game_total
                 FROM player_stats
+                WHERE 1=1 {date_clause}
                 GROUP BY game_date, opponent_team_id
             )
             """,
@@ -1113,33 +1175,42 @@ def _get_league_avg_ppg() -> float:
     return float(row[0]) if row and row[0] else 112.0
 
 
-def get_home_court_advantage(team_id: int) -> float:
+def get_home_court_advantage(team_id: int, as_of_date=None) -> float:
     """
     Team-specific home court advantage in points.
     Prefers official home/road splits from team_metrics.
     Clamped to [1.5, 5.0].
-    """
-    metrics = get_team_metrics(team_id)
-    if metrics:
-        home_pts = metrics.get("home_pts")
-        road_pts = metrics.get("road_pts")
-        if home_pts is not None and road_pts is not None:
-            hca = float(home_pts) - float(road_pts)
-            return max(1.5, min(5.0, hca))
 
-    # Fallback: compute from player game logs
+    When *as_of_date* is set, skip team_metrics and use date-filtered
+    game logs.
+    """
+    if as_of_date is None:
+        metrics = get_team_metrics(team_id)
+        if metrics:
+            home_pts = metrics.get("home_pts")
+            road_pts = metrics.get("road_pts")
+            if home_pts is not None and road_pts is not None:
+                hca = float(home_pts) - float(road_pts)
+                return max(1.5, min(5.0, hca))
+
+    # Compute from player game logs (date-filtered when applicable)
+    date_clause = ""
+    params: list = [team_id]
+    if as_of_date is not None:
+        date_clause = "AND ps.game_date < ?"
+        params.append(str(as_of_date))
     with get_conn() as conn:
         home_df = pd.read_sql(
-            "SELECT ps.game_date, SUM(ps.points) as team_pts "
-            "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
-            "WHERE p.team_id = ? AND ps.is_home = 1 GROUP BY ps.game_date",
-            conn, params=[team_id],
+            f"SELECT ps.game_date, SUM(ps.points) as team_pts "
+            f"FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+            f"WHERE p.team_id = ? AND ps.is_home = 1 {date_clause} GROUP BY ps.game_date",
+            conn, params=params,
         )
         away_df = pd.read_sql(
-            "SELECT ps.game_date, SUM(ps.points) as team_pts "
-            "FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
-            "WHERE p.team_id = ? AND ps.is_home = 0 GROUP BY ps.game_date",
-            conn, params=[team_id],
+            f"SELECT ps.game_date, SUM(ps.points) as team_pts "
+            f"FROM player_stats ps JOIN players p ON p.player_id = ps.player_id "
+            f"WHERE p.team_id = ? AND ps.is_home = 0 {date_clause} GROUP BY ps.game_date",
+            conn, params=params,
         )
     if home_df.empty or away_df.empty:
         return 3.0
@@ -1147,11 +1218,21 @@ def get_home_court_advantage(team_id: int) -> float:
     return max(1.5, min(5.0, hca))
 
 
-def get_four_factors(team_id: int) -> Dict[str, Optional[float]]:
+def get_four_factors(team_id: int, as_of_date=None) -> Dict[str, Optional[float]]:
     """
     Get the Four Factors of basketball success for a team.
     Returns team's own factors AND opponent's (defensive forcing).
+
+    When *as_of_date* is set, return empty factors because the underlying
+    data (team_metrics) is a single season-end snapshot with no historical
+    time-series.  The ML model handles zeros gracefully.
     """
+    if as_of_date is not None:
+        # Point-in-time mode: no reliable historical Four Factors data
+        return {k: None for k in [
+            "efg_pct", "fta_rate", "tm_tov_pct", "oreb_pct",
+            "opp_efg_pct", "opp_fta_rate", "opp_tm_tov_pct", "opp_oreb_pct",
+        ]}
     metrics = get_team_metrics(team_id)
     if metrics:
         return {
@@ -1170,8 +1251,17 @@ def get_four_factors(team_id: int) -> Dict[str, Optional[float]]:
     ]}
 
 
-def get_clutch_stats(team_id: int) -> Dict[str, Optional[float]]:
-    """Get clutch performance metrics for a team."""
+def get_clutch_stats(team_id: int, as_of_date=None) -> Dict[str, Optional[float]]:
+    """Get clutch performance metrics for a team.
+
+    Point-in-time mode returns all None (no historical clutch data
+    available — it's a season-end snapshot only).
+    """
+    if as_of_date is not None:
+        return {k: None for k in [
+            "clutch_gp", "clutch_w", "clutch_l",
+            "clutch_net_rating", "clutch_efg_pct", "clutch_ts_pct",
+        ]}
     metrics = get_team_metrics(team_id)
     if metrics:
         return {
@@ -1188,8 +1278,17 @@ def get_clutch_stats(team_id: int) -> Dict[str, Optional[float]]:
     ]}
 
 
-def get_hustle_stats(team_id: int) -> Dict[str, Optional[float]]:
-    """Get hustle stats for a team."""
+def get_hustle_stats(team_id: int, as_of_date=None) -> Dict[str, Optional[float]]:
+    """Get hustle stats for a team.
+
+    Point-in-time mode returns all None (hustle tracking data is
+    only available as a season-end snapshot).
+    """
+    if as_of_date is not None:
+        return {k: None for k in [
+            "deflections", "loose_balls_recovered", "contested_shots",
+            "charges_drawn", "screen_assists",
+        ]}
     metrics = get_team_metrics(team_id)
     if metrics:
         return {

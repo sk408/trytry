@@ -292,10 +292,14 @@ def predict_matchup(
     # Early-season (< 15 games) = noisier data, so we dampen ML weight.
     _home_gp = 0
     _away_gp = 0
+    _home_profile: dict = {}
+    _away_profile: dict = {}
     try:
         from src.analytics.backtester import get_team_profile
-        _home_gp = get_team_profile(home_team_id, gd).get("games", 0)
-        _away_gp = get_team_profile(away_team_id, gd).get("games", 0)
+        _home_profile = get_team_profile(home_team_id, gd)
+        _away_profile = get_team_profile(away_team_id, gd)
+        _home_gp = _home_profile.get("games", 0)
+        _away_gp = _away_profile.get("games", 0)
     except Exception:
         pass
 
@@ -303,6 +307,16 @@ def predict_matchup(
         try:
             from src.analytics.ml_model import predict_ml_with_uncertainty, is_ml_available
             if is_ml_available():
+                # Gather momentum features for ML inference
+                _home_ws = _home_profile.get("win_streak", 0)
+                _away_ws = _away_profile.get("win_streak", 0)
+                _home_wins = _home_profile.get("wins", 0)
+                _away_wins = _away_profile.get("wins", 0)
+                _home_wp = _home_wins / _home_gp if _home_gp > 0 else 0.5
+                _away_wp = _away_wins / _away_gp if _away_gp > 0 else 0.5
+                _home_rd = home_fatigue.get("rest_days", 3)
+                _away_rd = away_fatigue.get("rest_days", 3)
+
                 # Build a PrecomputedGame-like feature dict for ML model
                 _ml_feats = _build_ml_features_live(
                     home_proj, away_proj, home_off, away_off, home_def, away_def,
@@ -311,6 +325,14 @@ def predict_matchup(
                     home_def_factor_raw, away_def_factor_raw,
                     home_ff, away_ff, home_clutch, away_clutch,
                     home_hustle, away_hustle,
+                    home_games_played=_home_gp,
+                    away_games_played=_away_gp,
+                    home_win_streak=_home_ws,
+                    away_win_streak=_away_ws,
+                    home_rest_days=_home_rd,
+                    away_rest_days=_away_rd,
+                    home_win_pct=_home_wp,
+                    away_win_pct=_away_wp,
                 )
                 ml_spread, ml_total, ml_conf, ml_spread_std, ml_total_std = (
                     predict_ml_with_uncertainty(_ml_feats)
@@ -556,6 +578,15 @@ def _build_ml_features_live(
     home_ff: dict, away_ff: dict,
     home_clutch: dict, away_clutch: dict,
     home_hustle: dict, away_hustle: dict,
+    *,
+    home_games_played: int = 0,
+    away_games_played: int = 0,
+    home_win_streak: float = 0.0,
+    away_win_streak: float = 0.0,
+    home_rest_days: float = 3.0,
+    away_rest_days: float = 3.0,
+    home_win_pct: float = 0.5,
+    away_win_pct: float = 0.5,
 ) -> dict:
     """Build a feature dict compatible with ml_model.extract_features
     from live prediction data.  This mirrors the feature extraction in
@@ -646,20 +677,16 @@ def _build_ml_features_live(
     f["home_loose_balls"] = _s(hh.get("loose_balls_recovered"))
     f["away_loose_balls"] = _s(ah.get("loose_balls_recovered"))
 
-    # Momentum / rest / win-rate: not available in the live-features
-    # call (no PrecomputedGame), but the training data always has them.
-    # To keep the feature-column set aligned, include them with neutral
-    # defaults.  They'll be zero/0.5 = "no information" so the trained
-    # model won't over-rely on them at inference time.
-    f.setdefault("home_win_streak", 0.0)
-    f.setdefault("away_win_streak", 0.0)
-    f.setdefault("diff_win_streak", 0.0)
-    f.setdefault("home_rest_days", 3.0)
-    f.setdefault("away_rest_days", 3.0)
-    f.setdefault("diff_rest_days", 0.0)
-    f.setdefault("home_win_pct", 0.5)
-    f.setdefault("away_win_pct", 0.5)
-    f.setdefault("diff_win_pct", 0.0)
+    # Momentum / rest / win-rate — populated from caller when available.
+    f["home_win_streak"] = float(home_win_streak)
+    f["away_win_streak"] = float(away_win_streak)
+    f["diff_win_streak"] = f["home_win_streak"] - f["away_win_streak"]
+    f["home_rest_days"] = float(home_rest_days)
+    f["away_rest_days"] = float(away_rest_days)
+    f["diff_rest_days"] = f["home_rest_days"] - f["away_rest_days"]
+    f["home_win_pct"] = float(home_win_pct)
+    f["away_win_pct"] = float(away_win_pct)
+    f["diff_win_pct"] = f["home_win_pct"] - f["away_win_pct"]
 
     return f
 
@@ -906,6 +933,7 @@ class PrecomputedGame:
 def precompute_game_data(
     progress_cb: Optional[Callable] = None,
     use_cache: bool = True,
+    point_in_time: bool = False,
 ) -> list["PrecomputedGame"]:
     """Extract all raw game data from the DB once.
 
@@ -914,6 +942,12 @@ def precompute_game_data(
 
     When *use_cache* is True (default), checks the in-memory store and
     disk pickle before hitting the database.
+
+    When *point_in_time* is True, every team-metric call receives the
+    game date so only data available **before** that game is used.  This
+    prevents data leakage in ML training.  Autotune corrections are
+    zeroed out and roster-change detection is disabled because neither
+    can be reliably computed historically.
     """
     from src.analytics.backtester import (
         get_actual_game_results,
@@ -931,14 +965,19 @@ def precompute_game_data(
 
     progress = progress_cb or (lambda _: None)
 
+    # ── Determine cache key suffix for point-in-time mode ──
+    _cache_tag = "_pit" if point_in_time else ""
+
     # ── Try in-memory cache first ──
     store = get_memory_store()
-    if use_cache and store.precomputed_games:
-        progress(f"Using {len(store.precomputed_games)} precomputed games from memory")
-        return store.precomputed_games
+    _mem_attr = "precomputed_games_pit" if point_in_time else "precomputed_games"
+    cached_mem = getattr(store, _mem_attr, None)
+    if use_cache and cached_mem:
+        progress(f"Using {len(cached_mem)} precomputed games from memory ({_cache_tag or 'standard'})")
+        return cached_mem
 
     # ── Try disk pickle cache ──
-    if use_cache:
+    if use_cache and not point_in_time:
         state = load_pipeline_state()
         if state.precomputed_games_hash and not has_new_games(state):
             cached = load_precomputed_games(state.precomputed_games_hash)
@@ -986,18 +1025,23 @@ def precompute_game_data(
         home_proj = aggregate_projection(home_pids, opponent_team_id=away_id, is_home=True, as_of_date=gd)
         away_proj = aggregate_projection(away_pids, opponent_team_id=home_id, is_home=False, as_of_date=gd)
 
-        # Team metrics
-        hca = get_home_court_advantage(home_id)
-        adf = get_opponent_defensive_factor(away_id)
-        hdf = get_opponent_defensive_factor(home_id)
+        # Team metrics — when point_in_time, restrict to data available before gd
+        _aod = gd if point_in_time else None
+        hca = get_home_court_advantage(home_id, as_of_date=_aod)
+        adf = get_opponent_defensive_factor(away_id, as_of_date=_aod)
+        hdf = get_opponent_defensive_factor(home_id, as_of_date=_aod)
         home_fatigue_info = detect_fatigue(home_id, gd)
         away_fatigue_info = detect_fatigue(away_id, gd)
         home_injury = _get_team_injury_impact(home_id, as_of_date=gd)
         away_injury = _get_team_injury_impact(away_id, as_of_date=gd)
 
-        # Tuning
-        ht = get_team_tuning(home_id)
-        at = get_team_tuning(away_id)
+        # Tuning — zero out autotune corrections in PIT mode (they use future data)
+        if point_in_time:
+            ht = None
+            at = None
+        else:
+            ht = get_team_tuning(home_id)
+            at = get_team_tuning(away_id)
 
         # Games played (season-phase awareness)
         try:
@@ -1009,14 +1053,18 @@ def precompute_game_data(
         except Exception:
             away_gp = 0
 
-        # Roster change detection
-        try:
-            from src.analytics.stats_engine import detect_roster_change
-            home_rc = detect_roster_change(home_id).get("high_impact", False)
-            away_rc = detect_roster_change(away_id).get("high_impact", False)
-        except Exception:
+        # Roster change detection — skip in PIT mode (uses current-roster snapshot)
+        if point_in_time:
             home_rc = False
             away_rc = False
+        else:
+            try:
+                from src.analytics.stats_engine import detect_roster_change
+                home_rc = detect_roster_change(home_id).get("high_impact", False)
+                away_rc = detect_roster_change(away_id).get("high_impact", False)
+            except Exception:
+                home_rc = False
+                away_rc = False
 
         # Momentum: recent win streak & win pct from profile
         home_wins = home_profile.get("wins", 0)
@@ -1045,18 +1093,18 @@ def precompute_game_data(
             away_tuning_away_corr=at["away_pts_correction"] if at else 0.0,
             home_fatigue_penalty=home_fatigue_info["fatigue_penalty"],
             away_fatigue_penalty=away_fatigue_info["fatigue_penalty"],
-            home_off=get_offensive_rating(home_id),
-            away_off=get_offensive_rating(away_id),
-            home_def=get_defensive_rating(home_id),
-            away_def=get_defensive_rating(away_id),
-            home_pace=get_pace(home_id),
-            away_pace=get_pace(away_id),
-            home_ff=get_four_factors(home_id),
-            away_ff=get_four_factors(away_id),
-            home_clutch=get_clutch_stats(home_id),
-            away_clutch=get_clutch_stats(away_id),
-            home_hustle=get_hustle_stats(home_id),
-            away_hustle=get_hustle_stats(away_id),
+            home_off=get_offensive_rating(home_id, as_of_date=_aod),
+            away_off=get_offensive_rating(away_id, as_of_date=_aod),
+            home_def=get_defensive_rating(home_id, as_of_date=_aod),
+            away_def=get_defensive_rating(away_id, as_of_date=_aod),
+            home_pace=get_pace(home_id, as_of_date=_aod),
+            away_pace=get_pace(away_id, as_of_date=_aod),
+            home_ff=get_four_factors(home_id, as_of_date=_aod),
+            away_ff=get_four_factors(away_id, as_of_date=_aod),
+            home_clutch=get_clutch_stats(home_id, as_of_date=_aod),
+            away_clutch=get_clutch_stats(away_id, as_of_date=_aod),
+            home_hustle=get_hustle_stats(home_id, as_of_date=_aod),
+            away_hustle=get_hustle_stats(away_id, as_of_date=_aod),
             home_injured_count=home_injury["injured_count"],
             away_injured_count=away_injury["injured_count"],
             home_injury_ppg_lost=home_injury["injury_ppg_lost"],
@@ -1078,16 +1126,20 @@ def precompute_game_data(
     progress(f"Precomputed {len(precomputed)} games (no more DB I/O needed)")
 
     # ── Cache the results ──
-    store.precomputed_games = precomputed
-    try:
-        h = save_precomputed_games(precomputed)
-        state = load_pipeline_state()
-        state.precomputed_games_hash = h
-        from src.analytics.pipeline_cache import save_pipeline_state
-        save_pipeline_state(state)
-        progress("Precomputed games cached to memory + disk")
-    except Exception:
-        pass  # Non-fatal
+    setattr(store, _mem_attr, precomputed)
+    if not point_in_time:
+        # Only disk-cache current-knowledge data (PIT is transient for ML training)
+        try:
+            h = save_precomputed_games(precomputed)
+            state = load_pipeline_state()
+            state.precomputed_games_hash = h
+            from src.analytics.pipeline_cache import save_pipeline_state
+            save_pipeline_state(state)
+            progress("Precomputed games cached to memory + disk")
+        except Exception:
+            pass  # Non-fatal
+    else:
+        progress("Point-in-time precomputed games cached to memory only")
 
     return precomputed
 

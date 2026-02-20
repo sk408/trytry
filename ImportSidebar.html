@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 13px; padding: 16px; color: #202124; }
+
+    .drop-zone {
+      border: 2px dashed #dadce0;
+      border-radius: 8px;
+      padding: 32px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 16px;
+      background: #fafafa;
+    }
+    .drop-zone.dragover { border-color: #1a73e8; background: #e8f0fe; }
+    .drop-zone p { color: #5f6368; margin-bottom: 8px; }
+    .drop-zone .hint { font-size: 11px; color: #80868b; }
+    .drop-zone input[type="file"] { display: none; }
+
+    .file-list { margin-bottom: 16px; }
+    .file-item {
+      background: #f8f9fa;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .file-item .filename { font-weight: 500; font-size: 12px; color: #202124; margin-bottom: 6px; word-break: break-all; }
+    .file-item .sheet-row { display: flex; align-items: center; gap: 6px; }
+    .file-item label { font-size: 11px; color: #5f6368; white-space: nowrap; }
+    .file-item input[type="text"] {
+      flex: 1; padding: 4px 8px; border: 1px solid #dadce0;
+      border-radius: 4px; font-size: 12px;
+    }
+    .file-item .remove-btn {
+      background: none; border: none; cursor: pointer;
+      color: #80868b; font-size: 16px; padding: 0 4px; line-height: 1;
+    }
+    .file-item .remove-btn:hover { color: #ea4335; }
+    .file-item .status { font-size: 11px; margin-top: 4px; }
+    .file-item .status.ok { color: #0f9d58; }
+    .file-item .status.err { color: #ea4335; }
+
+    .actions { margin-bottom: 12px; }
+    .btn {
+      display: block; width: 100%; padding: 10px;
+      background: #1a73e8; color: #fff; border: none;
+      border-radius: 4px; font-size: 14px; font-weight: 500;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .btn:hover { background: #1557b0; }
+    .btn:disabled { background: #dadce0; color: #80868b; cursor: default; }
+    .btn-secondary {
+      background: #fff; color: #1a73e8; border: 1px solid #dadce0;
+      margin-top: 8px;
+    }
+    .btn-secondary:hover { background: #e8f0fe; }
+
+    .checkbox-row { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; font-size: 12px; }
+
+    #globalStatus {
+      margin-top: 12px; padding: 8px; border-radius: 4px;
+      font-size: 12px; text-align: center; display: none;
+    }
+    #globalStatus.info { display: block; background: #e8f0fe; color: #1a73e8; }
+    #globalStatus.ok { display: block; background: #e6f4ea; color: #0f9d58; }
+    #globalStatus.err { display: block; background: #fce8e6; color: #ea4335; }
+  </style>
+</head>
+<body>
+
+  <div class="drop-zone" id="dropZone">
+    <p>Drop CSV or ZIP files here</p>
+    <p class="hint">or click to browse</p>
+    <p class="hint">.csv and .zip supported</p>
+    <input type="file" id="fileInput" multiple accept=".csv,.zip">
+  </div>
+
+  <div class="file-list" id="fileList"></div>
+
+  <div class="checkbox-row">
+    <input type="checkbox" id="refreshAfter" checked>
+    <label for="refreshAfter">Refresh dashboard after import</label>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="importBtn" onclick="importAll()" disabled>Import All</button>
+    <button class="btn btn-secondary" id="clearBtn" onclick="clearFiles()" style="display:none">Clear Files</button>
+  </div>
+
+  <div id="globalStatus"></div>
+
+<script>
+  var pendingFiles = [];
+
+  var dropZone = document.getElementById('dropZone');
+  var fileInput = document.getElementById('fileInput');
+
+  dropZone.addEventListener('click', function() { fileInput.click(); });
+  fileInput.addEventListener('change', function(e) { handleFiles(e.target.files); fileInput.value = ''; });
+
+  dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+  });
+  dropZone.addEventListener('dragleave', function() {
+    dropZone.classList.remove('dragover');
+  });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    handleFiles(e.dataTransfer.files);
+  });
+
+  function detectSheetName(filename) {
+    var m = filename.match(/period[_\s]*(\d+)/i);
+    if (m) return 'Period ' + parseInt(m[1]);
+    return '';
+  }
+
+  function handleFiles(fileList) {
+    for (var i = 0; i < fileList.length; i++) {
+      var file = fileList[i];
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        processZip(file);
+      } else if (file.name.toLowerCase().endsWith('.csv')) {
+        readCsv(file, file.name);
+      }
+    }
+  }
+
+  function readCsv(file, originalName) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var text = e.target.result;
+      var sheetName = detectSheetName(originalName);
+      if (!sheetName) {
+        sheetName = detectPeriodFromContent(text);
+      }
+      addPendingFile(originalName, text, sheetName);
+    };
+    reader.readAsText(file);
+  }
+
+  function processZip(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      JSZip.loadAsync(e.target.result).then(function(zip) {
+        var csvFiles = [];
+        zip.forEach(function(path, entry) {
+          if (!entry.dir && path.toLowerCase().endsWith('.csv')) {
+            csvFiles.push(entry);
+          }
+        });
+        if (csvFiles.length === 0) {
+          setStatus('No CSV files found in ZIP', 'err');
+          return;
+        }
+        var processed = 0;
+        csvFiles.forEach(function(entry) {
+          entry.async('string').then(function(text) {
+            var name = entry.name.split('/').pop();
+            var sheetName = detectSheetName(name);
+            if (!sheetName) sheetName = detectPeriodFromContent(text);
+            addPendingFile(name, text, sheetName);
+            processed++;
+          });
+        });
+      }).catch(function(err) {
+        setStatus('Failed to read ZIP: ' + err.message, 'err');
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function dateToPeriod(dateStr) {
+    if (!dateStr) return null;
+    var parts = dateStr.split(/[-T]/);
+    if (parts.length < 3) return null;
+    var d = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+    var epoch = new Date(2026, 1, 17);
+    var dow = epoch.getDay();
+    var monOff = dow === 1 ? 0 : dow === 0 ? 6 : dow - 1;
+    var base = new Date(epoch);
+    base.setDate(base.getDate() - monOff);
+    var a = Date.UTC(base.getFullYear(), base.getMonth(), base.getDate());
+    var b = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    var diff = Math.round((b - a) / 864e5);
+    return Math.floor(diff / 28) + 7;
+  }
+
+  function detectPeriodFromContent(csvText) {
+    var lines = csvText.split('\n');
+    if (lines.length < 2) return '';
+    var headers = lines[0].split(',').map(function(h) { return h.replace(/"/g, '').trim(); });
+
+    var pwdIdx = headers.indexOf('Period Week Day');
+    if (pwdIdx !== -1) {
+      for (var i = 1; i < lines.length && i < 10; i++) {
+        var cols = lines[i].split(',').map(function(c) { return c.replace(/"/g, '').trim(); });
+        if (cols[pwdIdx]) {
+          var m = cols[pwdIdx].match(/P(\d+)/);
+          if (m) return 'Period ' + parseInt(m[1]);
+        }
+      }
+    }
+
+    var dateIdx = headers.indexOf('Appointment Date');
+    if (dateIdx !== -1) {
+      var periods = {};
+      for (var j = 1; j < lines.length && j < 500; j++) {
+        var cols2 = lines[j].split(',').map(function(c) { return c.replace(/"/g, '').trim(); });
+        var p = dateToPeriod(cols2[dateIdx]);
+        if (p !== null) periods[p] = (periods[p] || 0) + 1;
+      }
+      var best = null, bestCount = 0;
+      Object.keys(periods).forEach(function(k) {
+        if (periods[k] > bestCount) { best = k; bestCount = periods[k]; }
+      });
+      if (best !== null) return 'Period ' + best;
+    }
+
+    return '';
+  }
+
+  function addPendingFile(filename, csvText, sheetName) {
+    var id = 'file_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    pendingFiles.push({ id: id, filename: filename, csv: csvText, sheetName: sheetName });
+    renderFileList();
+  }
+
+  function renderFileList() {
+    var list = document.getElementById('fileList');
+    list.innerHTML = '';
+
+    pendingFiles.forEach(function(f, idx) {
+      var div = document.createElement('div');
+      div.className = 'file-item';
+      div.id = f.id;
+      div.innerHTML =
+        '<div class="filename">' + escapeHtml(f.filename) +
+        '<button class="remove-btn" onclick="removeFile(' + idx + ')" title="Remove">&times;</button></div>' +
+        '<div class="sheet-row">' +
+        '<label>Sheet:</label>' +
+        '<input type="text" value="' + escapeHtml(f.sheetName) + '" ' +
+        'onchange="pendingFiles[' + idx + '].sheetName=this.value" ' +
+        'placeholder="e.g. Period 7">' +
+        '</div>' +
+        '<div class="status" id="status_' + f.id + '"></div>';
+      list.appendChild(div);
+    });
+
+    document.getElementById('importBtn').disabled = pendingFiles.length === 0;
+    document.getElementById('clearBtn').style.display = pendingFiles.length > 0 ? 'block' : 'none';
+  }
+
+  function removeFile(idx) {
+    pendingFiles.splice(idx, 1);
+    renderFileList();
+  }
+
+  function clearFiles() {
+    pendingFiles = [];
+    renderFileList();
+    setStatus('', '');
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function setStatus(msg, cls) {
+    var el = document.getElementById('globalStatus');
+    el.textContent = msg;
+    el.className = cls || '';
+  }
+
+  function setFileStatus(id, msg, ok) {
+    var el = document.getElementById('status_' + id);
+    if (el) {
+      el.textContent = msg;
+      el.className = 'status ' + (ok ? 'ok' : 'err');
+    }
+  }
+
+  function importAll() {
+    var valid = pendingFiles.filter(function(f) { return f.sheetName.trim() !== ''; });
+    var noName = pendingFiles.filter(function(f) { return f.sheetName.trim() === ''; });
+
+    noName.forEach(function(f) {
+      setFileStatus(f.id, 'Sheet name required', false);
+    });
+
+    if (valid.length === 0) {
+      setStatus('Enter a sheet name for each file', 'err');
+      return;
+    }
+
+    document.getElementById('importBtn').disabled = true;
+    setStatus('Importing ' + valid.length + ' file(s)...', 'info');
+
+    var completed = 0;
+    var errors = 0;
+
+    valid.forEach(function(f) {
+      setFileStatus(f.id, 'Importing...', true);
+      google.script.run
+        .withSuccessHandler(function(result) {
+          completed++;
+          setFileStatus(f.id, result.message, result.success);
+          if (!result.success) errors++;
+          if (completed === valid.length) onImportDone(valid.length, errors);
+        })
+        .withFailureHandler(function(err) {
+          completed++;
+          errors++;
+          setFileStatus(f.id, 'Error: ' + err.message, false);
+          if (completed === valid.length) onImportDone(valid.length, errors);
+        })
+        .importCsvToSheet(f.csv, f.sheetName.trim());
+    });
+  }
+
+  function onImportDone(total, errors) {
+    document.getElementById('importBtn').disabled = false;
+
+    if (errors === 0) {
+      setStatus('Imported ' + total + ' file(s) successfully!', 'ok');
+    } else {
+      setStatus('Done with ' + errors + ' error(s) out of ' + total + ' file(s)', 'err');
+    }
+
+    if (errors < total && document.getElementById('refreshAfter').checked) {
+      setStatus('Refreshing dashboard...', 'info');
+      google.script.run
+        .withSuccessHandler(function() {
+          setStatus('Import complete, dashboard refreshed!', 'ok');
+        })
+        .withFailureHandler(function() {
+          setStatus('Import done but dashboard refresh failed', 'err');
+        })
+        .refreshDashboard();
+    }
+  }
+</script>
+
+</body>
+</html>

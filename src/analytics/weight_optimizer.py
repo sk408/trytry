@@ -411,6 +411,10 @@ def _fast_loss(games: List[PrecomputedGame], w: WeightConfig) -> float:
 
 # Each entry: (weight_name, min, max)
 # Focused on the weights with the most impact on predictions.
+# NOTE: espn_model_weight, ml_ensemble_weight, ml_disagree_damp,
+# player_base_weight, player_location_weight, player_vs_opp_weight are
+# excluded because _vectorized_loss uses a fixed formula that doesn't
+# read those weights — tuning them has zero gradient signal.
 TOP_WEIGHTS: List[Tuple[str, float, float]] = [
     ("def_factor_dampening",   0.25,  0.75),
     ("turnover_margin_mult",   0.15,  0.65),
@@ -418,13 +422,9 @@ TOP_WEIGHTS: List[Tuple[str, float, float]] = [
     ("rating_matchup_mult",    0.02,  0.15),
     ("four_factors_scale",     0.10,  0.60),
     ("pace_mult",              0.08,  0.35),
-    ("espn_model_weight",      0.60,  0.95),
     ("clutch_scale",           0.02,  0.10),
     ("hustle_effort_mult",     0.005, 0.05),
     ("fatigue_total_mult",     0.10,  0.60),
-    # ML ensemble blending
-    ("ml_ensemble_weight",     0.0,   0.6),
-    ("ml_disagree_damp",       0.3,   1.0),
     # Four Factors sub-weights (previously fixed at defaults, now tunable)
     ("ff_efg_weight",          0.20,  0.55),
     ("ff_tov_weight",          0.10,  0.40),
@@ -433,10 +433,6 @@ TOP_WEIGHTS: List[Tuple[str, float, float]] = [
     # Sanity clamps (let optimizer find best bounds)
     ("total_min",              170.0, 200.0),
     ("total_max",              240.0, 260.0),
-    # Player contribution weights
-    ("player_base_weight",     0.30,  0.55),
-    ("player_location_weight", 0.15,  0.35),
-    ("player_vs_opp_weight",   0.15,  0.35),
 ]
 
 
@@ -445,8 +441,6 @@ def _random_config(base: WeightConfig) -> WeightConfig:
     d = base.to_dict()
     for name, lo, hi in TOP_WEIGHTS:
         d[name] = random.uniform(lo, hi)
-    # Keep espn_weight = 1 - espn_model_weight
-    d["espn_weight"] = round(1.0 - d["espn_model_weight"], 4)
     return WeightConfig.from_dict(d)
 
 
@@ -546,7 +540,6 @@ def _run_optuna_optimiser(
         d = baseline_cfg.to_dict()
         for name, lo, hi in TOP_WEIGHTS:
             d[name] = trial.suggest_float(name, lo, hi)
-        d["espn_weight"] = round(1.0 - d["espn_model_weight"], 4)
         cfg = WeightConfig.from_dict(d)
 
         if vec is not None:
@@ -587,7 +580,6 @@ def _run_optuna_optimiser(
     # Build best config from this run
     d = baseline_cfg.to_dict()
     d.update(study.best_params)
-    d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
     best_cfg = WeightConfig.from_dict(d)
 
     # Only persist if this run actually improved on the existing best
@@ -813,7 +805,6 @@ def run_per_team_refinement(
                 trial_lo = max(lo, global_val - delta)
                 trial_hi = min(hi, global_val + delta)
                 d[name] = random.uniform(trial_lo, trial_hi)
-            d["espn_weight"] = round(1.0 - d.get("espn_model_weight", 0.8), 4)
             candidate = WeightConfig.from_dict(d)
 
             trial_loss = _vectorized_loss(v_train, candidate)

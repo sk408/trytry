@@ -259,7 +259,7 @@ def run_full_pipeline(
         progress(_step_header(8, TOTAL_STEPS, "Train ML ensemble models"))
         t0 = time.perf_counter()
         try:
-            games = precompute_game_data(progress_cb=progress)
+            games = precompute_game_data(progress_cb=progress, point_in_time=True)
             from src.analytics.ml_model import train_models, reload_models
             ml_result = train_models(games, progress_cb=progress)
             reload_models()

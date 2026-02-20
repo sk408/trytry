@@ -48,6 +48,7 @@ class PipelineState:
     last_autotune_at: str = ""
     last_backtest_at: str = ""
     last_injury_history_at: str = ""
+    last_ml_train_at: str = ""
     precomputed_games_hash: str = ""
     # Hash of model_weights + team_tuning at the time calibration was last
     # built.  When weights or tuning change, calibration becomes stale even
@@ -90,6 +91,7 @@ def mark_step_done(state: PipelineState, step_name: str) -> PipelineState:
         "sync": "last_sync_at",
         "injury_history": "last_injury_history_at",
         "autotune": "last_autotune_at",
+        "ml_train": "last_ml_train_at",
         "optimize": "last_optimize_at",
         "team_refine": "last_team_refine_at",
         "calibrate": "last_calibrate_at",
@@ -111,7 +113,8 @@ def update_game_snapshot(state: PipelineState) -> PipelineState:
     try:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(DISTINCT game_id), MAX(game_date) FROM player_stats"
+                "SELECT COUNT(DISTINCT game_id), MAX(game_date) FROM player_stats "
+                "WHERE game_id IS NOT NULL AND game_id != ''"
             ).fetchone()
             state.game_count_at_last_run = row[0] if row and row[0] else 0
             state.last_game_date_in_db = (row[1] if row and row[1] else "") or ""
@@ -130,7 +133,8 @@ def has_new_games(state: PipelineState) -> bool:
     try:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(DISTINCT game_id), MAX(game_date) FROM player_stats"
+                "SELECT COUNT(DISTINCT game_id), MAX(game_date) FROM player_stats "
+                "WHERE game_id IS NOT NULL AND game_id != ''"
             ).fetchone()
             if not row or not row[0]:
                 return False
@@ -192,6 +196,7 @@ def is_step_fresh(state: PipelineState, step_name: str) -> bool:
         "sync": "last_sync_at",
         "injury_history": "last_injury_history_at",
         "autotune": "last_autotune_at",
+        "ml_train": "last_ml_train_at",
         "optimize": "last_optimize_at",
         "team_refine": "last_team_refine_at",
         "calibrate": "last_calibrate_at",

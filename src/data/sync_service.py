@@ -520,17 +520,10 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
     today_iso = date.today().isoformat()
 
     with get_conn() as conn:
-        # Instead of clearing ALL injury flags (which loses info for players
-        # not in the scrape), only clear flags for players present in the new
-        # data.  Players not mentioned are left unchanged.
-        scraped_names = {entry["player"].lower() for entry in data}
-        progress(f"Clearing injury flags for {len(scraped_names)} scraped players...")
-        for sname in scraped_names:
-            conn.execute(
-                "UPDATE players SET is_injured = 0, injury_note = NULL "
-                "WHERE lower(name) = ?",
-                (sname,),
-            )
+        # Clear ALL injury flags first, then re-set for currently-injured
+        # players.  Players who recovered between scrapes will correctly
+        # return to is_injured=0.
+        conn.execute("UPDATE players SET is_injured = 0, injury_note = NULL")
 
         updated = 0
         logged = 0

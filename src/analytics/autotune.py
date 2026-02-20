@@ -155,7 +155,7 @@ def _optimise_spread_shift(
 def autotune_team(
     team_id: int,
     strength: float = 0.75,
-    min_threshold: float = 1.5,
+    min_threshold: float = 0.5,
     mode: str = "classic",
     max_abs_correction: float = 10.0,
     progress_cb: Optional[Callable[[str], None]] = None,
@@ -374,7 +374,7 @@ def autotune_team(
 
 def autotune_all(
     strength: float = 0.75,
-    min_threshold: float = 1.5,
+    min_threshold: float = 0.5,
     mode: str = "classic",
     max_abs_correction: float = 10.0,
     require_global_improvement: bool = False,
