@@ -1,4 +1,8 @@
-"""Unified Optimize tab — one-click improvement with before/after comparison."""
+"""Unified Optimize tab — one-click improvement with before/after comparison.
+
+Includes regression guard: auto-rollback, parameter blacklisting,
+variable diff logging, and suggested parameter adjustments.
+"""
 from __future__ import annotations
 
 import logging
@@ -12,11 +16,14 @@ from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -27,6 +34,21 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+)
+
+from src.analytics.optimize_guard import (
+    WeightBackup,
+    OptimizeRunRecord,
+    check_blacklist_before_run,
+    evaluate_run,
+    generate_suggestions,
+    suggest_adjusted_params,
+    apply_suggested_params,
+    format_run_summary,
+    load_history,
+    get_regression_history,
+    clear_blacklist,
+    composite_score,
 )
 
 
@@ -294,6 +316,9 @@ class OptimizeView(QWidget):
         self._worker: Optional[QObject] = None
         self._before: Optional[Snapshot] = None
         self._after: Optional[Snapshot] = None
+        self._backup: Optional[WeightBackup] = None
+        self._last_record: Optional[OptimizeRunRecord] = None
+        self._suggested_params: Dict[str, float] = {}
         self._running = False
         self._current_step = -1
 
@@ -434,6 +459,106 @@ class OptimizeView(QWidget):
 
         root.addLayout(content)
 
+        # ── Regression guard banner (hidden until regression detected) ──
+        self.regression_banner = QFrame()
+        self.regression_banner.setStyleSheet(
+            "QFrame { background: #3d1418; border: 2px solid #f85149; "
+            "border-radius: 8px; padding: 12px; }"
+        )
+        self.regression_banner.setVisible(False)
+        banner_layout = QVBoxLayout(self.regression_banner)
+        banner_layout.setSpacing(6)
+
+        self.regression_title = QLabel("⚠️  REGRESSION DETECTED — Changes Rolled Back")
+        self.regression_title.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #f85149;"
+        )
+        banner_layout.addWidget(self.regression_title)
+
+        self.regression_detail = QLabel("")
+        self.regression_detail.setWordWrap(True)
+        self.regression_detail.setStyleSheet("color: #f0a0a0; font-size: 12px;")
+        banner_layout.addWidget(self.regression_detail)
+
+        self.regression_suggestions = QTextEdit()
+        self.regression_suggestions.setReadOnly(True)
+        self.regression_suggestions.setMaximumHeight(120)
+        self.regression_suggestions.setStyleSheet(
+            "QTextEdit { background: #1a1a24; color: #e6c07b; "
+            "font-family: Consolas, monospace; font-size: 11px; "
+            "border: 1px solid #f8514950; border-radius: 4px; }"
+        )
+        self.regression_suggestions.setVisible(False)
+        banner_layout.addWidget(self.regression_suggestions)
+
+        # Buttons row inside banner
+        banner_btns = QHBoxLayout()
+        self.apply_suggested_btn = QPushButton("💡 Apply Suggested Parameters")
+        self.apply_suggested_btn.setStyleSheet(
+            "QPushButton { background: #1f6feb; color: white; padding: 6px 14px; "
+            "border-radius: 4px; font-weight: bold; }"
+            "QPushButton:hover { background: #388bfd; }"
+        )
+        self.apply_suggested_btn.setVisible(False)
+        self.apply_suggested_btn.clicked.connect(self._on_apply_suggested)
+        banner_btns.addWidget(self.apply_suggested_btn)
+
+        self.view_diffs_btn = QPushButton("📋 View Weight Changes")
+        self.view_diffs_btn.setStyleSheet(
+            "QPushButton { background: #30363d; color: #c9d1d9; padding: 6px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background: #484f58; }"
+        )
+        self.view_diffs_btn.clicked.connect(self._on_view_diffs)
+        self.view_diffs_btn.setVisible(False)
+        banner_btns.addWidget(self.view_diffs_btn)
+
+        banner_btns.addStretch()
+        banner_layout.addLayout(banner_btns)
+        root.addWidget(self.regression_banner)
+
+        # ── Success banner (hidden until improvement confirmed) ──
+        self.success_banner = QFrame()
+        self.success_banner.setStyleSheet(
+            "QFrame { background: #0d2818; border: 2px solid #3fb950; "
+            "border-radius: 8px; padding: 12px; }"
+        )
+        self.success_banner.setVisible(False)
+        success_layout = QVBoxLayout(self.success_banner)
+        self.success_title = QLabel("✓ Optimization Improved Results")
+        self.success_title.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #3fb950;"
+        )
+        success_layout.addWidget(self.success_title)
+        self.success_detail = QLabel("")
+        self.success_detail.setWordWrap(True)
+        self.success_detail.setStyleSheet("color: #7ee787; font-size: 12px;")
+        success_layout.addWidget(self.success_detail)
+        root.addWidget(self.success_banner)
+
+        # ── History button row ──
+        hist_row = QHBoxLayout()
+        self.history_btn = QPushButton("📊 Run History")
+        self.history_btn.setStyleSheet(
+            "QPushButton { background: #30363d; color: #c9d1d9; padding: 6px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background: #484f58; }"
+        )
+        self.history_btn.clicked.connect(self._on_show_history)
+
+        self.clear_blacklist_btn = QPushButton("🗑 Clear Blacklist")
+        self.clear_blacklist_btn.setStyleSheet(
+            "QPushButton { background: #30363d; color: #c9d1d9; padding: 6px 14px; "
+            "border-radius: 4px; }"
+            "QPushButton:hover { background: #484f58; }"
+        )
+        self.clear_blacklist_btn.clicked.connect(self._on_clear_blacklist)
+
+        hist_row.addWidget(self.history_btn)
+        hist_row.addWidget(self.clear_blacklist_btn)
+        hist_row.addStretch()
+        root.addLayout(hist_row)
+
         # ── Per-team comparison table ──
         team_box = QGroupBox("Per-Team Before / After")
         team_box.setStyleSheet(
@@ -487,8 +612,31 @@ class OptimizeView(QWidget):
         self._running = True
         self._before = None
         self._after = None
+        self._last_record = None
         self._current_step = -1
-        log.info("[Optimize] ‘Optimize Everything’ clicked — starting 2-phase pipeline")
+        log.info("[Optimize] 'Optimize Everything' clicked — starting 2-phase pipeline")
+
+        # ── Pre-run blacklist check ──
+        is_bl, bl_warnings, _ = check_blacklist_before_run(
+            self.trials_spin.value(), self.trials_spin.value()
+        )
+        if is_bl:
+            log.warning("[Optimize] Blacklist match detected — warning user")
+            msg = "\n".join(bl_warnings)
+            reply = QMessageBox.warning(
+                self,
+                "Blacklisted Configuration",
+                f"{msg}\n\nDo you still want to proceed?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.No:
+                self._running = False
+                return
+
+        # ── Capture weight backup before anything changes ──
+        self._backup = WeightBackup()
+        self._backup.capture()
 
         # Reset UI
         self.optimize_btn.setEnabled(False)
@@ -499,9 +647,16 @@ class OptimizeView(QWidget):
         self.team_table.setRowCount(0)
         self.detail_table.setRowCount(0)
         self._reset_cards()
+        self.regression_banner.setVisible(False)
+        self.success_banner.setVisible(False)
+        self.regression_suggestions.setVisible(False)
+        self.apply_suggested_btn.setVisible(False)
+        self.view_diffs_btn.setVisible(False)
 
         self.status_lbl.setText("Phase 1/2 — Capturing baseline accuracy...")
         self.log.append("Starting optimisation...\n")
+        if is_bl:
+            self.log.append("⚠️ NOTE: This config was previously blacklisted — proceeding anyway\n")
 
         # Phase 1: capture "before" snapshot
         self._start_snapshot()
@@ -618,20 +773,102 @@ class OptimizeView(QWidget):
                          a.avg_spread_error - b.avg_spread_error,
                          a.avg_total_error - b.avg_total_error)
 
+                # ── Regression guard evaluation ──
+                if self._backup:
+                    record = evaluate_run(
+                        before_snap=self._before,
+                        after_snap=self._after,
+                        backup=self._backup,
+                        n_trials=self.trials_spin.value(),
+                        team_trials=self.trials_spin.value(),
+                        force_rerun=self.force_checkbox.isChecked(),
+                    )
+                    self._last_record = record
+                    self._show_guard_result(record)
+                else:
+                    log.warning("[Optimize] No backup available — skipping regression guard")
+
         # Fill step detail table
         self._fill_step_table(summary)
 
-        self.status_lbl.setText(
-            f"Done in {total_s:.0f}s — "
-            + (self._summary_line() if self._before and self._after else "optimization complete")
-        )
+        if not (self._last_record and self._last_record.was_regression):
+            self.status_lbl.setText(
+                f"Done in {total_s:.0f}s — "
+                + (self._summary_line() if self._before and self._after else "optimization complete")
+            )
         self._finish()
+
+    def _show_guard_result(self, record: OptimizeRunRecord) -> None:
+        """Show regression or success banner based on guard evaluation."""
+        if record.was_regression:
+            # ── REGRESSION ──
+            self.regression_banner.setVisible(True)
+            self.success_banner.setVisible(False)
+
+            reasons_html = "<br>".join(record.regression_reasons) if record.regression_reasons else "Composite score decreased"
+            self.regression_detail.setText(
+                f"Composite score: {record.score_before:.2f} → {record.score_after:.2f} "
+                f"(Δ{record.score_delta:+.2f})<br><br>{reasons_html}<br><br>"
+                f"All weights and ML models have been restored to their pre-optimization state."
+            )
+
+            # Show suggestions
+            suggestions = generate_suggestions(record)
+            if suggestions:
+                self.regression_suggestions.setVisible(True)
+                self.regression_suggestions.setPlainText("\n".join(suggestions))
+
+            # Check if we have suggested params
+            suggested = suggest_adjusted_params(record)
+            if suggested:
+                self._suggested_params = suggested
+                self.apply_suggested_btn.setVisible(True)
+                self.apply_suggested_btn.setText(
+                    f"💡 Apply {len(suggested)} Suggested Parameter Adjustments"
+                )
+            self.view_diffs_btn.setVisible(True)
+
+            self.status_lbl.setText(
+                f"⚠️ REGRESSION — rolled back (score {record.score_before:.2f} → {record.score_after:.2f})"
+            )
+            self.status_lbl.setStyleSheet("color: #f85149; font-size: 12px; font-weight: bold;")
+
+            # Log full summary to the log pane
+            self.log.append("\n" + "=" * 60)
+            self.log.append("⚠️  REGRESSION DETECTED — ALL CHANGES ROLLED BACK")
+            self.log.append("=" * 60)
+            self.log.append(format_run_summary(record))
+            if record.weight_diffs:
+                self.log.append("\nWeight changes that caused regression:")
+                for param, diff in sorted(record.weight_diffs.items(),
+                                           key=lambda x: abs(x[1].get("delta", 0)),
+                                           reverse=True):
+                    self.log.append(
+                        f"  {param}: {diff['before']:.6f} → {diff['after']:.6f} "
+                        f"(Δ{diff['delta']:+.6f}, {diff.get('pct_change', 0):+.1f}%)"
+                    )
+        else:
+            # ── SUCCESS ──
+            self.success_banner.setVisible(True)
+            self.regression_banner.setVisible(False)
+            self.success_detail.setText(
+                f"Composite score: {record.score_before:.2f} → {record.score_after:.2f} "
+                f"(Δ{record.score_delta:+.2f})"
+            )
+            self.status_lbl.setStyleSheet("color: #3fb950; font-size: 12px; font-weight: bold;")
+            self.log.append(f"\n✓ Optimization improved results — changes kept "
+                            f"(score {record.score_before:.2f} → {record.score_after:.2f})")
 
     def _on_pipeline_error(self, msg: str) -> None:
         self.progress_bar.setVisible(False)
         log.error("[Optimize] Pipeline error: %s", msg.split('\n')[0])
         self.log.append(f"\nPipeline error: {msg}")
         self.status_lbl.setText("Pipeline failed — see log for details")
+        # Restore weights on error too
+        if self._backup:
+            log.info("[Optimize] Restoring weights after pipeline error")
+            self._backup.restore()
+            self.log.append("\n⚠️ Weights restored to pre-optimization state due to error.")
         self._finish()
 
     # ── Card population ──────────────────────────────────────────────────
@@ -778,6 +1015,169 @@ class OptimizeView(QWidget):
             self.detail_table.setItem(row, 3, QTableWidgetItem(detail))
 
         self.detail_table.resizeColumnsToContents()
+
+    # ── Guard action handlers ───────────────────────────────────────────
+
+    def _on_apply_suggested(self) -> None:
+        """Apply the suggested parameter adjustments from the regression guard."""
+        if not hasattr(self, "_suggested_params") or not self._suggested_params:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Apply Suggested Parameters",
+            f"This will modify {len(self._suggested_params)} weight parameters to "
+            f"halfway between the 'before' and 'after' values.\n\n"
+            f"Parameters to adjust:\n"
+            + "\n".join(f"  • {k}: → {v:.4f}" for k, v in list(self._suggested_params.items())[:8])
+            + ("\n  ..." if len(self._suggested_params) > 8 else "")
+            + "\n\nApply these changes?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            apply_suggested_params(self._suggested_params)
+            self.log.append(f"\n💡 Applied {len(self._suggested_params)} suggested parameter adjustments.")
+            self.log.append("Run optimization again to test the new parameters.\n")
+            self.apply_suggested_btn.setEnabled(False)
+            self.apply_suggested_btn.setText("✓ Parameters Applied")
+
+    def _on_view_diffs(self) -> None:
+        """Show a dialog with the full weight diff table."""
+        if not self._last_record or not self._last_record.weight_diffs:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Weight Changes (Regression)")
+        dlg.setMinimumSize(700, 500)
+        layout = QVBoxLayout(dlg)
+
+        info = QLabel(
+            f"Showing {len(self._last_record.weight_diffs)} parameters that changed.\n"
+            f"Sorted by largest absolute change."
+        )
+        info.setStyleSheet("color: #8b949e; font-size: 12px;")
+        layout.addWidget(info)
+
+        table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        headers = ["Parameter", "Before", "After", "Delta", "% Change"]
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+
+        diffs = sorted(self._last_record.weight_diffs.items(),
+                       key=lambda x: abs(x[1].get("delta", 0)), reverse=True)
+        table.setRowCount(len(diffs))
+
+        for row, (param, diff) in enumerate(diffs):
+            table.setItem(row, 0, QTableWidgetItem(param))
+            table.setItem(row, 1, QTableWidgetItem(f"{diff['before']:.6f}"))
+            table.setItem(row, 2, QTableWidgetItem(f"{diff['after']:.6f}"))
+            delta_item = QTableWidgetItem(f"{diff['delta']:+.6f}")
+            delta_item.setForeground(QColor("#f85149") if diff['delta'] != 0 else QColor("#8b949e"))
+            table.setItem(row, 3, delta_item)
+            pct_item = QTableWidgetItem(f"{diff.get('pct_change', 0):+.1f}%")
+            table.setItem(row, 4, pct_item)
+
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn_box.accepted.connect(dlg.accept)
+        layout.addWidget(btn_box)
+        dlg.exec()
+
+    def _on_show_history(self) -> None:
+        """Show a dialog with optimization run history."""
+        history = load_history()
+        if not history:
+            QMessageBox.information(self, "Run History", "No optimization runs recorded yet.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Optimization Run History")
+        dlg.setMinimumSize(800, 500)
+        layout = QVBoxLayout(dlg)
+
+        # Summary label
+        total = len(history)
+        regressions = sum(1 for r in history if r.get("was_regression"))
+        info = QLabel(
+            f"{total} runs recorded • {regressions} regressions • "
+            f"{total - regressions} improvements"
+        )
+        info.setStyleSheet("color: #8b949e; font-size: 12px; margin-bottom: 8px;")
+        layout.addWidget(info)
+
+        table = QTableWidget()
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSortingEnabled(True)
+        headers = [
+            "Time", "Trials", "Result",
+            "Winner % Before", "Winner % After", "Δ Winner",
+            "Spread Err Before", "Spread Err After", "Δ Spread",
+            "Score Before", "Score After", "Δ Score",
+        ]
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(history))
+
+        for row_idx, rec in enumerate(reversed(history)):
+            import time as _time
+            ts = _time.strftime("%m/%d %H:%M", _time.localtime(rec.get("timestamp", 0)))
+            table.setItem(row_idx, 0, QTableWidgetItem(ts))
+            table.setItem(row_idx, 1, QTableWidgetItem(str(rec.get("n_trials", "?"))))
+
+            result = "⚠️ REGRESSION" if rec.get("was_regression") else "✓ Improved"
+            ri = QTableWidgetItem(result)
+            ri.setForeground(QColor("#f85149") if rec.get("was_regression") else QColor("#3fb950"))
+            table.setItem(row_idx, 2, ri)
+
+            table.setItem(row_idx, 3, QTableWidgetItem(f"{rec.get('before_winner_pct', 0):.1f}%"))
+            table.setItem(row_idx, 4, QTableWidgetItem(f"{rec.get('after_winner_pct', 0):.1f}%"))
+            dw = rec.get("delta_winner_pct", 0)
+            dwi = QTableWidgetItem(f"{dw:+.1f}%")
+            dwi.setForeground(QColor("#3fb950") if dw > 0 else QColor("#f85149") if dw < 0 else QColor("#8b949e"))
+            table.setItem(row_idx, 5, dwi)
+
+            table.setItem(row_idx, 6, QTableWidgetItem(f"{rec.get('before_avg_spread_error', 0):.2f}"))
+            table.setItem(row_idx, 7, QTableWidgetItem(f"{rec.get('after_avg_spread_error', 0):.2f}"))
+            ds = rec.get("delta_avg_spread_error", 0)
+            dsi = QTableWidgetItem(f"{ds:+.2f}")
+            dsi.setForeground(QColor("#3fb950") if ds < 0 else QColor("#f85149") if ds > 0 else QColor("#8b949e"))
+            table.setItem(row_idx, 8, dsi)
+
+            table.setItem(row_idx, 9, QTableWidgetItem(f"{rec.get('score_before', 0):.2f}"))
+            table.setItem(row_idx, 10, QTableWidgetItem(f"{rec.get('score_after', 0):.2f}"))
+            sd = rec.get("score_delta", 0)
+            sdi = QTableWidgetItem(f"{sd:+.2f}")
+            sdi.setForeground(QColor("#3fb950") if sd > 0 else QColor("#f85149") if sd < 0 else QColor("#8b949e"))
+            table.setItem(row_idx, 11, sdi)
+
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn_box.accepted.connect(dlg.accept)
+        layout.addWidget(btn_box)
+        dlg.exec()
+
+    def _on_clear_blacklist(self) -> None:
+        """Clear the configuration blacklist."""
+        reply = QMessageBox.question(
+            self,
+            "Clear Blacklist",
+            "This will remove all blacklisted configurations, allowing previously\n"
+            "regressive parameter combinations to be tried again.\n\n"
+            "Clear the blacklist?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            clear_blacklist()
+            self.log.append("\n🗑 Blacklist cleared — all configurations can be tried again.\n")
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
