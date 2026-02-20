@@ -591,6 +591,8 @@ def train_models(
 # ====================================================================
 
 # Module-level model cache (loaded once, reused)
+import threading as _threading
+_model_lock = _threading.Lock()
 _spread_model: Optional[xgb.XGBRegressor] = None
 _total_model: Optional[xgb.XGBRegressor] = None
 _ridge_spread = None  # Ridge model (optional)
@@ -604,7 +606,7 @@ def _ensure_models_loaded() -> bool:
     global _spread_model, _total_model, _feature_cols
     global _ridge_spread, _ridge_total, _ridge_scaler
 
-    if _spread_model is not None and _total_model is not None:
+    if _spread_model is not None and _total_model is not None and _feature_cols is not None:
         return True
 
     if not _HAS_XGB:
@@ -651,13 +653,14 @@ def reload_models() -> bool:
     """Force reload models from disk. Returns True if successful."""
     global _spread_model, _total_model, _feature_cols
     global _ridge_spread, _ridge_total, _ridge_scaler
-    _spread_model = None
-    _total_model = None
-    _ridge_spread = None
-    _ridge_total = None
-    _ridge_scaler = None
-    _feature_cols = None
-    return _ensure_models_loaded()
+    with _model_lock:
+        _spread_model = None
+        _total_model = None
+        _ridge_spread = None
+        _ridge_total = None
+        _ridge_scaler = None
+        _feature_cols = None
+        return _ensure_models_loaded()
 
 
 def is_ml_available() -> bool:
@@ -675,21 +678,30 @@ def predict_ml(features: Dict[str, float]) -> Tuple[float, float, float]:
     if not _ensure_models_loaded():
         return 0.0, 0.0, 0.0
 
+    # Snapshot module-level refs into locals for thread safety.
+    # reload_models() on another thread can set these to None mid-function.
+    s_model, t_model = _spread_model, _total_model
+    feat_cols = _feature_cols
+    r_spread, r_total, r_scaler = _ridge_spread, _ridge_total, _ridge_scaler
+
+    if s_model is None or t_model is None or feat_cols is None:
+        return 0.0, 0.0, 0.0
+
     # Build feature vector aligned to training columns
-    row = {col: features.get(col, 0.0) for col in _feature_cols}
-    X = pd.DataFrame([row])[_feature_cols]
+    row = {col: features.get(col, 0.0) for col in feat_cols}
+    X = pd.DataFrame([row])[feat_cols]
 
     # Predict — XGBoost
-    xgb_spread = float(_spread_model.predict(X)[0])
-    xgb_total = float(_total_model.predict(X)[0])
+    xgb_spread = float(s_model.predict(X)[0])
+    xgb_total = float(t_model.predict(X)[0])
 
     # Blend with Ridge if available (70% XGBoost, 30% Ridge).
     # Ridge provides linear-model diversity, reducing ensemble variance.
-    if _ridge_spread is not None and _ridge_scaler is not None:
+    if r_spread is not None and r_scaler is not None:
         try:
-            X_scaled = _ridge_scaler.transform(X)
-            ridge_s = float(_ridge_spread.predict(X_scaled)[0])
-            ridge_t = float(_ridge_total.predict(X_scaled)[0])
+            X_scaled = r_scaler.transform(X)
+            ridge_s = float(r_spread.predict(X_scaled)[0])
+            ridge_t = float(r_total.predict(X_scaled)[0])
             ml_spread = 0.70 * xgb_spread + 0.30 * ridge_s
             ml_total = 0.70 * xgb_total + 0.30 * ridge_t
         except Exception:
@@ -701,8 +713,8 @@ def predict_ml(features: Dict[str, float]) -> Tuple[float, float, float]:
     # (not defaulted to 0).  Previous logic counted non-zero values, which
     # incorrectly treated legitimate zeros (e.g. diff_fatigue=0 when both
     # teams are equally rested) as missing.  Now we check for NaN sentinel.
-    n_present = sum(1 for col in _feature_cols if col in features)
-    confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
+    n_present = sum(1 for col in feat_cols if col in features)
+    confidence = min(1.0, n_present / max(1, len(feat_cols) * 0.6))
 
     return ml_spread, ml_total, confidence
 
@@ -722,18 +734,26 @@ def predict_ml_with_uncertainty(
     if not _ensure_models_loaded():
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
-    row = {col: features.get(col, 0.0) for col in _feature_cols}
-    X = pd.DataFrame([row])[_feature_cols]
+    # Snapshot module-level refs into locals for thread safety.
+    s_model, t_model = _spread_model, _total_model
+    feat_cols = _feature_cols
+    r_spread, r_total, r_scaler = _ridge_spread, _ridge_total, _ridge_scaler
 
-    xgb_spread = float(_spread_model.predict(X)[0])
-    xgb_total = float(_total_model.predict(X)[0])
+    if s_model is None or t_model is None or feat_cols is None:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    row = {col: features.get(col, 0.0) for col in feat_cols}
+    X = pd.DataFrame([row])[feat_cols]
+
+    xgb_spread = float(s_model.predict(X)[0])
+    xgb_total = float(t_model.predict(X)[0])
 
     # Blend with Ridge if available (same 70/30 split as predict_ml)
-    if _ridge_spread is not None and _ridge_scaler is not None:
+    if r_spread is not None and r_scaler is not None:
         try:
-            X_scaled = _ridge_scaler.transform(X)
-            ridge_s = float(_ridge_spread.predict(X_scaled)[0])
-            ridge_t = float(_ridge_total.predict(X_scaled)[0])
+            X_scaled = r_scaler.transform(X)
+            ridge_s = float(r_spread.predict(X_scaled)[0])
+            ridge_t = float(r_total.predict(X_scaled)[0])
             ml_spread = 0.70 * xgb_spread + 0.30 * ridge_s
             ml_total = 0.70 * xgb_total + 0.30 * ridge_t
         except Exception:
@@ -741,8 +761,8 @@ def predict_ml_with_uncertainty(
     else:
         ml_spread, ml_total = xgb_spread, xgb_total
 
-    n_present = sum(1 for col in _feature_cols if col in features)
-    confidence = min(1.0, n_present / max(1, len(_feature_cols) * 0.6))
+    n_present = sum(1 for col in feat_cols if col in features)
+    confidence = min(1.0, n_present / max(1, len(feat_cols) * 0.6))
 
     # Estimate uncertainty from per-tree margin contributions.
     # Previous implementation used pred_leaf=True which returns integer leaf
@@ -770,8 +790,8 @@ def predict_ml_with_uncertainty(
                 prev = cum
             return float(np.std(margins))
 
-        spread_std = _tree_std(_spread_model.get_booster(), dm)
-        total_std = _tree_std(_total_model.get_booster(), dm)
+        spread_std = _tree_std(s_model.get_booster(), dm)
+        total_std = _tree_std(t_model.get_booster(), dm)
     except Exception:
         pass
 
