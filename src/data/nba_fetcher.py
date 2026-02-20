@@ -39,6 +39,11 @@ class _RateLimiter:
 # This is conservative enough to avoid 429 responses from stats.nba.com.
 _api_limiter = _RateLimiter(calls_per_second=1.67)
 
+# Apply browser-like headers to nba_api before any request is made.
+# Without this, stats.nba.com rejects requests as bot traffic.
+from src.data._http_headers import patch_nba_api_headers
+patch_nba_api_headers()
+
 
 def _utc_to_pacific(dt) -> str:
     """Convert datetime to Pacific time string (PST/PDT)."""
