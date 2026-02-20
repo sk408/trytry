@@ -333,17 +333,19 @@ class MatchupView(QWidget):
         self.game_combo.addItem("Loading schedule…", None)
         self.game_combo.blockSignals(False)
 
-        thread, _worker = start_schedule_fetch_worker(
+        thread, worker = start_schedule_fetch_worker(
             on_finished=self._on_schedule_loaded,
             on_error=self._on_schedule_error,
             force_refresh=force,
         )
         self._sched_thread = thread
+        self._sched_worker = worker   # prevent GC (PySide6 weak-refs slots)
         thread.start()
 
     def _on_schedule_loaded(self, sched_df: "pd.DataFrame") -> None:
         """Populate the game dropdown from the fetched schedule."""
         self._sched_thread = None
+        self._sched_worker = None
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("-- Select a game --", None)
@@ -385,6 +387,7 @@ class MatchupView(QWidget):
     def _on_schedule_error(self, msg: str) -> None:
         """Handle schedule fetch error — show placeholder in dropdown."""
         self._sched_thread = None
+        self._sched_worker = None
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("-- Select a game --", None)
