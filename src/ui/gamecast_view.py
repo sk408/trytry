@@ -8,6 +8,7 @@ keep the UI responsive.
 """
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -579,6 +580,7 @@ class GamecastView(QWidget):
 
     _POLL_LIVE_MS = 20_000   # 20 s when any live games on the board
     _POLL_IDLE_MS = 120_000  # 2 min when all games are final / scheduled
+    _BG_THREAD_TIMEOUT_S = 90  # abandon bg thread if running longer than this
 
     def __init__(self) -> None:
         super().__init__()
@@ -593,6 +595,7 @@ class GamecastView(QWidget):
         # Background all-games poller
         self._bg_thread: Optional[QThread] = None
         self._bg_worker: Optional[_AllGamesRefreshWorker] = None
+        self._bg_started_at: float = 0.0  # monotonic timestamp
         # Orphaned threads whose signals have been disconnected but whose
         # OS threads are still running.  Preventing GC from destroying
         # a QThread while its OS thread is active avoids the
@@ -869,12 +872,20 @@ class GamecastView(QWidget):
         self._orphaned_threads.append(thread)
         if worker is not None:
             self._orphaned_threads.append(worker)
-        # Purge finished threads (and their workers, which already got
-        # deleteLater'd) to prevent unbounded growth.
-        self._orphaned_threads = [
-            obj for obj in self._orphaned_threads
-            if not isinstance(obj, QThread) or obj.isRunning()
-        ]
+        # Purge finished orphans to prevent unbounded growth.
+        # Workers get deleteLater'd when their thread finishes, so
+        # we only need to keep threads (and their paired workers)
+        # while the thread is alive.
+        alive: list = []
+        for obj in self._orphaned_threads:
+            if isinstance(obj, QThread):
+                if obj.isRunning():
+                    alive.append(obj)
+            # Keep workers only while their thread is still alive.
+            # Since thread.finished → worker.deleteLater, once the
+            # thread finishes the worker is already queued for
+            # deletion and can be dropped from this list.
+        self._orphaned_threads = alive
 
     def _on_game_selected(self, index: int) -> None:
         if index <= 0:
@@ -890,9 +901,11 @@ class GamecastView(QWidget):
         if self._current_game and self._last_play_id:
             self._play_id_cache[self._current_game.game_id] = self._last_play_id
 
-        # Abandon any in-flight worker for the *previous* game so the new
-        # game can start loading immediately.
+        # Abandon in-flight workers for the *previous* game so the new
+        # game can start loading immediately and stale bg results don't
+        # overwrite the new game's data.
         self._abandon_poll_worker()
+        self._abandon_bg_thread()
 
         self._current_game = game
         # Reset play position — _render_cached_result will set it from the
@@ -901,6 +914,10 @@ class GamecastView(QWidget):
         interval = self._POLL_LIVE_MS if game.status == "in_progress" else self._POLL_IDLE_MS
         self._timer.setInterval(interval)
         self._load_game_detail(game)
+
+        # Kick off a fresh bg poll immediately so the new game gets its
+        # prediction computed right away instead of waiting for the timer.
+        self._poll_all_games()
 
     # ────────────────────────────────────────────────────────────────
     # Detail loading (background thread)
@@ -1349,7 +1366,12 @@ class GamecastView(QWidget):
         Completed games that already have cached data are skipped entirely.
         """
         if self._bg_thread is not None and self._bg_thread.isRunning():
-            return  # previous cycle still running — skip
+            # If the thread has been running too long, abandon it to
+            # prevent a permanently blocked refresh cycle.
+            elapsed = _time.monotonic() - self._bg_started_at
+            if elapsed < self._BG_THREAD_TIMEOUT_S:
+                return  # previous cycle still running — skip
+            self._abandon_bg_thread()
 
         # Build play-ID snapshot including the current game's position
         play_ids = dict(self._play_id_cache)
@@ -1382,6 +1404,7 @@ class GamecastView(QWidget):
         self._bg_worker.finished.connect(self._on_all_games_result)
         self._bg_worker.finished.connect(self._bg_thread.quit)
         self._bg_thread.finished.connect(self._cleanup_bg)
+        self._bg_started_at = _time.monotonic()
         self._bg_thread.start()
 
     def _on_all_games_result(
@@ -1457,6 +1480,23 @@ class GamecastView(QWidget):
                 i, f"{prefix}{updated.away_abbr} @ {updated.home_abbr} — {tag}",
             )
         self.game_combo.blockSignals(False)
+
+    def _abandon_bg_thread(self) -> None:
+        """Disconnect the current bg worker/thread so stale results
+        are ignored, then let the thread finish naturally."""
+        if self._bg_worker is not None:
+            try:
+                self._bg_worker.finished.disconnect(self._on_all_games_result)
+            except RuntimeError:
+                pass
+        if self._bg_thread is not None:
+            try:
+                self._bg_thread.finished.disconnect(self._cleanup_bg)
+            except RuntimeError:
+                pass
+            self._stash_orphan(self._bg_thread, self._bg_worker)
+        self._bg_worker = None
+        self._bg_thread = None
 
     def _cleanup_bg(self) -> None:
         thread = self.sender()
