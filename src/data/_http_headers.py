@@ -61,14 +61,24 @@ WEB_HEADERS: dict[str, str] = {
 }
 
 
+_patched = False
+
+
 def patch_nba_api_headers() -> None:
     """Monkey-patch nba_api's global headers so *every* request uses our
     browser-like headers.  Passing ``headers=`` per-endpoint isn't enough
     because the shared ``requests.Session`` caches connection state with
     whatever headers were used first.
 
+    Safe to call multiple times — only patches once.
     Call this once at import time from modules that use nba_api.
     """
+    global _patched
+    if _patched:
+        return
+    _patched = True
+
+    # ── Stats API (stats.nba.com) ──
     try:
         from nba_api.stats.library import http as stats_http
         from nba_api.library import http as base_http
@@ -80,3 +90,15 @@ def patch_nba_api_headers() -> None:
         base_http.NBAHTTP._session = None
     except Exception:
         pass  # nba_api not installed — nothing to patch
+
+    # ── Live API (cdn.nba.com via nba_api.live) ──
+    try:
+        from nba_api.live.nba.library import http as live_http
+
+        live_http.NBALiveHTTP.headers = NBA_CDN_HEADERS        # class default
+        live_http.NBALiveHTTP._session = None                  # drop stale conn
+        # Also patch the module-level STATS_HEADERS if present
+        if hasattr(live_http, "STATS_HEADERS"):
+            live_http.STATS_HEADERS = NBA_CDN_HEADERS
+    except Exception:
+        pass  # nba_api live module not available

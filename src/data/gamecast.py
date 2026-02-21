@@ -14,6 +14,8 @@ from typing import Any, Callable, Dict, Generator, List, Optional
 
 import requests
 
+from src.data._http_headers import WEB_HEADERS as _ESPN_HEADERS
+
 # ESPN API endpoints
 ESPN_SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
 ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
@@ -127,7 +129,7 @@ class BoxScore:
 def get_live_games() -> List[GameInfo]:
     """Fetch today's NBA games from ESPN scoreboard."""
     try:
-        resp = requests.get(ESPN_SCOREBOARD_URL, timeout=10)
+        resp = requests.get(ESPN_SCOREBOARD_URL, headers=_ESPN_HEADERS, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -200,6 +202,7 @@ def get_quarter_scores(game_id: str) -> Optional[Dict[str, Any]]:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
+            headers=_ESPN_HEADERS,
             timeout=10,
         )
         resp.raise_for_status()
@@ -243,6 +246,7 @@ def get_game_odds(game_id: str) -> Optional[GameOdds]:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
+            headers=_ESPN_HEADERS,
             timeout=10
         )
         resp.raise_for_status()
@@ -358,6 +362,7 @@ def get_game_leaders(game_id: str) -> Optional[GameLeaders]:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
+            headers=_ESPN_HEADERS,
             timeout=10
         )
         resp.raise_for_status()
@@ -421,6 +426,7 @@ def get_box_score(game_id: str) -> Optional[BoxScore]:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
+            headers=_ESPN_HEADERS,
             timeout=10
         )
         resp.raise_for_status()
@@ -520,6 +526,7 @@ def get_play_by_play(game_id: str, last_event_id: str = "") -> List[PlayEvent]:
         resp = requests.get(
             ESPN_SUMMARY_URL,
             params={"event": game_id},
+            headers=_ESPN_HEADERS,
             timeout=10,
         )
         resp.raise_for_status()

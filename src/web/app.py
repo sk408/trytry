@@ -108,6 +108,10 @@ templates.env.globals["player_photo_url"] = _player_photo_url
 
 @app.on_event("startup")
 def startup() -> None:
+    # Apply browser-like headers to all nba_api modules (stats + live)
+    from src.data._http_headers import patch_nba_api_headers
+    patch_nba_api_headers()
+
     migrations.init_db()
     # Start background injury monitor
     import asyncio

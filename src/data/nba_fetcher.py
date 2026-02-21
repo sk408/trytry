@@ -355,8 +355,9 @@ def fetch_schedule(
 
     try:
         # Fetch full season schedule from NBA CDN
+        from src.data._http_headers import NBA_CDN_HEADERS
         schedule_url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-        resp = requests.get(schedule_url, timeout=30)
+        resp = requests.get(schedule_url, headers=NBA_CDN_HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
 
