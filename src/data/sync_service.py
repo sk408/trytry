@@ -555,12 +555,29 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
             status_level = _normalise_status_level(raw_status)
             injury_keyword = _extract_injury_keyword(injury)
 
+            # Only flag a player as "injured" (excluded from rosters) when
+            # the status is severe enough.  Day-To-Day and Probable players
+            # are expected to play and should NOT be marked is_injured=1.
+            _INJURED_LEVELS = {"Out", "Doubtful"}
+            should_flag = status_level in _INJURED_LEVELS
+
             # ── Update legacy is_injured flag ──
-            cursor = conn.execute(
-                "UPDATE players SET is_injured = 1, injury_note = ? "
-                "WHERE lower(name) = lower(?)",
-                (note, player_name),
-            )
+            if should_flag:
+                cursor = conn.execute(
+                    "UPDATE players SET is_injured = 1, injury_note = ? "
+                    "WHERE lower(name) = lower(?)",
+                    (note, player_name),
+                )
+            else:
+                # Still update the note for informational purposes but do
+                # NOT set is_injured=1.  If the player was already flagged
+                # is_injured=0 by the bulk reset above, this just adds the
+                # note text.
+                cursor = conn.execute(
+                    "UPDATE players SET injury_note = ? "
+                    "WHERE lower(name) = lower(?)",
+                    (note, player_name),
+                )
             matched_pid: Optional[int] = None
             matched_tid: Optional[int] = None
             if cursor.rowcount > 0:
@@ -576,11 +593,18 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
                 parts = player_name.split()
                 if len(parts) >= 2:
                     last_name = parts[-1]
-                    cursor = conn.execute(
-                        "UPDATE players SET is_injured = 1, injury_note = ? "
-                        "WHERE name LIKE ? AND is_injured = 0",
-                        (note, f"%{last_name}%"),
-                    )
+                    if should_flag:
+                        cursor = conn.execute(
+                            "UPDATE players SET is_injured = 1, injury_note = ? "
+                            "WHERE name LIKE ? AND is_injured = 0",
+                            (note, f"%{last_name}%"),
+                        )
+                    else:
+                        cursor = conn.execute(
+                            "UPDATE players SET injury_note = ? "
+                            "WHERE name LIKE ?",
+                            (note, f"%{last_name}%"),
+                        )
                     updated += cursor.rowcount
                     if cursor.rowcount > 0:
                         row = conn.execute(

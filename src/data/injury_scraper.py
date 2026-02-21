@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re as _re
 from typing import List, Dict, Optional, Callable
 
 import requests
@@ -47,16 +48,19 @@ def _fetch_espn_injuries(timeout: int = 15, progress: Optional[Callable[[str], N
             cells = [c.get_text(strip=True) for c in row.select("td")]
             if len(cells) < 3:
                 continue
+            # ESPN format: NAME | POS | EST. RETURN DATE | STATUS | COMMENT
             player = cells[0]
-            status = cells[1] if len(cells) > 1 else "Unknown"
-            injury = cells[2] if len(cells) > 2 else ""
-            update = cells[3] if len(cells) > 3 else ""
+            status = cells[3] if len(cells) > 3 else "Out"
+            comment = cells[4] if len(cells) > 4 else ""
+            # Try to extract injury body-part from parentheses in comment
+            m = _re.search(r"\(([^)]+)\)", comment)
+            injury = m.group(1) if m else ""
             results.append({
                 "team": team_name,
                 "player": player,
                 "status": status,
                 "injury": injury,
-                "update": update,
+                "update": comment,
             })
     
     if results:
@@ -64,6 +68,26 @@ def _fetch_espn_injuries(timeout: int = 15, progress: Optional[Callable[[str], N
     else:
         log("ESPN: no injuries found (page structure may have changed)")
     return results
+
+
+def _normalise_cbs_status(desc: str) -> str:
+    """Map CBS Sports verbose injury-status text to a canonical label."""
+    d = desc.strip().lower()
+    if not d:
+        return "Out"
+    if "out" in d or "not expected" in d or "will miss" in d or "unlikely" in d:
+        return "Out"
+    if "doubtful" in d:
+        return "Doubtful"
+    if "questionable" in d:
+        return "Questionable"
+    if "probable" in d or "expected to play" in d or "likely to play" in d:
+        return "Probable"
+    if "day-to-day" in d or "day to day" in d:
+        return "Day-To-Day"
+    if "game time" in d or "game-time" in d:
+        return "GTD"
+    return "Out"          # safe default for unknown descriptions
 
 
 def _fetch_cbs_injuries(timeout: int = 15, progress: Optional[Callable[[str], None]] = None) -> List[Dict[str, str]]:
@@ -101,7 +125,7 @@ def _fetch_cbs_injuries(timeout: int = 15, progress: Optional[Callable[[str], No
             if len(cells) < 2:
                 continue
             
-            # CBS format: Player, Position, Injury, Status
+            # CBS format: Player | Position | Updated | Injury | Injury Status
             player_cell = cells[0]
             player = player_cell.get_text(strip=True)
             
@@ -109,8 +133,12 @@ def _fetch_cbs_injuries(timeout: int = 15, progress: Optional[Callable[[str], No
             if player.lower() in ["player", "name"]:
                 continue
             
-            injury = cells[2].get_text(strip=True) if len(cells) > 2 else ""
-            status = cells[3].get_text(strip=True) if len(cells) > 3 else "Out"
+            # cells[1]=Position (skip), cells[2]=Updated date,
+            # cells[3]=Injury body-part, cells[4]=Injury Status description
+            injury = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+            status_desc = cells[4].get_text(strip=True) if len(cells) > 4 else "Out"
+            updated = cells[2].get_text(strip=True) if len(cells) > 2 else ""
+            status = _normalise_cbs_status(status_desc)
             
             if player:
                 results.append({
@@ -118,7 +146,7 @@ def _fetch_cbs_injuries(timeout: int = 15, progress: Optional[Callable[[str], No
                     "player": player,
                     "status": status,
                     "injury": injury,
-                    "update": "",
+                    "update": status_desc if status_desc != status else "",
                 })
     
     if results:
