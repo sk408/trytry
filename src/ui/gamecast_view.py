@@ -586,6 +586,8 @@ class GamecastView(QWidget):
         # ── state ──
         self._current_game: Optional[GameInfo] = None
         self._last_play_id = ""
+        self._games_thread: Optional[QThread] = None
+        self._games_worker: Optional[_GamesListWorker] = None
         self._poll_thread: Optional[QThread] = None
         self._poll_worker: Optional[_PollWorker] = None
         # Background all-games poller
@@ -759,6 +761,9 @@ class GamecastView(QWidget):
         self.refresh_btn.setEnabled(False)
         self.refresh_btn.setText("Loading…")
 
+        # Abandon previous refresh if still running
+        self._abandon_games_thread()
+
         self._games_thread = QThread()
         self._games_worker = _GamesListWorker()
         self._games_worker.moveToThread(self._games_thread)
@@ -767,6 +772,22 @@ class GamecastView(QWidget):
         self._games_worker.finished.connect(self._games_thread.quit)
         self._games_thread.finished.connect(self._cleanup_games_thread)
         self._games_thread.start()
+
+    def _abandon_games_thread(self) -> None:
+        """Disconnect the current games-list worker/thread so stale
+        signals are ignored, then let the thread finish naturally."""
+        if self._games_worker is not None:
+            try:
+                self._games_worker.finished.disconnect(self._on_games_loaded)
+            except RuntimeError:
+                pass
+        if self._games_thread is not None:
+            try:
+                self._games_thread.finished.disconnect(self._cleanup_games_thread)
+            except RuntimeError:
+                pass
+        self._games_worker = None
+        self._games_thread = None
 
     def _on_games_loaded(self, games: list) -> None:
         """Populate game combo from background-fetched list (main thread)."""
@@ -810,10 +831,14 @@ class GamecastView(QWidget):
         self._poll_all_games()
 
     def _cleanup_games_thread(self) -> None:
-        if hasattr(self, "_games_worker") and self._games_worker:
+        thread = self.sender()
+        if thread is not None and thread is not self._games_thread:
+            thread.deleteLater()   # stale signal from an abandoned thread
+            return
+        if self._games_worker:
             self._games_worker.deleteLater()
             self._games_worker = None
-        if hasattr(self, "_games_thread") and self._games_thread:
+        if self._games_thread:
             self._games_thread.deleteLater()
             self._games_thread = None
 
@@ -874,6 +899,11 @@ class GamecastView(QWidget):
                 self._poll_worker.finished.disconnect(self._on_poll_result)
             except RuntimeError:
                 pass  # already disconnected
+        if self._poll_thread is not None:
+            try:
+                self._poll_thread.finished.disconnect(self._cleanup_poll)
+            except RuntimeError:
+                pass
         # Don't wait for the thread — just forget it; Qt will clean up
         self._poll_worker = None
         self._poll_thread = None
@@ -894,6 +924,10 @@ class GamecastView(QWidget):
         self._poll_thread.start()
 
     def _cleanup_poll(self) -> None:
+        thread = self.sender()
+        if thread is not None and thread is not self._poll_thread:
+            thread.deleteLater()   # stale signal from an abandoned thread
+            return
         if self._poll_worker:
             self._poll_worker.deleteLater()
             self._poll_worker = None
@@ -1390,6 +1424,10 @@ class GamecastView(QWidget):
         self.game_combo.blockSignals(False)
 
     def _cleanup_bg(self) -> None:
+        thread = self.sender()
+        if thread is not None and thread is not self._bg_thread:
+            thread.deleteLater()   # stale signal from an abandoned thread
+            return
         if self._bg_worker:
             self._bg_worker.deleteLater()
             self._bg_worker = None

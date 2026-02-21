@@ -1184,10 +1184,18 @@ async def stream_calibrate() -> StreamingResponse:
         def run_cal() -> None:
             try:
                 calibration = build_residual_calibration(progress_cb=progress_cb)
+                total_cal = calibration.pop("_total", {})
                 for label, data in calibration.items():
                     msg_queue.put(
                         f"[RESULT] bin={label},"
                         f"range=[{data['bin_low']:+.0f},{data['bin_high']:+.0f}),"
+                        f"residual={data['avg_residual']:+.3f},"
+                        f"n={data['sample_count']}"
+                    )
+                for label, data in total_cal.items():
+                    msg_queue.put(
+                        f"[RESULT] bin=total_{label},"
+                        f"range=[{data['bin_low']:.0f},{data['bin_high']:.0f}),"
                         f"residual={data['avg_residual']:+.3f},"
                         f"n={data['sample_count']}"
                     )

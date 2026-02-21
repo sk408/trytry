@@ -239,6 +239,7 @@ def run_full_pipeline(
                 strength=autotune_strength,
                 mode=autotune_mode,
                 progress_cb=progress,
+                max_workers=max_workers,
             )
             tuned = sum(1 for r in results if r.get("applied"))
             progress(f"  Autotune: {tuned}/{len(results)} teams got corrections")
@@ -261,7 +262,7 @@ def run_full_pipeline(
         try:
             games = precompute_game_data(progress_cb=progress, point_in_time=True)
             from src.analytics.ml_model import train_models, reload_models
-            ml_result = train_models(games, progress_cb=progress)
+            ml_result = train_models(games, progress_cb=progress, max_workers=max_workers)
             reload_models()
             progress(
                 f"  ML models: spread val MAE={ml_result.spread_val_mae:.2f}, "
@@ -356,7 +357,7 @@ def run_full_pipeline(
         progress(_step_header(11, TOTAL_STEPS, "Build residual calibration"))
         t0 = time.perf_counter()
         try:
-            cal = build_residual_calibration(progress_cb=progress)
+            cal = build_residual_calibration(progress_cb=progress, max_workers=max_workers)
             progress(f"  Calibration: {len(cal)} bins")
             state = mark_step_done(state, "calibrate")
         except Exception as exc:

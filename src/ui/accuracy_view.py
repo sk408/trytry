@@ -85,15 +85,17 @@ class OptimiserWorker(QObject):
     finished = Signal(object)  # OptimiserResult
     error = Signal(str)
 
-    def __init__(self, n_trials: int = 200):
+    def __init__(self, n_trials: int = 200, max_workers: int = 4):
         super().__init__()
         self.n_trials = n_trials
+        self.max_workers = max_workers
 
     def run(self) -> None:
         try:
             result = run_weight_optimiser(
                 n_trials=self.n_trials,
                 progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
             )
             self.finished.emit(result)
         except Exception as exc:
@@ -106,9 +108,16 @@ class CalibrationWorker(QObject):
     finished = Signal(object)  # dict
     error = Signal(str)
 
+    def __init__(self, max_workers: int = 4):
+        super().__init__()
+        self.max_workers = max_workers
+
     def run(self) -> None:
         try:
-            result = build_residual_calibration(progress_cb=self.progress.emit)
+            result = build_residual_calibration(
+                progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
+            )
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -120,9 +129,16 @@ class FeatureImportanceWorker(QObject):
     finished = Signal(object)  # List[FeatureImportance]
     error = Signal(str)
 
+    def __init__(self, max_workers: int = 4):
+        super().__init__()
+        self.max_workers = max_workers
+
     def run(self) -> None:
         try:
-            result = run_feature_importance(progress_cb=self.progress.emit)
+            result = run_feature_importance(
+                progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
+            )
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -148,10 +164,17 @@ class GroupedImportanceWorker(QObject):
     finished = Signal(object)  # List[GroupedFeatureImportance]
     error = Signal(str)
 
+    def __init__(self, max_workers: int = 4):
+        super().__init__()
+        self.max_workers = max_workers
+
     def run(self) -> None:
         try:
             from src.analytics.weight_optimizer import run_grouped_feature_importance
-            result = run_grouped_feature_importance(progress_cb=self.progress.emit)
+            result = run_grouped_feature_importance(
+                progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
+            )
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -163,9 +186,16 @@ class FFTAnalysisWorker(QObject):
     finished = Signal(object)  # List[FFTPattern]
     error = Signal(str)
 
+    def __init__(self, max_workers: int = 4):
+        super().__init__()
+        self.max_workers = max_workers
+
     def run(self) -> None:
         try:
-            result = run_fft_error_analysis(progress_cb=self.progress.emit)
+            result = run_fft_error_analysis(
+                progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
+            )
             self.finished.emit(result)
         except Exception as exc:
             import traceback
@@ -198,10 +228,11 @@ class ComboOptimiserWorker(QObject):
     finished = Signal(object)  # ComboOptimiserResult
     error = Signal(str)
 
-    def __init__(self, n_trials: int = 200, team_trials: int = 100):
+    def __init__(self, n_trials: int = 200, team_trials: int = 100, max_workers: int = 4):
         super().__init__()
         self.n_trials = n_trials
         self.team_trials = team_trials
+        self.max_workers = max_workers
 
     def run(self) -> None:
         try:
@@ -209,6 +240,7 @@ class ComboOptimiserWorker(QObject):
                 n_trials=self.n_trials,
                 team_trials=self.team_trials,
                 progress_cb=self.progress.emit,
+                max_workers=self.max_workers,
             )
             self.finished.emit(result)
         except Exception as exc:
@@ -221,10 +253,11 @@ class ContinuousOptWorker(QObject):
     finished = Signal(object)  # ContinuousOptResult
     error = Signal(str)
 
-    def __init__(self, n_trials: int = 200, team_trials: int = 100):
+    def __init__(self, n_trials: int = 200, team_trials: int = 100, max_workers: int = 4):
         super().__init__()
         self.n_trials = n_trials
         self.team_trials = team_trials
+        self.max_workers = max_workers
         self._cancel = False
 
     def cancel(self) -> None:
@@ -238,6 +271,7 @@ class ContinuousOptWorker(QObject):
                 team_trials=self.team_trials,
                 progress_cb=self.progress.emit,
                 cancel_check=lambda: self._cancel,
+                max_workers=self.max_workers,
             )
             self.finished.emit(result)
         except Exception as exc:
@@ -754,7 +788,10 @@ class AccuracyView(QWidget):
         self.status.setText("Optimising weights...")
 
         self._thread = QThread()
-        self._worker = OptimiserWorker(n_trials=self.trials_spin.value())
+        self._worker = OptimiserWorker(
+            n_trials=self.trials_spin.value(),
+            max_workers=self.workers_spin.value(),
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -788,7 +825,9 @@ class AccuracyView(QWidget):
         self.status.setText("Building calibration...")
 
         self._thread = QThread()
-        self._worker = CalibrationWorker()
+        self._worker = CalibrationWorker(
+            max_workers=self.workers_spin.value(),
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -798,16 +837,31 @@ class AccuracyView(QWidget):
         self._thread.start()
 
     def _on_calibration_done(self, calibration: dict) -> None:
-        self.log.append(f"\nCalibration complete: {len(calibration)} bins populated")
+        total_cal = calibration.pop("_total", {})
+        spread_count = len(calibration)
+        total_count = len(total_cal)
+        self.log.append(
+            f"\nCalibration complete: {spread_count} spread bins, "
+            f"{total_count} total bins populated"
+        )
         self.status.setText("Calibration done!")
         self._set_buttons_enabled(True)
-        # Show calibration bins in results table
+
+        # Show spread calibration bins
         headers = ["Bin", "Range", "Avg Residual", "Samples"]
         rows = []
         for label, data in calibration.items():
             rows.append([
                 label,
                 f"[{data['bin_low']:+.0f}, {data['bin_high']:+.0f})",
+                f"{data['avg_residual']:+.3f}",
+                str(data['sample_count']),
+            ])
+        # Append total calibration bins
+        for label, data in total_cal.items():
+            rows.append([
+                f"total_{label}",
+                f"[{data['bin_low']:.0f}, {data['bin_high']:.0f})",
                 f"{data['avg_residual']:+.3f}",
                 str(data['sample_count']),
             ])
@@ -827,7 +881,9 @@ class AccuracyView(QWidget):
         self.status.setText("Analysing features...")
 
         self._thread = QThread()
-        self._worker = FeatureImportanceWorker()
+        self._worker = FeatureImportanceWorker(
+            max_workers=self.workers_spin.value(),
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -868,7 +924,9 @@ class AccuracyView(QWidget):
         self.status.setText("Testing feature groups...")
 
         self._thread = QThread()
-        self._worker = GroupedImportanceWorker()
+        self._worker = GroupedImportanceWorker(
+            max_workers=self.workers_spin.value(),
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -948,7 +1006,9 @@ class AccuracyView(QWidget):
         self.status.setText("Analysing error patterns...")
 
         self._thread = QThread()
-        self._worker = FFTAnalysisWorker()
+        self._worker = FFTAnalysisWorker(
+            max_workers=self.workers_spin.value(),
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
         self._worker.progress.connect(self._on_progress)  # type: ignore
@@ -1114,6 +1174,7 @@ class AccuracyView(QWidget):
         self._worker = ComboOptimiserWorker(
             n_trials=self.trials_spin.value(),
             team_trials=self.trials_spin.value(),
+            max_workers=self.workers_spin.value(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore
@@ -1167,6 +1228,7 @@ class AccuracyView(QWidget):
         self._worker = ContinuousOptWorker(
             n_trials=self.trials_spin.value(),
             team_trials=self.trials_spin.value(),
+            max_workers=self.workers_spin.value(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)  # type: ignore

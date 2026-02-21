@@ -462,6 +462,7 @@ def run_weight_optimiser(
     n_trials: int = 200,
     progress_cb: Optional[Callable[[str], None]] = None,
     precomputed_games: Optional[List[PrecomputedGame]] = None,
+    max_workers: int = 4,
 ) -> OptimiserResult:
     """Optimise prediction weights.
 
@@ -511,10 +512,10 @@ def run_weight_optimiser(
     progress(f"Phase 2/2: Optimising over {n_trials} trials (in-memory, no DB)...")
     if _HAS_OPTUNA:
         progress("Using Optuna TPE sampler for Bayesian optimisation...")
-        return _run_optuna_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games)
+        return _run_optuna_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games, max_workers=max_workers)
     else:
         progress("Optuna not installed — using random search fallback...")
-        return _run_random_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games)
+        return _run_random_optimiser(baseline_cfg, baseline_loss, n_trials, progress, games, max_workers=max_workers)
 
 
 def _run_optuna_optimiser(
@@ -523,6 +524,7 @@ def _run_optuna_optimiser(
     n_trials: int,
     progress: Callable[[str], None],
     games: List[PrecomputedGame] | None = None,
+    max_workers: int = 4,
 ) -> OptimiserResult:
     """Bayesian optimisation via Optuna TPE sampler.
 
@@ -548,7 +550,7 @@ def _run_optuna_optimiser(
         # Fallback: full backtest (slow)
         set_weight_config(cfg)
         try:
-            results = run_backtest(min_games_before=5)
+            results = run_backtest(min_games_before=5, max_workers=max_workers)
             return _loss(results)
         except Exception as exc:
             progress(f"  Trial {trial.number + 1} error: {exc}")
@@ -612,6 +614,7 @@ def _run_random_optimiser(
     n_trials: int,
     progress: Callable[[str], None],
     games: List[PrecomputedGame] | None = None,
+    max_workers: int = 4,
 ) -> OptimiserResult:
     """Random-search fallback when Optuna is not installed."""
     best_cfg = baseline_cfg
@@ -633,7 +636,7 @@ def _run_random_optimiser(
         else:
             set_weight_config(candidate)
             try:
-                results = run_backtest(min_games_before=5)
+                results = run_backtest(min_games_before=5, max_workers=max_workers)
                 trial_loss = _loss(results)
             except Exception as exc:
                 progress(f"  Trial {trial} error: {exc}")
@@ -922,6 +925,7 @@ def _ensure_calibration_table() -> None:
 
 def build_residual_calibration(
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 4,
 ) -> Dict[str, Dict]:
     """Run a backtest, bin predictions by predicted spread, and compute
     the average residual (predicted - actual) in each bin.
@@ -934,7 +938,7 @@ def build_residual_calibration(
     progress = progress_cb or (lambda _: None)
 
     progress("Running backtest for calibration data...")
-    results = run_backtest(min_games_before=5, progress_cb=progress_cb)
+    results = run_backtest(min_games_before=5, progress_cb=progress_cb, max_workers=max_workers)
     if results.total_games == 0:
         progress("No games to calibrate")
         return {}
@@ -1102,6 +1106,7 @@ class FeatureImportance:
 
 def run_feature_importance(
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 4,
 ) -> List[FeatureImportance]:
     """Measure each factor's contribution by disabling it and measuring
     the change in backtest loss.
@@ -1117,7 +1122,7 @@ def run_feature_importance(
     progress("Running baseline backtest...")
     base_cfg = get_weight_config(force_reload=True)
     set_weight_config(base_cfg)
-    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb)
+    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb, max_workers=max_workers)
     base_loss = _loss(base_results)
     progress(f"Baseline loss: {base_loss:.2f}")
 
@@ -1157,7 +1162,7 @@ def run_feature_importance(
         set_weight_config(test_cfg)
 
         try:
-            test_results = run_backtest(min_games_before=5)
+            test_results = run_backtest(min_games_before=5, max_workers=max_workers)
             test_loss = _loss(test_results)
         except Exception:
             test_loss = base_loss  # treat failure as no change
@@ -1204,6 +1209,7 @@ class GroupedFeatureImportance:
 
 def run_grouped_feature_importance(
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 4,
 ) -> List[GroupedFeatureImportance]:
     """Measure *groups* of related features by disabling them together.
 
@@ -1219,7 +1225,7 @@ def run_grouped_feature_importance(
     progress("Running baseline backtest (grouped importance)...")
     base_cfg = get_weight_config(force_reload=True)
     set_weight_config(base_cfg)
-    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb)
+    base_results = run_backtest(min_games_before=5, progress_cb=progress_cb, max_workers=max_workers)
     base_loss = _loss(base_results)
     progress(f"Baseline loss: {base_loss:.2f}")
 
@@ -1293,7 +1299,7 @@ def run_grouped_feature_importance(
         set_weight_config(test_cfg)
 
         try:
-            test_results = run_backtest(min_games_before=5)
+            test_results = run_backtest(min_games_before=5, max_workers=max_workers)
             test_loss = _loss(test_results)
         except Exception:
             test_loss = base_loss
@@ -1475,6 +1481,7 @@ class FFTPattern:
 
 def run_fft_error_analysis(
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 4,
 ) -> List[FFTPattern]:
     """Detect periodic patterns in league-wide prediction errors.
 
@@ -1491,7 +1498,7 @@ def run_fft_error_analysis(
 
     # Step 1 – run backtest
     progress("Running backtest for error analysis...")
-    results = run_backtest(min_games_before=5, progress_cb=progress_cb)
+    results = run_backtest(min_games_before=5, progress_cb=progress_cb, max_workers=max_workers)
 
     if results.total_games < 50:
         progress(f"Not enough games ({results.total_games}), need at least 50 for FFT")
@@ -1593,6 +1600,7 @@ def run_combo_optimiser(
     n_trials: int = 200,
     team_trials: int = 100,
     progress_cb: Optional[Callable[[str], None]] = None,
+    max_workers: int = 4,
 ) -> ComboOptimiserResult:
     """Run global weight optimisation followed by per-team refinement.
 
@@ -1630,6 +1638,7 @@ def run_combo_optimiser(
         n_trials=n_trials,
         progress_cb=progress,
         precomputed_games=games,
+        max_workers=max_workers,
     )
 
     # ── Phase 3: Per-team refinement ──
@@ -1676,6 +1685,7 @@ def run_continuous_optimiser(
     team_trials: int = 100,
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    max_workers: int = 4,
 ) -> ContinuousOptResult:
     """Loop global + per-team optimisation until cancelled.
 
@@ -1721,6 +1731,7 @@ def run_continuous_optimiser(
                 n_trials=n_trials,
                 progress_cb=progress,
                 precomputed_games=games,
+                max_workers=max_workers,
             )
             if global_result.best_loss < result.best_global_loss:
                 result.best_global_loss = global_result.best_loss
