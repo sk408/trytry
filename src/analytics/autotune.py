@@ -14,7 +14,9 @@ the composite score on the source data.
 """
 from __future__ import annotations
 
+import logging
 import threading
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
@@ -30,6 +32,74 @@ from src.analytics.stats_engine import (
 )
 from src.database.db import get_conn
 
+_log = logging.getLogger(__name__)
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  Cache context: pre-computed data to avoid per-game DB round-trips
+# ════════════════════════════════════════════════════════════════════════
+
+
+class _AutotuneCache:
+    """Lightweight container for data that is constant within an autotune run.
+
+    Built once at the start of ``autotune_all`` (or ``autotune_team``) and
+    threaded through to ``_predict_game_player_level``.  This eliminates
+    thousands of redundant SQL queries:
+    * per-game roster lookup → pre-built from DataStore
+    * ``get_opponent_defensive_factor`` → cached per team_id
+    * league avg PPG → computed once
+    """
+
+    def __init__(self) -> None:
+        # (team_id, game_date_str) → [player_ids]
+        self.rosters: Dict[tuple, List[int]] = {}
+        # team_id → defensive factor float
+        self.def_factors: Dict[int, float] = {}
+        # singleton
+        self.league_avg_ppg: float = 112.0
+
+    @staticmethod
+    def build(progress: Callable[[str], None]) -> "_AutotuneCache":
+        """Pre-compute all caches.  Expects DataStore to already be loaded."""
+        c = _AutotuneCache()
+
+        from src.analytics.data_store import store as _store
+
+        # -- Roster lookup from DataStore (instant, no DB) --
+        if _store.is_loaded:
+            c.rosters = {k: list(v) for k, v in _store._rosters.items()}
+            progress(f"  Cache: {len(c.rosters)} roster snapshots from DataStore")
+        else:
+            # Fallback: build from DB once
+            with get_conn() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT p.team_id, ps.game_date, ps.player_id
+                    FROM player_stats ps
+                    JOIN players p ON p.player_id = ps.player_id
+                    GROUP BY p.team_id, ps.game_date, ps.player_id
+                    """
+                ).fetchall()
+            rosters: Dict[tuple, List[int]] = defaultdict(list)
+            for tid, gd, pid in rows:
+                rosters[(int(tid), str(gd)[:10])].append(int(pid))
+            c.rosters = dict(rosters)
+            progress(f"  Cache: {len(c.rosters)} roster snapshots from DB")
+
+        # -- Defensive factors (one per team, no date filter) --
+        with get_conn() as conn:
+            team_ids = [r[0] for r in conn.execute("SELECT team_id FROM teams").fetchall()]
+        for tid in team_ids:
+            c.def_factors[tid] = get_opponent_defensive_factor(tid)
+        progress(f"  Cache: {len(c.def_factors)} defensive factors")
+
+        # -- League avg PPG (single value) --
+        from src.analytics.stats_engine import _get_league_avg_ppg
+        c.league_avg_ppg = _get_league_avg_ppg()
+
+        return c
+
 
 # ════════════════════════════════════════════════════════════════════════
 #  Internal: simulate a game prediction from player logs
@@ -41,6 +111,7 @@ def _predict_game_player_level(
     opponent_id: int,
     game_date: str,
     is_home: bool,
+    cache: Optional[_AutotuneCache] = None,
 ) -> Optional[float]:
     """Simulate what predict_matchup() would produce for a historical game
     using the actual players who played that game.
@@ -48,29 +119,42 @@ def _predict_game_player_level(
     Uses *current* full-season stats (standard backtesting approach).
     Returns the defense-adjusted projected points for *team_id*, or None
     if no player data is available for that game.
-    """
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT ps.player_id
-            FROM player_stats ps
-            JOIN players p ON p.player_id = ps.player_id
-            WHERE p.team_id = ? AND ps.game_date = ?
-            """,
-            (team_id, str(game_date)),
-        ).fetchall()
 
-    player_ids = [r[0] for r in rows]
-    if not player_ids:
-        return None
+    When *cache* is provided, roster and defensive-factor lookups are
+    instant dict hits instead of per-game SQL queries.
+    """
+    gd_str = str(game_date)[:10]
+
+    # --- Roster lookup ---
+    if cache is not None:
+        player_ids = cache.rosters.get((team_id, gd_str))
+        if not player_ids:
+            return None
+    else:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT ps.player_id
+                FROM player_stats ps
+                JOIN players p ON p.player_id = ps.player_id
+                WHERE p.team_id = ? AND ps.game_date = ?
+                """,
+                (team_id, gd_str),
+            ).fetchall()
+        player_ids = [r[0] for r in rows]
+        if not player_ids:
+            return None
 
     # Use full-season stats (no before_date filtering)
     proj = aggregate_projection(
         player_ids, opponent_team_id=opponent_id, is_home=is_home
     )
 
-    # Apply opponent defensive factor (same dampening as predict_matchup)
-    def_factor = get_opponent_defensive_factor(opponent_id)
+    # --- Defensive factor ---
+    if cache is not None:
+        def_factor = cache.def_factors.get(opponent_id, 1.0)
+    else:
+        def_factor = get_opponent_defensive_factor(opponent_id)
     def_factor = 1.0 + (def_factor - 1.0) * 0.5
     adjusted_pts = proj["points"] * def_factor
 
@@ -159,6 +243,7 @@ def autotune_team(
     mode: str = "classic",
     max_abs_correction: float = 10.0,
     progress_cb: Optional[Callable[[str], None]] = None,
+    _cache: Optional[_AutotuneCache] = None,
 ) -> Dict:
     """Analyse a team's historical games, compare player-level predictions
     to actual results, and compute per-team scoring corrections.
@@ -170,11 +255,18 @@ def autotune_team(
         mode: ``"classic"`` (all games) or ``"walk_forward"`` (recent window).
         max_abs_correction: Maximum absolute correction value.
         progress_cb: Optional callback for progress messages.
+        _cache: Pre-built cache (from ``autotune_all``) to avoid per-game DB hits.
 
     Returns:
         Dict with correction values and diagnostic metrics.
     """
     progress = progress_cb or (lambda _: None)
+
+    # If no cache was passed (single-team UI path), build one on the fly
+    if _cache is None:
+        from src.analytics.data_store import preload_all
+        preload_all()
+        _cache = _AutotuneCache.build(progress)
 
     all_games = get_actual_game_results()
     if all_games.empty:
@@ -212,8 +304,8 @@ def autotune_team(
         actual_home = float(game["home_score"])
         actual_away = float(game["away_score"])
 
-        pred_home = _predict_game_player_level(team_id, away_id, gd, is_home=True)
-        pred_away = _predict_game_player_level(away_id, team_id, gd, is_home=False)
+        pred_home = _predict_game_player_level(team_id, away_id, gd, is_home=True, cache=_cache)
+        pred_away = _predict_game_player_level(away_id, team_id, gd, is_home=False, cache=_cache)
 
         if pred_home is not None:
             home_score_errors.append(pred_home - actual_home)
@@ -240,8 +332,8 @@ def autotune_team(
         actual_home = float(game["home_score"])
         actual_away = float(game["away_score"])
 
-        pred_away = _predict_game_player_level(team_id, home_id, gd, is_home=False)
-        pred_home = _predict_game_player_level(home_id, team_id, gd, is_home=True)
+        pred_away = _predict_game_player_level(team_id, home_id, gd, is_home=False, cache=_cache)
+        pred_home = _predict_game_player_level(home_id, team_id, gd, is_home=True, cache=_cache)
 
         if pred_away is not None:
             away_score_errors.append(pred_away - actual_away)
@@ -389,6 +481,16 @@ def autotune_all(
         max_workers = _get_default_workers()
     progress = progress_cb or (lambda _: None)
 
+    # ── Preload all data into RAM for speed ──
+    import time as _time
+    t0 = _time.perf_counter()
+    from src.analytics.data_store import preload_all
+    preload_all()
+    progress("Building autotune caches...")
+    cache = _AutotuneCache.build(progress)
+    t_cache = _time.perf_counter() - t0
+    progress(f"  Caches ready in {t_cache:.1f}s")
+
     baseline_spread_pct = None
     baseline_snapshot: list[tuple] = []
     if require_global_improvement:
@@ -426,6 +528,7 @@ def autotune_all(
             min_threshold=min_threshold,
             mode=mode,
             max_abs_correction=max_abs_correction,
+            _cache=cache,
         )
         with _lock:
             completed += 1
