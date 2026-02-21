@@ -58,6 +58,10 @@ class _AutotuneCache:
         self.def_factors: Dict[int, float] = {}
         # singleton
         self.league_avg_ppg: float = 112.0
+        # shared game-results DataFrame (identical for every team)
+        self.all_games: Optional[pd.DataFrame] = None
+        # when True, saves are deferred to autotune_all batch pass
+        self.batch_save: bool = False
 
     @staticmethod
     def build(progress: Callable[[str], None]) -> "_AutotuneCache":
@@ -97,6 +101,10 @@ class _AutotuneCache:
         # -- League avg PPG (single value) --
         from src.analytics.stats_engine import _get_league_avg_ppg
         c.league_avg_ppg = _get_league_avg_ppg()
+
+        # -- Game results (one DB query, shared across all teams) --
+        c.all_games = get_actual_game_results()
+        progress(f"  Cache: {len(c.all_games)} game results")
 
         return c
 
@@ -268,7 +276,7 @@ def autotune_team(
         preload_all()
         _cache = _AutotuneCache.build(progress)
 
-    all_games = get_actual_game_results()
+    all_games = _cache.all_games if _cache.all_games is not None else get_actual_game_results()
     if all_games.empty:
         progress("No game data found")
         return _empty_result(team_id)
@@ -454,7 +462,10 @@ def autotune_team(
         "tuning_sample_size": len(home_source) + len(away_source),
     }
 
-    _save_tuning(result)
+    # Save immediately only when running single-team (no batch context).
+    # When called from autotune_all, saves are batched after the pool.
+    if not _cache.batch_save:
+        _save_tuning(result)
     progress(
         f"  Done: {n} games, home_adj={home_correction:+.2f}, "
         f"away_adj={away_correction:+.2f}, "
@@ -488,6 +499,7 @@ def autotune_all(
     preload_all()
     progress("Building autotune caches...")
     cache = _AutotuneCache.build(progress)
+    cache.batch_save = True  # saves deferred to serial batch after pool
     t_cache = _time.perf_counter() - t0
     progress(f"  Caches ready in {t_cache:.1f}s")
 
@@ -553,6 +565,11 @@ def autotune_all(
                 tid, abbr = futures[future]
                 progress(f"  {abbr} autotune error: {exc}")
                 results.append(_empty_result(tid))
+
+    # Batch-save all results in one serial pass (no lock contention)
+    for r in results:
+        if r.get("games_analyzed", 0) > 0:
+            _save_tuning(r)
 
     tuned_count = sum(
         1 for r in results
