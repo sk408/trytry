@@ -1,6 +1,10 @@
 """Run the desktop PySide6 version of NBA Betting Analytics."""
+import multiprocessing
 import sys
 import traceback
+
+# Required for ProcessPoolExecutor on Windows / PyInstaller builds
+multiprocessing.freeze_support()
 
 # On Windows, faulthandler.enable() registers an SEH handler that catches
 # non-fatal COM errors from Qt (code 0x8001010d), printing misleading

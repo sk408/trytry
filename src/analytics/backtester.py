@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -11,9 +12,23 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.database.db import get_conn
+from src.database.db import get_conn, DB_PATH
 from src.analytics.injury_history import get_injuries_for_game
 from src.analytics.stats_engine import get_team_metrics, detect_fatigue
+
+log = logging.getLogger(__name__)
+
+
+def _worker_init_db(tmp_db_path: str) -> None:
+    """Initializer for child processes — redirect DB reads to a temp snapshot.
+
+    Called once per worker process at startup.  Overrides the module-level
+    ``DB_PATH`` in ``src.database.db`` so all ``get_conn()`` calls inside
+    this process read from the temporary copy, eliminating file-lock
+    contention across parallel workers.
+    """
+    from src.database import db as _db_mod
+    _db_mod.DB_PATH = Path(tmp_db_path)
 
 
 # ──── Backtest result cache ────────────────────────────────────────────────
@@ -1124,33 +1139,110 @@ def run_backtest(
         })
 
     total_to_process = len(game_dicts)
-    # Clamp workers: no point having more threads than games
+    # Clamp workers: no point having more workers than games
     n_workers = max(1, min(max_workers, total_to_process))
     progress(f"Processing {total_to_process} games with {n_workers} workers...")
 
     # ── Parallel execution ──
-    completed = 0
-    _progress_lock = threading.Lock()
     predictions: List[GamePrediction] = []
+    completed = 0
+    _tmp_db_path: Optional[Path] = None
 
-    def _process_and_track(game_dict: dict) -> Optional[GamePrediction]:
-        nonlocal completed
-        result = _process_single_game(game_dict, min_games_before)
-        with _progress_lock:
-            completed += 1
-            if completed % 20 == 0 or completed == total_to_process:
-                progress(f"Analyzing game {completed}/{total_to_process}...")
-        return result
+    # Use ProcessPoolExecutor for true multi-core parallelism (bypasses GIL).
+    # Fall back to ThreadPoolExecutor if process spawning fails (e.g. frozen
+    # executables that haven't called multiprocessing.freeze_support()).
+    use_processes = True
+    try:
+        import multiprocessing as _mp
+        _mp.get_context("spawn")
+    except Exception:
+        use_processes = False
+        log.info("[Backtest] Falling back to ThreadPoolExecutor")
 
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        futures = [pool.submit(_process_and_track, gd) for gd in game_dicts]
-        for future in as_completed(futures):
-            try:
-                pred = future.result()
-                if pred is not None:
-                    predictions.append(pred)
-            except Exception:
-                pass  # skip individual game failures
+    if use_processes:
+        # Create a temp read-only snapshot of the DB so worker processes
+        # read from their own copy with zero file-lock contention.
+        import shutil
+        import sqlite3 as _sqlite3
+        import tempfile
+
+        _tmp_dir = Path(tempfile.mkdtemp(prefix="bt_"))
+        _tmp_db_path = _tmp_dir / "readonly.db"
+        try:
+            src_conn = _sqlite3.connect(DB_PATH)
+            dst_conn = _sqlite3.connect(str(_tmp_db_path))
+            src_conn.backup(dst_conn)
+            src_conn.close()
+            dst_conn.close()
+            progress(f"Created temp DB snapshot for {n_workers} workers")
+        except Exception as exc:
+            log.warning("[Backtest] Failed to create temp DB: %s", exc)
+            use_processes = False
+            _tmp_db_path = None
+            shutil.rmtree(_tmp_dir, ignore_errors=True)
+
+    try:
+        if use_processes:
+            with ProcessPoolExecutor(
+                max_workers=n_workers,
+                initializer=_worker_init_db,
+                initargs=(str(_tmp_db_path),),
+            ) as pool:
+                futures = [
+                    pool.submit(_process_single_game, gd, min_games_before)
+                    for gd in game_dicts
+                ]
+                for future in as_completed(futures):
+                    try:
+                        pred = future.result()
+                        if pred is not None:
+                            predictions.append(pred)
+                    except Exception:
+                        pass  # skip individual game failures
+                    completed += 1
+                    if completed % 20 == 0 or completed == total_to_process:
+                        progress(f"Analyzing game {completed}/{total_to_process}...")
+        else:
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = [
+                    pool.submit(_process_single_game, gd, min_games_before)
+                    for gd in game_dicts
+                ]
+                for future in as_completed(futures):
+                    try:
+                        pred = future.result()
+                        if pred is not None:
+                            predictions.append(pred)
+                    except Exception:
+                        pass
+                    completed += 1
+                    if completed % 20 == 0 or completed == total_to_process:
+                        progress(f"Analyzing game {completed}/{total_to_process}...")
+    except (BrokenPipeError, EOFError, RuntimeError) as exc:
+        # Process pool failed mid-flight — retry with threads
+        log.warning("[Backtest] ProcessPool error (%s), retrying with threads", exc)
+        predictions.clear()
+        completed = 0
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = [
+                pool.submit(_process_single_game, gd, min_games_before)
+                for gd in game_dicts
+            ]
+            for future in as_completed(futures):
+                try:
+                    pred = future.result()
+                    if pred is not None:
+                        predictions.append(pred)
+                except Exception:
+                    pass
+                completed += 1
+                if completed % 20 == 0 or completed == total_to_process:
+                    progress(f"Analyzing game {completed}/{total_to_process}...")
+    finally:
+        # Clean up temp DB snapshot
+        if _tmp_db_path is not None:
+            import shutil as _shutil
+            _shutil.rmtree(_tmp_db_path.parent, ignore_errors=True)
 
     # Sort predictions chronologically (threads may finish out of order)
     predictions.sort(key=lambda p: (p.game_date, p.home_team_id))
