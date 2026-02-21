@@ -593,6 +593,11 @@ class GamecastView(QWidget):
         # Background all-games poller
         self._bg_thread: Optional[QThread] = None
         self._bg_worker: Optional[_AllGamesRefreshWorker] = None
+        # Orphaned threads whose signals have been disconnected but whose
+        # OS threads are still running.  Preventing GC from destroying
+        # a QThread while its OS thread is active avoids the
+        # "QThread: Destroyed while thread is still running" crash.
+        self._orphaned_threads: list = []
         # Per-game result cache: show the last-known state instantly when
         # switching back to a game, while fresh data loads in background.
         self._result_cache: dict[str, _PollResult] = {}
@@ -786,6 +791,8 @@ class GamecastView(QWidget):
                 self._games_thread.finished.disconnect(self._cleanup_games_thread)
             except RuntimeError:
                 pass
+            # Stash the thread so GC can't destroy it while still running.
+            self._stash_orphan(self._games_thread, self._games_worker)
         self._games_worker = None
         self._games_thread = None
 
@@ -841,6 +848,33 @@ class GamecastView(QWidget):
         if self._games_thread:
             self._games_thread.deleteLater()
             self._games_thread = None
+
+    # ── orphan management ──────────────────────────────────────────
+
+    def _stash_orphan(self, thread: QThread, worker: Optional[QObject] = None) -> None:
+        """Keep *thread* (and its *worker*) alive until the thread finishes.
+
+        Without this, setting ``self._xxx_thread = None`` lets Python's
+        GC destroy the underlying C++ QThread while its OS thread is
+        still running, which triggers the fatal
+        ``QThread: Destroyed while thread is still running`` message.
+
+        We connect the thread's ``finished`` signal so both objects
+        call ``deleteLater()`` once the thread actually stops, and we
+        purge already-finished orphans every time a new one is stashed.
+        """
+        if worker is not None:
+            thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._orphaned_threads.append(thread)
+        if worker is not None:
+            self._orphaned_threads.append(worker)
+        # Purge finished threads (and their workers, which already got
+        # deleteLater'd) to prevent unbounded growth.
+        self._orphaned_threads = [
+            obj for obj in self._orphaned_threads
+            if not isinstance(obj, QThread) or obj.isRunning()
+        ]
 
     def _on_game_selected(self, index: int) -> None:
         if index <= 0:
@@ -904,7 +938,8 @@ class GamecastView(QWidget):
                 self._poll_thread.finished.disconnect(self._cleanup_poll)
             except RuntimeError:
                 pass
-        # Don't wait for the thread — just forget it; Qt will clean up
+            # Stash the thread so GC can't destroy it while still running.
+            self._stash_orphan(self._poll_thread, self._poll_worker)
         self._poll_worker = None
         self._poll_thread = None
 
