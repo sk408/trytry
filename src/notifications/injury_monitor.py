@@ -161,17 +161,26 @@ class InjuryMonitor:
 
     @staticmethod
     def _get_mpg_lookup() -> Dict[str, float]:
-        """Return {player_name_lower: mpg} for all players with stats."""
+        """Return {player_name_lower: mpg} for all players with stats.
+
+        Keys are normalised to ASCII (diacriticals stripped) so lookups
+        from injury-scraper names (which are plain ASCII) succeed for
+        players like Jokić / Dončić / Porziņģis.
+        """
         try:
             from src.database.db import get_conn
+            from src.data.sync_service import _strip_diacriticals
             with get_conn() as conn:
                 rows = conn.execute(
-                    """SELECT LOWER(p.name), AVG(ps.minutes)
+                    """SELECT p.name, AVG(ps.minutes)
                        FROM players p
                        JOIN player_stats ps ON ps.player_id = p.player_id
                        GROUP BY p.player_id"""
                 ).fetchall()
-                return {r[0]: r[1] for r in rows if r[1]}
+                return {
+                    _strip_diacriticals(r[0]).lower(): r[1]
+                    for r in rows if r[1]
+                }
         except Exception:
             return {}
 

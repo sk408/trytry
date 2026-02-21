@@ -1,11 +1,11 @@
 {
-  "n_train": 608,
-  "n_val": 152,
+  "n_train": 599,
+  "n_val": 149,
   "n_features": 97,
-  "spread_train_mae": 9.833172125472245,
-  "spread_val_mae": 12.583415698260069,
-  "total_train_mae": 11.531317259136,
-  "total_val_mae": 15.861012207834344,
+  "spread_train_mae": 8.483864835971882,
+  "spread_val_mae": 11.124315258940594,
+  "total_train_mae": 10.296963674198208,
+  "total_val_mae": 14.152322858772022,
   "feature_columns": [
     "home_points",
     "away_points",
@@ -106,5 +106,5 @@
     "diff_win_pct"
   ],
   "has_ridge": true,
-  "trained_at": "2026-02-19"
+  "trained_at": "2026-02-20"
 }

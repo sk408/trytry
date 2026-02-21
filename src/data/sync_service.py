@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import unicodedata
 from datetime import date, datetime, timedelta
-from typing import Callable, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -515,6 +516,26 @@ def _extract_injury_keyword(injury_text: str) -> str:
     return "other"
 
 
+def _strip_diacriticals(s: str) -> str:
+    """Normalise Unicode diacriticals to plain ASCII equivalents.
+
+    NBA API stores names with diacriticals (e.g. "Nikola Jokić") while
+    injury scrapers (ESPN/CBS) use ASCII (e.g. "Nikola Jokic").  This
+    helper maps both to the same canonical form for matching.
+
+        >>> _strip_diacriticals("Nikola Jokić")
+        'Nikola Jokic'
+        >>> _strip_diacriticals("Luka Dončić")
+        'Luka Doncic'
+        >>> _strip_diacriticals("Kristaps Porziņģis")
+        'Kristaps Porzingis'
+    """
+    # NFKD decomposes characters: ć → c + combining-acute
+    nfkd = unicodedata.normalize("NFKD", s)
+    # Strip combining marks (category 'M') to get plain ASCII base chars
+    return "".join(ch for ch in nfkd if unicodedata.category(ch)[0] != "M")
+
+
 def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
     """
     Sync injury data from web sources.
@@ -537,6 +558,26 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
     today_iso = date.today().isoformat()
 
     with get_conn() as conn:
+        # ── Build Python lookup dicts for Unicode-safe name matching ──
+        # The NBA API stores diacritical names (e.g. "Nikola Jokić") while
+        # injury scrapers return ASCII (e.g. "Nikola Jokic").  SQLite LIKE
+        # and lower() treat ć ≠ c, so we normalise in Python instead.
+        all_players: List[Tuple[int, str, int]] = conn.execute(
+            "SELECT player_id, name, team_id FROM players"
+        ).fetchall()
+
+        # Primary lookup: normalised full name → (player_id, team_id)
+        _name_to_player: Dict[str, Tuple[int, int]] = {}
+        # Secondary lookup: normalised last name → list of (player_id, team_id)
+        _last_to_players: Dict[str, List[Tuple[int, int]]] = {}
+        for pid, pname, tid in all_players:
+            norm_key = _strip_diacriticals(pname).lower()
+            _name_to_player[norm_key] = (pid, tid)
+            parts = norm_key.split()
+            if parts:
+                last = parts[-1]
+                _last_to_players.setdefault(last, []).append((pid, tid))
+
         # Clear ALL injury flags first, then re-set for currently-injured
         # players.  Players who recovered between scrapes will correctly
         # return to is_injured=0.
@@ -561,59 +602,36 @@ def sync_injuries(progress_cb: Optional[Callable[[str], None]] = None) -> int:
             _INJURED_LEVELS = {"Out", "Doubtful"}
             should_flag = status_level in _INJURED_LEVELS
 
-            # ── Update legacy is_injured flag ──
-            if should_flag:
-                cursor = conn.execute(
-                    "UPDATE players SET is_injured = 1, injury_note = ? "
-                    "WHERE lower(name) = lower(?)",
-                    (note, player_name),
-                )
-            else:
-                # Still update the note for informational purposes but do
-                # NOT set is_injured=1.  If the player was already flagged
-                # is_injured=0 by the bulk reset above, this just adds the
-                # note text.
-                cursor = conn.execute(
-                    "UPDATE players SET injury_note = ? "
-                    "WHERE lower(name) = lower(?)",
-                    (note, player_name),
-                )
+            # ── Resolve scraper name → player_id (Unicode-safe) ──
+            norm_name = _strip_diacriticals(player_name).lower()
+            match = _name_to_player.get(norm_name)
+            if match is None:
+                # Fallback: try last-name partial match
+                parts = norm_name.split()
+                if len(parts) >= 2:
+                    last = parts[-1]
+                    candidates = _last_to_players.get(last, [])
+                    if len(candidates) == 1:
+                        match = candidates[0]
+                    # If multiple candidates, skip to avoid wrong-player updates
+
             matched_pid: Optional[int] = None
             matched_tid: Optional[int] = None
-            if cursor.rowcount > 0:
-                updated += cursor.rowcount
-                row = conn.execute(
-                    "SELECT player_id, team_id FROM players WHERE lower(name) = lower(?)",
-                    (player_name,),
-                ).fetchone()
-                if row:
-                    matched_pid, matched_tid = row
-            else:
-                # Try partial match (last name)
-                parts = player_name.split()
-                if len(parts) >= 2:
-                    last_name = parts[-1]
-                    if should_flag:
-                        cursor = conn.execute(
-                            "UPDATE players SET is_injured = 1, injury_note = ? "
-                            "WHERE name LIKE ? AND is_injured = 0",
-                            (note, f"%{last_name}%"),
-                        )
-                    else:
-                        cursor = conn.execute(
-                            "UPDATE players SET injury_note = ? "
-                            "WHERE name LIKE ?",
-                            (note, f"%{last_name}%"),
-                        )
-                    updated += cursor.rowcount
-                    if cursor.rowcount > 0:
-                        row = conn.execute(
-                            "SELECT player_id, team_id FROM players "
-                            "WHERE name LIKE ? ORDER BY player_id LIMIT 1",
-                            (f"%{last_name}%",),
-                        ).fetchone()
-                        if row:
-                            matched_pid, matched_tid = row
+            if match:
+                matched_pid, matched_tid = match
+                if should_flag:
+                    conn.execute(
+                        "UPDATE players SET is_injured = 1, injury_note = ? "
+                        "WHERE player_id = ?",
+                        (note, matched_pid),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE players SET injury_note = ? "
+                        "WHERE player_id = ?",
+                        (note, matched_pid),
+                    )
+                updated += 1
 
             # ── Log to injury_status_log ──
             if matched_pid and matched_tid:
