@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -128,6 +129,17 @@ class Dashboard(QWidget):
         stop_button.setVisible(False)
         self.stop_button = stop_button
 
+        force_check = QCheckBox("Force Recheck")
+        force_check.setToolTip(
+            "Bypass all freshness caches — re-fetch everything from the NBA API "
+            "even if data was synced recently.  Also clears the schedule cache."
+        )
+        force_check.setStyleSheet(
+            "QCheckBox { color: #f59e0b; font-weight: 600; font-size: 12px; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; }"
+        )
+        self.force_check = force_check
+
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
         button_row.addWidget(sync_button)
@@ -137,6 +149,7 @@ class Dashboard(QWidget):
         button_row.addWidget(impact_button)
         button_row.addWidget(image_button)
         button_row.addWidget(stop_button)
+        button_row.addWidget(force_check)
         button_row.addStretch()
 
         # ── Log header ──
@@ -165,15 +178,20 @@ class Dashboard(QWidget):
     def _sync_data(self) -> None:
         if self._thread:
             return
+        force = self.force_check.isChecked()
         self._set_syncing(True)
         self.sync_button.setEnabled(False)
-        self.status.setText("Starting sync...")
+        self.status.setText("Starting sync (force)..." if force else "Starting sync...")
         self.log.clear()
+        if force:
+            self._log_warning("Force recheck — bypassing all freshness caches")
+            self._clear_caches()
         self._thread, self._worker = start_sync_worker(
             on_progress=self._on_progress,
             on_finished=self._on_finished,
             on_error=self._on_error,
             on_cancelled=self._on_cancelled,
+            force=force,
         )
         self._thread.start()
 
@@ -298,15 +316,19 @@ class Dashboard(QWidget):
     def _sync_team_metrics(self) -> None:
         if self._metrics_thread:
             return
+        force = self.force_check.isChecked()
         self._set_syncing(True)
         self.metrics_button.setEnabled(False)
         self.status.setText("Syncing team metrics...")
         self.log.append("--- Team Metrics Sync Started ---")
+        if force:
+            self._log_warning("Force recheck — bypassing freshness")
         self._metrics_thread, self._metrics_worker = start_team_metrics_worker(
             on_progress=self._on_metrics_progress,
             on_finished=self._on_metrics_finished,
             on_error=self._on_metrics_error,
             on_cancelled=self._on_metrics_cancelled,
+            force=force,
         )
         self._metrics_thread.start()
 
@@ -353,15 +375,19 @@ class Dashboard(QWidget):
     def _sync_player_impact(self) -> None:
         if self._impact_thread:
             return
+        force = self.force_check.isChecked()
         self._set_syncing(True)
         self.impact_button.setEnabled(False)
         self.status.setText("Syncing player impact...")
         self.log.append("--- Player Impact Sync Started ---")
+        if force:
+            self._log_warning("Force recheck — bypassing freshness")
         self._impact_thread, self._impact_worker = start_player_impact_worker(
             on_progress=self._on_impact_progress,
             on_finished=self._on_impact_finished,
             on_error=self._on_impact_error,
             on_cancelled=self._on_impact_cancelled,
+            force=force,
         )
         self._impact_thread.start()
 
@@ -463,6 +489,14 @@ class Dashboard(QWidget):
             self.stop_button.setText("  Stop Sync")
 
     # ── helpers ──
+
+    def _clear_caches(self) -> None:
+        """Flush in-memory caches so the next sync re-fetches everything."""
+        try:
+            from src.data.sync_service import clear_schedule_cache
+            clear_schedule_cache()
+        except Exception:
+            pass
 
     def _log_info(self, msg: str) -> None:
         self.log.append(f'<span style="color:#94a3b8;">{msg}</span>')
