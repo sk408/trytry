@@ -793,23 +793,49 @@ def _get_matchup_backtest(home_id: int, away_id: int) -> dict:
 
 
 def _get_injury_summary(stats: TeamMatchupStats) -> dict:
-    """Get injury impact summary for a team."""
-    injured = [p for p in stats.players if p.is_injured and p.mpg > 0]
-    if not injured:
+    """Get injury impact summary for a team.
+
+    Includes both ``is_injured`` players and probabilistic ones (GTD,
+    Questionable, Day-To-Day) whose ``play_probability < 1``.
+    """
+    # Definitely out (is_injured=1)
+    out = [p for p in stats.players if p.is_injured and p.mpg > 0]
+    # Uncertain (GTD / Questionable / Day-To-Day — not flagged but pp < 1)
+    uncertain = [
+        p for p in stats.players
+        if not p.is_injured
+        and getattr(p, "play_probability", 1.0) < 1.0
+        and p.mpg > 0
+    ]
+    if not out and not uncertain:
         return {"status": "healthy", "text": "No injuries", "lost_ppg": 0}
 
-    lost_ppg = sum(p.ppg for p in injured)
-    key = [p for p in injured if p.mpg >= 25]
-    rotation = [p for p in injured if 15 <= p.mpg < 25]
+    # PPG lost: full for OUT, weighted by absent probability for uncertain
+    lost_ppg = sum(p.ppg for p in out)
+    lost_ppg += sum(p.ppg * (1.0 - getattr(p, "play_probability", 0.0)) for p in uncertain)
 
-    if key:
-        names = ", ".join(p.name.split()[-1] for p in key[:2])
-        return {"status": "critical", "text": f"KEY OUT: {names}", "lost_ppg": lost_ppg}
-    elif rotation:
-        names = ", ".join(p.name.split()[-1] for p in rotation[:2])
-        return {"status": "moderate", "text": f"OUT: {names}", "lost_ppg": lost_ppg}
-    else:
-        return {"status": "minor", "text": f"{len(injured)} minor injuries", "lost_ppg": lost_ppg}
+    key_out = [p for p in out if p.mpg >= 25]
+    rotation_out = [p for p in out if 15 <= p.mpg < 25]
+    key_uncertain = [p for p in uncertain if p.mpg >= 20]
+
+    parts: list[str] = []
+    if key_out:
+        names = ", ".join(p.name.split()[-1] for p in key_out[:2])
+        parts.append(f"KEY OUT: {names}")
+    elif rotation_out:
+        names = ", ".join(p.name.split()[-1] for p in rotation_out[:2])
+        parts.append(f"OUT: {names}")
+    elif out:
+        parts.append(f"{len(out)} minor injuries")
+    if key_uncertain:
+        gtd_names = ", ".join(
+            f"{p.name.split()[-1]} ({getattr(p, 'injury_status', 'GTD')})"
+            for p in key_uncertain[:2]
+        )
+        parts.append(f"GTD: {gtd_names}")
+
+    severity = "critical" if key_out else "moderate" if rotation_out or key_uncertain else "minor"
+    return {"status": severity, "text": " | ".join(parts) if parts else "Minor injuries", "lost_ppg": lost_ppg}
 
 
 def _players_to_dicts(stats: TeamMatchupStats, opp_id: int, is_home: bool) -> List[dict]:

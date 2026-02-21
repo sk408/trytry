@@ -30,42 +30,64 @@ from src.database.db import get_conn
 
 
 def _get_team_injury_impact(team_id: int, as_of_date: Optional[date] = None) -> dict:
-    """Estimate current injury impact for a team from recent player logs.
+    """Estimate injury impact for a team.
 
     Returns ``injured_count``, ``injury_ppg_lost``, and ``injury_minutes_lost``.
-    When *as_of_date* is provided, only player stats before that date are used
-    (avoids lookahead bias in backtesting).
+
+    When *as_of_date* is ``None`` (live prediction), uses the current
+    ``players.is_injured`` flag.
+
+    When *as_of_date* is set (backtesting / precompute), uses the
+    ``injury_history`` table so we look at who was *actually* out around
+    that date instead of reflecting today's injury report.
     """
-    date_clause = ""
-    if as_of_date is not None:
-        date_clause = "AND ps.game_date < ?"
-        params = (str(as_of_date), team_id)
-    else:
-        params = (team_id,)
+    _zero = {"injured_count": 0.0, "injury_ppg_lost": 0.0, "injury_minutes_lost": 0.0}
 
     with get_conn() as conn:
-        row = conn.execute(
-            f"""
-            SELECT
-                COUNT(*) as injured_count,
-                COALESCE(SUM(COALESCE(s.ppg, 0)), 0) as ppg_lost,
-                COALESCE(SUM(COALESCE(s.mpg, 0)), 0) as minutes_lost
-            FROM players p
-            LEFT JOIN (
-                SELECT ps.player_id,
-                       AVG(ps.points) as ppg,
-                       AVG(ps.minutes) as mpg
-                FROM player_stats ps
-                WHERE 1 = 1 {date_clause}
-                GROUP BY ps.player_id
-            ) s ON s.player_id = p.player_id
-            WHERE p.team_id = ? AND p.is_injured = 1
-            """,
-            params,
-        ).fetchone()
+        if as_of_date is not None:
+            # Historical path — use injury_history table
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT ih.player_id) AS injured_count,
+                    COALESCE(SUM(COALESCE(s.ppg, 0)), 0) AS ppg_lost,
+                    COALESCE(SUM(COALESCE(s.mpg, 0)), 0) AS minutes_lost
+                FROM injury_history ih
+                LEFT JOIN (
+                    SELECT ps.player_id,
+                           AVG(ps.points) AS ppg,
+                           AVG(ps.minutes) AS mpg
+                    FROM player_stats ps
+                    WHERE ps.game_date < ?
+                    GROUP BY ps.player_id
+                ) s ON s.player_id = ih.player_id
+                WHERE ih.team_id = ? AND ih.game_date = ? AND ih.was_out = 1
+                """,
+                (str(as_of_date), team_id, str(as_of_date)),
+            ).fetchone()
+        else:
+            # Live path — current is_injured flag
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS injured_count,
+                    COALESCE(SUM(COALESCE(s.ppg, 0)), 0) AS ppg_lost,
+                    COALESCE(SUM(COALESCE(s.mpg, 0)), 0) AS minutes_lost
+                FROM players p
+                LEFT JOIN (
+                    SELECT ps.player_id,
+                           AVG(ps.points) AS ppg,
+                           AVG(ps.minutes) AS mpg
+                    FROM player_stats ps
+                    GROUP BY ps.player_id
+                ) s ON s.player_id = p.player_id
+                WHERE p.team_id = ? AND p.is_injured = 1
+                """,
+                (team_id,),
+            ).fetchone()
 
     if not row:
-        return {"injured_count": 0.0, "injury_ppg_lost": 0.0, "injury_minutes_lost": 0.0}
+        return _zero
     return {
         "injured_count": float(row[0] or 0),
         "injury_ppg_lost": float(row[1] or 0.0),

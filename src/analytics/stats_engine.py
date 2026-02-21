@@ -306,9 +306,11 @@ def get_team_matchup_stats(
         )
 
         # Assign play probability
-        if not is_inj:
+        # Players with injury_note but is_injured=0 (e.g. GTD, Questionable)
+        # should still get a probabilistic assessment, not a flat 1.0.
+        if not is_inj and not inj_note:
             pstats.play_probability = 1.0
-        elif _has_intel and inj_note:
+        elif (is_inj or inj_note) and _has_intel and inj_note:
             status_raw = inj_note.split(":")[0].strip() if ":" in inj_note else inj_note
             injury_text = inj_note.split(":", 1)[1].strip() if ":" in inj_note else inj_note
             if "(" in injury_text:
@@ -319,9 +321,12 @@ def get_team_matchup_stats(
             pstats.injury_keyword = keyword
             prob = compute_play_probability(pid, pname, status_level, keyword)
             pstats.play_probability = prob.composite_probability
-        else:
+        elif is_inj:
             pstats.play_probability = 0.0  # injured with no note → assume out
             pstats.injury_status = "Out"
+        else:
+            # inj_note set but no intel module — use is_injured flag
+            pstats.play_probability = 0.0 if is_inj else 1.0
 
         players.append(pstats)
 

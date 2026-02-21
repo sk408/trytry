@@ -127,7 +127,14 @@ def _fetch_cbs_injuries(timeout: int = 15, progress: Optional[Callable[[str], No
             
             # CBS format: Player | Position | Updated | Injury | Injury Status
             player_cell = cells[0]
-            player = player_cell.get_text(strip=True)
+            # CBS wraps names in two spans: CellPlayerName--short ("J. Smith")
+            # and CellPlayerName--long ("John Smith").  get_text() concatenates
+            # both.  Prefer the --long span for the full name.
+            long_span = player_cell.select_one("span.CellPlayerName--long")
+            if long_span:
+                player = long_span.get_text(strip=True)
+            else:
+                player = player_cell.get_text(strip=True)
             
             # Skip header rows
             if player.lower() in ["player", "name"]:
