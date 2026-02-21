@@ -233,8 +233,24 @@ def _fetch_rotowire_injuries(timeout: int = 15, progress: Optional[Callable[[str
 
 
 def _normalise_player_key(name: str, team: str) -> str:
-    """Create a consistent lookup key from player name and team."""
-    return f"{name.strip().lower()}|{team.strip().lower()}"
+    """Create a consistent lookup key from player name.
+
+    Only the player name is used because each source formats team names
+    differently (e.g. "Los Angeles Lakers" vs "LA Lakers" vs "LAL"),
+    which was causing zero deduplication across ESPN / CBS / RotoWire.
+    A player can only be on one team, so name alone is sufficient.
+
+    Diacriticals are stripped so that e.g. "Dončić" and "Doncic" merge.
+    """
+    import unicodedata
+    stripped = unicodedata.normalize("NFKD", name.strip().lower())
+    ascii_name = "".join(c for c in stripped if not unicodedata.combining(c))
+    # Collapse whitespace / punctuation differences (e.g. "P.J." vs "PJ")
+    ascii_name = _re.sub(r"[^a-z ]", "", ascii_name)
+    ascii_name = _re.sub(r"\s+", " ", ascii_name).strip()
+    # Strip generational suffixes that may differ between sources
+    ascii_name = _re.sub(r"\b(jr|sr|i{1,3}|iv|v)\s*$", "", ascii_name).strip()
+    return ascii_name
 
 
 def fetch_injuries(
