@@ -535,23 +535,30 @@ def fetch_team_estimated_metrics(
 ) -> pd.DataFrame:
     """
     Fetch NBA's official estimated team metrics (off/def rating, pace, etc.).
-    Uses TeamEstimatedMetrics endpoint.  One API call for all teams.
+    Uses TeamEstimatedMetrics endpoint.  Retries up to 3 times on failure.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import teamestimatedmetrics
-        progress("Fetching TeamEstimatedMetrics...")
-        _api_limiter.wait()
-        resp = teamestimatedmetrics.TeamEstimatedMetrics(
-            season=season, timeout=30
-        )
-        df = resp.get_data_frames()[0]
-        progress(f"  Got estimated metrics for {len(df)} teams")
-        return df
-    except Exception as exc:
-        progress(f"TeamEstimatedMetrics failed: {exc}")
-        return pd.DataFrame()
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import teamestimatedmetrics
+            progress("Fetching TeamEstimatedMetrics...")
+            timeout = 30 + attempt * 15
+            _api_limiter.wait()
+            resp = teamestimatedmetrics.TeamEstimatedMetrics(
+                season=season, timeout=timeout
+            )
+            df = resp.get_data_frames()[0]
+            progress(f"  Got estimated metrics for {len(df)} teams")
+            return df
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"TeamEstimatedMetrics attempt {attempt+1}/3 failed: {exc} \u2014 retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"TeamEstimatedMetrics failed after 3 attempts: {exc}")
+    return pd.DataFrame()
 
 
 def fetch_league_dash_team_stats(
@@ -562,37 +569,45 @@ def fetch_league_dash_team_stats(
 ) -> pd.DataFrame:
     """
     Fetch team stats from LeagueDashTeamStats with flexible measure type and filters.
+    Retries up to 3 times on failure.
 
     measure_type: 'Base', 'Advanced', 'Four Factors', 'Opponent'
     location: None (all), 'Home', 'Road'
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import leaguedashteamstats
-        label = f"LeagueDashTeamStats({measure_type}"
-        if location:
-            label += f", {location}"
-        label += ")"
-        progress(f"Fetching {label}...")
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import leaguedashteamstats
+            label = f"LeagueDashTeamStats({measure_type}"
+            if location:
+                label += f", {location}"
+            label += ")"
+            progress(f"Fetching {label}...")
 
-        kwargs = dict(
-            season=season,
-            measure_type_detailed_defense=measure_type,
-            per_mode_detailed="PerGame",
-            timeout=30,
-        )
-        if location:
-            kwargs["location_nullable"] = location
+            timeout = 30 + attempt * 15
+            kwargs = dict(
+                season=season,
+                measure_type_detailed_defense=measure_type,
+                per_mode_detailed="PerGame",
+                timeout=timeout,
+            )
+            if location:
+                kwargs["location_nullable"] = location
 
-        _api_limiter.wait()
-        resp = leaguedashteamstats.LeagueDashTeamStats(**kwargs)
-        df = resp.get_data_frames()[0]
-        progress(f"  Got {label}: {len(df)} teams")
-        return df
-    except Exception as exc:
-        progress(f"LeagueDashTeamStats({measure_type}) failed: {exc}")
-        return pd.DataFrame()
+            _api_limiter.wait()
+            resp = leaguedashteamstats.LeagueDashTeamStats(**kwargs)
+            df = resp.get_data_frames()[0]
+            progress(f"  Got {label}: {len(df)} teams")
+            return df
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"LeagueDashTeamStats({measure_type}) attempt {attempt+1}/3 failed: {exc} \u2014 retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"LeagueDashTeamStats({measure_type}) failed after 3 attempts: {exc}")
+    return pd.DataFrame()
 
 
 def fetch_team_clutch_stats(
@@ -601,28 +616,36 @@ def fetch_team_clutch_stats(
 ) -> pd.DataFrame:
     """
     Fetch clutch team stats (last 5 min, score within 5) with advanced metrics.
+    Retries up to 3 times on failure.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import leaguedashteamclutch
-        progress("Fetching LeagueDashTeamClutch (Advanced)...")
-        _api_limiter.wait()
-        resp = leaguedashteamclutch.LeagueDashTeamClutch(
-            season=season,
-            measure_type_detailed_defense="Advanced",
-            clutch_time="Last 5 Minutes",
-            ahead_behind="Ahead or Behind",
-            point_diff=5,
-            per_mode_detailed="PerGame",
-            timeout=30,
-        )
-        df = resp.get_data_frames()[0]
-        progress(f"  Got clutch stats for {len(df)} teams")
-        return df
-    except Exception as exc:
-        progress(f"LeagueDashTeamClutch failed: {exc}")
-        return pd.DataFrame()
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import leaguedashteamclutch
+            progress("Fetching LeagueDashTeamClutch (Advanced)...")
+            timeout = 30 + attempt * 15
+            _api_limiter.wait()
+            resp = leaguedashteamclutch.LeagueDashTeamClutch(
+                season=season,
+                measure_type_detailed_defense="Advanced",
+                clutch_time="Last 5 Minutes",
+                ahead_behind="Ahead or Behind",
+                point_diff=5,
+                per_mode_detailed="PerGame",
+                timeout=timeout,
+            )
+            df = resp.get_data_frames()[0]
+            progress(f"  Got clutch stats for {len(df)} teams")
+            return df
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"LeagueDashTeamClutch attempt {attempt+1}/3 failed: {exc} \u2014 retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"LeagueDashTeamClutch failed after 3 attempts: {exc}")
+    return pd.DataFrame()
 
 
 def fetch_team_hustle_stats(
@@ -631,22 +654,30 @@ def fetch_team_hustle_stats(
 ) -> pd.DataFrame:
     """
     Fetch hustle stats (deflections, contested shots, loose balls, etc.).
+    Retries up to 3 times on failure.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import leaguehustlestatsteam
-        progress("Fetching LeagueHustleStatsTeam...")
-        _api_limiter.wait()
-        resp = leaguehustlestatsteam.LeagueHustleStatsTeam(
-            season=season, per_mode_time="PerGame", timeout=30,
-        )
-        df = resp.get_data_frames()[0]
-        progress(f"  Got hustle stats for {len(df)} teams")
-        return df
-    except Exception as exc:
-        progress(f"LeagueHustleStatsTeam failed: {exc}")
-        return pd.DataFrame()
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import leaguehustlestatsteam
+            progress("Fetching LeagueHustleStatsTeam...")
+            timeout = 30 + attempt * 15
+            _api_limiter.wait()
+            resp = leaguehustlestatsteam.LeagueHustleStatsTeam(
+                season=season, per_mode_time="PerGame", timeout=timeout,
+            )
+            df = resp.get_data_frames()[0]
+            progress(f"  Got hustle stats for {len(df)} teams")
+            return df
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"LeagueHustleStatsTeam attempt {attempt+1}/3 failed: {exc} \u2014 retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"LeagueHustleStatsTeam failed after 3 attempts: {exc}")
+    return pd.DataFrame()
 
 
 def fetch_player_on_off(
@@ -656,26 +687,33 @@ def fetch_player_on_off(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Fetch player on/off court impact for a specific team.
-    Returns (on_court_df, off_court_df).
+    Returns (on_court_df, off_court_df).  Retries up to 3 times on failure.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import teamplayeronoffsummary
-        _api_limiter.wait()
-        resp = teamplayeronoffsummary.TeamPlayerOnOffSummary(
-            team_id=team_id, season=season,
-            measure_type_detailed_defense="Advanced",
-            per_mode_detailed="PerGame",
-            timeout=30,
-        )
-        frames = resp.get_data_frames()
-        on_court = frames[0] if len(frames) > 0 else pd.DataFrame()
-        off_court = frames[1] if len(frames) > 1 else pd.DataFrame()
-        return on_court, off_court
-    except Exception as exc:
-        progress(f"TeamPlayerOnOffSummary(team={team_id}) failed: {exc}")
-        return pd.DataFrame(), pd.DataFrame()
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import teamplayeronoffsummary
+            timeout = 30 + attempt * 15  # 30 / 45 / 60
+            _api_limiter.wait()
+            resp = teamplayeronoffsummary.TeamPlayerOnOffSummary(
+                team_id=team_id, season=season,
+                measure_type_detailed_defense="Advanced",
+                per_mode_detailed="PerGame",
+                timeout=timeout,
+            )
+            frames = resp.get_data_frames()
+            on_court = frames[0] if len(frames) > 0 else pd.DataFrame()
+            off_court = frames[1] if len(frames) > 1 else pd.DataFrame()
+            return on_court, off_court
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"TeamPlayerOnOffSummary(team={team_id}) attempt {attempt+1}/3 failed: {exc} — retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"TeamPlayerOnOffSummary(team={team_id}) failed after 3 attempts: {exc}")
+    return pd.DataFrame(), pd.DataFrame()
 
 
 def fetch_player_estimated_metrics(
@@ -684,20 +722,27 @@ def fetch_player_estimated_metrics(
 ) -> pd.DataFrame:
     """
     Fetch NBA's official estimated player metrics (USG%, off/def rating, etc.).
-    One API call for all players.
+    One API call for all players.  Retries up to 3 times on failure.
     """
     season = season or get_current_season()
     progress = progress_cb or (lambda _: None)
-    try:
-        from nba_api.stats.endpoints import playerestimatedmetrics
-        progress("Fetching PlayerEstimatedMetrics...")
-        _api_limiter.wait()
-        resp = playerestimatedmetrics.PlayerEstimatedMetrics(
-            season=season, timeout=30
-        )
-        df = resp.get_data_frames()[0]
-        progress(f"  Got estimated metrics for {len(df)} players")
-        return df
-    except Exception as exc:
-        progress(f"PlayerEstimatedMetrics failed: {exc}")
-        return pd.DataFrame()
+    for attempt in range(3):
+        try:
+            from nba_api.stats.endpoints import playerestimatedmetrics
+            progress("Fetching PlayerEstimatedMetrics...")
+            timeout = 30 + attempt * 15  # 30 / 45 / 60
+            _api_limiter.wait()
+            resp = playerestimatedmetrics.PlayerEstimatedMetrics(
+                season=season, timeout=timeout
+            )
+            df = resp.get_data_frames()[0]
+            progress(f"  Got estimated metrics for {len(df)} players")
+            return df
+        except Exception as exc:
+            if attempt < 2:
+                wait = 2.0 + attempt * 2
+                progress(f"PlayerEstimatedMetrics attempt {attempt+1}/3 failed: {exc} — retrying in {wait:.0f}s")
+                time.sleep(wait)
+            else:
+                progress(f"PlayerEstimatedMetrics failed after 3 attempts: {exc}")
+    return pd.DataFrame()
