@@ -20,15 +20,20 @@ log = logging.getLogger(__name__)
 
 
 def _worker_init_db(tmp_db_path: str) -> None:
-    """Initializer for child processes — redirect DB reads to a temp snapshot.
+    """Initializer for child processes — redirect DB reads to a temp snapshot
+    and preload all reference data into RAM.
 
     Called once per worker process at startup.  Overrides the module-level
     ``DB_PATH`` in ``src.database.db`` so all ``get_conn()`` calls inside
-    this process read from the temporary copy, eliminating file-lock
-    contention across parallel workers.
+    this process read from the temporary copy, then bulk-loads all tables
+    into the in-memory ``DataStore``, eliminating per-game DB queries.
     """
     from src.database import db as _db_mod
     _db_mod.DB_PATH = Path(tmp_db_path)
+    # Preload everything into RAM — one bulk read replaces thousands of
+    # individual queries across all games this worker will process.
+    from src.analytics.data_store import preload_all
+    preload_all()
 
 
 # ──── Backtest result cache ────────────────────────────────────────────────
@@ -599,9 +604,20 @@ def calculate_injury_adjustment(
 def _get_roster_for_game(team_id: int, game_date: date) -> List[int]:
     """Get the player IDs who actually played for *team_id* on *game_date*.
 
-    Falls back to players on the team roster if no game-day stats exist.
-    Uses ``backtest_cache`` when active (during batch backtest runs).
+    Uses preloaded RAM store when available, then backtest_cache, then DB.
     """
+    from src.analytics.data_store import store as _store
+
+    gd_str = str(game_date)[:10]
+    preloaded = _store.roster_for_game(team_id, gd_str)
+    if preloaded is not None:
+        return preloaded
+    if _store.is_loaded:
+        # Store loaded but no roster for this game → fallback to all non-injured
+        result = _store.all_player_ids_for_team(team_id)
+        if result:
+            return result
+
     from src.analytics.cache import backtest_cache
 
     cache_key = ("roster", team_id, str(game_date))
@@ -1143,6 +1159,10 @@ def run_backtest(
     n_workers = max(1, min(max_workers, total_to_process))
     progress(f"Processing {total_to_process} games with {n_workers} workers...")
 
+    # ── Preload all data into RAM (for ThreadPool path in main process) ──
+    from src.analytics.data_store import preload_all as _preload_all, clear_store as _clear_store
+    _preload_all()
+
     # ── Parallel execution ──
     predictions: List[GamePrediction] = []
     completed = 0
@@ -1296,6 +1316,8 @@ def run_backtest(
     
     # Stop session cache
     backtest_cache.stop()
+    # Free preloaded data to reclaim RAM
+    _clear_store()
 
     # Save to disk cache
     try:

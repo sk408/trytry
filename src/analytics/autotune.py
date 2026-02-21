@@ -581,6 +581,16 @@ def _clear_tuning_cache() -> None:
 
 def get_team_tuning(team_id: int) -> Optional[Dict]:
     """Load per-team tuning corrections.  Returns None if no tuning exists."""
+    # Fast path: preloaded RAM store (backtesting)
+    from src.analytics.data_store import store as _store
+    cached_store = _store.team_tuning(team_id)
+    if cached_store is not None:
+        return cached_store
+    if _store.is_loaded:
+        # Store is loaded but this team has no tuning → return None
+        # (distinguish from "store not loaded" which returns None above)
+        return None
+
     import time as _time
     now = _time.monotonic()
     entry = _tuning_cache.get(team_id)

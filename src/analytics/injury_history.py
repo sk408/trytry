@@ -385,8 +385,16 @@ def get_injuries_for_game(team_id: int, game_date: date) -> List[Dict]:
     """
     Get list of players who were out for a specific game.
     Returns list of dicts with player_id, name, position, avg_minutes.
-    Uses ``backtest_cache`` when active (during batch backtest runs).
+    Uses preloaded RAM store when available, then backtest_cache, then DB.
     """
+    # Fast path: preloaded RAM store (backtesting)
+    from src.analytics.data_store import store as _store
+    preloaded = _store.injuries_for_game(team_id, str(game_date)[:10])
+    if preloaded is not None:
+        return preloaded
+    if _store.is_loaded:
+        return []  # store loaded, no injuries recorded for this game
+
     from src.analytics.cache import backtest_cache
 
     cache_key = ("injuries_for_game", team_id, str(game_date))

@@ -217,6 +217,15 @@ def save_team_weights(team_id: int, cfg: WeightConfig) -> None:
 
 def load_team_weights(team_id: int) -> Optional[WeightConfig]:
     """Load per-team weight overrides.  Returns None if none exist."""
+    # Fast path: preloaded RAM store (backtesting)
+    from src.analytics.data_store import store as _store
+    preloaded = _store.team_weight_rows(team_id)
+    if preloaded is not None:
+        d = {k: v for k, v in preloaded}
+        return WeightConfig.from_dict(d)
+    if _store.is_loaded:
+        return None  # store loaded, team has no overrides
+
     _ensure_team_weights_table()
     with get_conn() as conn:
         rows = conn.execute(

@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.database.db import get_conn
 from src.data.nba_fetcher import get_current_season
+from src.analytics.data_store import store as _store
 
 
 @dataclass
@@ -88,6 +89,11 @@ class TeamMatchupStats:
 
 
 def _load_player_df(player_id: int) -> pd.DataFrame:
+    # Fast path: return from RAM if preloaded (backtesting)
+    cached = _store.player_df(player_id)
+    if cached is not None:
+        return cached
+    # Slow path: individual DB query (live / non-preloaded)
     with get_conn() as conn:
         df = pd.read_sql(
             "SELECT * FROM player_stats WHERE player_id = ? ORDER BY game_date DESC",
@@ -946,6 +952,11 @@ def get_team_metrics(team_id: int, season: Optional[str] = None) -> Optional[Dic
     Returns dict of all columns, or None if not available.
     """
     season = season or get_current_season()
+    # Fast path: preloaded RAM store
+    cached = _store.team_metrics(team_id, season)
+    if cached is not None:
+        return cached
+    # Slow path: DB query
     with get_conn() as conn:
         row = conn.execute(
             "SELECT * FROM team_metrics WHERE team_id = ? AND season = ?",
@@ -1316,6 +1327,16 @@ def get_team_schedule_dates(team_id: int, around_date: Optional[date] = None) ->
     if isinstance(around_date, str):
         around_date = date.fromisoformat(around_date[:10])
 
+    # Fast path: use preloaded schedule dates from RAM
+    preloaded = _store.schedule_dates(team_id)
+    if preloaded is not None:
+        if around_date:
+            window_start = around_date - timedelta(days=7)
+            window_end = around_date + timedelta(days=1)
+            return [d for d in preloaded if window_start <= d <= window_end]
+        return preloaded
+
+    # Slow path: DB query
     with get_conn() as conn:
         if around_date:
             window_start = around_date - timedelta(days=7)
