@@ -8,13 +8,27 @@ A PySide6 desktop application and analytics pipeline for predicting NBA game out
 
 ## Quick Start
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+1. **Install Python 3.8+** (recommended: 3.10+)
+2. **Install dependencies:**
+   ```sh
+   pip install -r requirements.txt
+   ```
+   - If you are on Android/Termux and `xgboost` fails, you can comment it out in `requirements.txt` unless you want to use ML ensemble tuning.
+3. **Run the web app:**
+   ```sh
+   python -m src.web.app
+   ```
+   - Or, for desktop: `python desktop.py`
 
-# Launch the desktop app
-python desktop.py
-```
+---
+
+## Mobile/Termux Notes
+- XGBoost is only required for ML ensemble tuning and sensitivity sweeps. If you only want to run predictions, you can remove/comment `xgboost` from `requirements.txt`.
+- To run on Termux:
+   1. Install Python: `pkg install python`
+   2. Install pip: `python -m ensurepip`
+   3. Install dependencies: `pip install -r requirements.txt` (comment out `xgboost` if it fails)
+   4. Run: `python -m src.web.app`
 
 ---
 

@@ -12,5 +12,5 @@ matplotlib
 websocket-client
 tzdata
 optuna
-xgboost
+# xgboost  # Only needed for ML ensemble tuning; comment out if on Termux/mobile
 shap
