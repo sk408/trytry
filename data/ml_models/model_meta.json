@@ -1,0 +1,182 @@
+{
+  "n_train": 676,
+  "n_val": 168,
+  "n_features": 88,
+  "spread_mae": 12.485725341896925,
+  "total_mae": 15.59356198992048,
+  "feature_cols": [
+    "home_points",
+    "away_points",
+    "diff_points",
+    "home_rebounds",
+    "away_rebounds",
+    "diff_rebounds",
+    "home_assists",
+    "away_assists",
+    "diff_assists",
+    "home_steals",
+    "away_steals",
+    "diff_steals",
+    "home_blocks",
+    "away_blocks",
+    "diff_blocks",
+    "home_turnovers",
+    "away_turnovers",
+    "diff_turnovers",
+    "home_oreb",
+    "away_oreb",
+    "diff_oreb",
+    "home_dreb",
+    "away_dreb",
+    "diff_dreb",
+    "home_ts_pct",
+    "away_ts_pct",
+    "diff_ts_pct",
+    "home_fg3_rate",
+    "away_fg3_rate",
+    "diff_fg3_rate",
+    "home_ft_rate",
+    "away_ft_rate",
+    "diff_ft_rate",
+    "home_to_margin",
+    "away_to_margin",
+    "diff_to_margin",
+    "home_off_rating",
+    "away_off_rating",
+    "home_def_rating",
+    "away_def_rating",
+    "home_net_rating",
+    "away_net_rating",
+    "diff_net_rating",
+    "home_matchup_edge",
+    "away_matchup_edge",
+    "diff_matchup_edge",
+    "home_def_factor_raw",
+    "away_def_factor_raw",
+    "home_pace",
+    "away_pace",
+    "avg_pace",
+    "diff_pace",
+    "home_court",
+    "home_fatigue",
+    "away_fatigue",
+    "diff_fatigue",
+    "combined_fatigue",
+    "ff_efg_edge",
+    "ff_tov_edge",
+    "ff_oreb_edge",
+    "ff_fta_edge",
+    "home_clutch_net",
+    "away_clutch_net",
+    "diff_clutch_net",
+    "home_clutch_efg",
+    "away_clutch_efg",
+    "home_deflections",
+    "away_deflections",
+    "diff_deflections",
+    "home_contested",
+    "away_contested",
+    "home_loose_balls",
+    "away_loose_balls",
+    "home_injured_count",
+    "away_injured_count",
+    "diff_injured_count",
+    "home_injury_ppg_lost",
+    "away_injury_ppg_lost",
+    "diff_injury_ppg_lost",
+    "home_injury_minutes_lost",
+    "away_injury_minutes_lost",
+    "diff_injury_minutes_lost",
+    "home_games_played",
+    "away_games_played",
+    "min_games_played",
+    "games_played_diff",
+    "home_roster_changed",
+    "away_roster_changed"
+  ],
+  "trained_at": "2026-02-22T02:46:46.281611",
+  "spread_top_features": [
+    {
+      "feature": "diff_net_rating",
+      "importance": 2.898268461227417
+    },
+    {
+      "feature": "away_net_rating",
+      "importance": 0.9317274689674377
+    },
+    {
+      "feature": "home_def_rating",
+      "importance": 0.8866278529167175
+    },
+    {
+      "feature": "away_off_rating",
+      "importance": 0.4511527419090271
+    },
+    {
+      "feature": "away_steals",
+      "importance": 0.35818707942962646
+    },
+    {
+      "feature": "home_net_rating",
+      "importance": 0.3361194133758545
+    },
+    {
+      "feature": "away_def_rating",
+      "importance": 0.32808879017829895
+    },
+    {
+      "feature": "diff_ft_rate",
+      "importance": 0.2978708744049072
+    },
+    {
+      "feature": "home_off_rating",
+      "importance": 0.2896072268486023
+    },
+    {
+      "feature": "home_ft_rate",
+      "importance": 0.28469395637512207
+    }
+  ],
+  "total_top_features": [
+    {
+      "feature": "avg_pace",
+      "importance": 1.7191429138183594
+    },
+    {
+      "feature": "home_blocks",
+      "importance": 0.9036844968795776
+    },
+    {
+      "feature": "home_ft_rate",
+      "importance": 0.7407046556472778
+    },
+    {
+      "feature": "away_points",
+      "importance": 0.7231450080871582
+    },
+    {
+      "feature": "home_assists",
+      "importance": 0.6044584512710571
+    },
+    {
+      "feature": "home_def_factor_raw",
+      "importance": 0.5468500852584839
+    },
+    {
+      "feature": "away_ts_pct",
+      "importance": 0.4955725371837616
+    },
+    {
+      "feature": "away_games_played",
+      "importance": 0.4488196074962616
+    },
+    {
+      "feature": "min_games_played",
+      "importance": 0.4141652584075928
+    },
+    {
+      "feature": "home_contested",
+      "importance": 0.4071040451526642
+    }
+  ]
+}

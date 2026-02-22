@@ -20,18 +20,15 @@ env/
 *.swp
 *.swo
 
-# Database files
-*.db
+# Database files (tracked for mobile / web data sharing)
+# *.db  — now tracked so mobile can pull data via git
 *.db-shm
 *.db-wal
 
-# Data caches
-data/cache/
-data/backtest_cache/
-data/ml_models/
+# Large generated analysis output (not needed for mobile)
 data/sensitivity/
 data/snapshots/
-data/pipeline_state.json
+data/backtest_cache/
 data/_analysis_output.txt
 
 # OS files

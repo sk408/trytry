@@ -145,11 +145,14 @@ class PlayFeedWidget(QWidget):
         layout.addWidget(self._scroll)
 
     def set_teams(self, home_team_id: int, away_team_id: int,
-                  home_abbr: str, away_abbr: str):
+                  home_abbr: str, away_abbr: str,
+                  home_espn_id: str = "", away_espn_id: str = ""):
         self._home_team_id = home_team_id
         self._away_team_id = away_team_id
         self._home_abbr = home_abbr
         self._away_abbr = away_abbr
+        self._home_espn_id = str(home_espn_id)
+        self._away_espn_id = str(away_espn_id)
 
     def set_plays(self, plays: List[Dict], max_count: int = 80):
         """Replace all plays in the feed."""
@@ -159,13 +162,22 @@ class PlayFeedWidget(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        # Flatten nested play structures
+        # Flatten nested play structures and resolve team_id
         flat_plays = []
         for play in plays:
             items = play.get("items", [play])
             for item in items:
                 if isinstance(item, dict) and item.get("text"):
                     flat_plays.append(item)
+
+        # Inject NBA team_id from ESPN's nested team structure
+        for play in flat_plays:
+            if not play.get("team_id"):
+                espn_tid = str(play.get("team", {}).get("id", ""))
+                if espn_tid and espn_tid == self._home_espn_id:
+                    play["team_id"] = self._home_team_id
+                elif espn_tid and espn_tid == self._away_espn_id:
+                    play["team_id"] = self._away_team_id
 
         # Show most recent plays (reversed: newest at top)
         for play in reversed(flat_plays[-max_count:]):

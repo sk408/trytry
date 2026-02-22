@@ -37,6 +37,7 @@ from src.data.gamecast import normalize_espn_abbr  # noqa: E402
 # ──────────────────────────────────────────────────────────────
 
 _espn_headshot_cache: Dict[tuple, QPixmap] = {}   # (url, size) → QPixmap
+_espn_headshot_data: Dict[str, bytes] = {}            # url → raw image bytes (thread-safe)
 
 _CACHE_TTL_LIVE = 12        # seconds — live games refresh often
 _CACHE_TTL_PRE = 55         # seconds — pre-game (odds may update)
@@ -642,8 +643,23 @@ class GamecastView(QWidget):
         self._fill_box_table(boxscore, competitors, is_home=True, table=self._home_box)
 
         # ── Play feed ──
-        self.play_feed.set_teams(home_team_id, away_team_id, home_abbr, away_abbr)
+        home_espn_id = home_comp.get("team", {}).get("id", "")
+        away_espn_id = away_comp.get("team", {}).get("id", "")
+        self.play_feed.set_teams(
+            home_team_id, away_team_id, home_abbr, away_abbr,
+            home_espn_id, away_espn_id,
+        )
         self.play_feed.set_plays(plays)
+
+        # ── Delayed headshot refresh — if photos were queued, schedule
+        # a single re-apply so they appear once downloaded (especially for
+        # finished games where the live timer is stopped).
+        if getattr(self, '_needs_headshot_refresh', False):
+            self._needs_headshot_refresh = False
+            self._last_data = data
+            if not getattr(self, '_headshot_timer_active', False):
+                self._headshot_timer_active = True
+                QTimer.singleShot(4000, self._refresh_for_headshots)
 
         # ── Update timer based on actual state ──
         if status_state == "in":
@@ -704,22 +720,10 @@ class GamecastView(QWidget):
                 try:
                     import requests as _req
                     resp = _req.get(self.url, timeout=5)
-                    if resp.status_code != 200:
-                        return
-                    # Store raw bytes — QPixmap creation must happen on main thread
-                    # but QImage is thread-safe for loading
-                    img = QImage()
-                    img.loadFromData(resp.content)
-                    if img.isNull():
-                        return
-                    pixmap = QPixmap.fromImage(img).scaled(
-                        self.size, self.size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    from src.ui.widgets.image_utils import _make_circle_pixmap
-                    pixmap = _make_circle_pixmap(pixmap)
-                    _espn_headshot_cache[(self.url, self.size)] = pixmap
+                    if resp.status_code == 200 and resp.content:
+                        # Store raw bytes only — QPixmap MUST be created on
+                        # the main/GUI thread (Qt requirement).
+                        _espn_headshot_data[self.url] = resp.content
                 except Exception:
                     pass
 
@@ -818,6 +822,13 @@ class GamecastView(QWidget):
             self.info_panel.update_prediction(None)
             return None
 
+    def _refresh_for_headshots(self):
+        """One-shot delayed refresh so background-downloaded headshots appear."""
+        self._headshot_timer_active = False
+        data = getattr(self, '_last_data', None)
+        if data:
+            self._apply_data(data)
+
     def _fill_box_table(self, boxscore, competitors, is_home: bool, table: QTableWidget):
         """Populate a box score table for one team, with player photos."""
         box_teams = boxscore.get("players", [])
@@ -863,23 +874,41 @@ class GamecastView(QWidget):
 
             table.setRowHeight(r, 30)
 
-            # Column 0: Player photo (28px) — local cache only, never block UI
+            # Column 0: Player photo (28px)
             photo_item = QTableWidgetItem()
             if player_id:
                 try:
-                    pixmap = get_player_photo(int(player_id), 28, circle=True)
+                    pixmap = None
+                    headshot_url = athlete_info.get("headshot", {}).get("href", "")
+
+                    # Tier 1: main-thread pixmap cache (already converted)
+                    if headshot_url and (headshot_url, 28) in _espn_headshot_cache:
+                        pixmap = _espn_headshot_cache[(headshot_url, 28)]
+
+                    # Tier 2: raw bytes downloaded in background → convert on main thread
+                    if not pixmap and headshot_url and headshot_url in _espn_headshot_data:
+                        from src.ui.widgets.image_utils import _make_circle_pixmap
+                        img = QImage()
+                        img.loadFromData(_espn_headshot_data[headshot_url])
+                        if not img.isNull():
+                            pix = QPixmap.fromImage(img).scaled(
+                                28, 28,
+                                Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation,
+                            )
+                            pixmap = _make_circle_pixmap(pix)
+                            _espn_headshot_cache[(headshot_url, 28)] = pixmap
+
+                    # Tier 3: local NBA.com photo (works when IDs match)
                     if not pixmap:
-                        # Check in-memory headshot cache (already downloaded)
-                        headshot_url = athlete_info.get("headshot", {}).get("href", "")
-                        if headshot_url and (headshot_url, 28) in _espn_headshot_cache:
-                            pixmap = _espn_headshot_cache[(headshot_url, 28)]
+                        pixmap = get_player_photo(int(player_id), 28, circle=True)
+
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
-                    elif player_id:
-                        # Schedule background fetch for next refresh
-                        headshot_url = athlete_info.get("headshot", {}).get("href", "")
-                        if headshot_url and (headshot_url, 28) not in _espn_headshot_cache:
-                            self._queue_headshot_fetch(headshot_url, 28)
+                    elif headshot_url:
+                        # Queue background download; appears on next refresh
+                        self._queue_headshot_fetch(headshot_url, 28)
+                        self._needs_headshot_refresh = True
                 except Exception:
                     pass
             table.setItem(r, 0, photo_item)
