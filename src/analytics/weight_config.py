@@ -165,9 +165,9 @@ def invalidate_weight_cache():
 OPTIMIZER_RANGES = {
     "def_factor_dampening": (0.0, 4.0),      # sweep best-loss ~1.38; widen ceiling for interaction effects
     "turnover_margin_mult": (-1.0, 4.0),     # sweep best ~1.1; allow negative for flexibility
-    "rebound_diff_mult": (-1.0, 2.0),        # sweep best-loss at -0.40; was clipped at -0.30
-    "rating_matchup_mult": (-1.0, 2.0),      # sweep best ~0.40; keep wide
-    "four_factors_scale": (50.0, 300.0),      # sweep best ~88; lower floor to reach it
+    "rebound_diff_mult": (-1.5, 2.0),        # pairwise found -0.77 optimal with ff_tov; widen floor
+    "rating_matchup_mult": (-2.0, 2.0),      # pairwise found -1.79 optimal; widen floor
+    "four_factors_scale": (50.0, 500.0),      # pairwise found 384.6 optimal with ff_tov; raise ceiling
     "clutch_scale": (-0.10, 1.0),            # sweep best-loss at 0.04; lower floor below old 0.02
     "hustle_effort_mult": (-0.10, 1.0),      # sweep best-loss at 0.04; allow slight negatives
     "pace_mult": (-0.50, 1.0),              # sweep best-loss at -0.10; was floored at 0.08
@@ -176,14 +176,14 @@ OPTIMIZER_RANGES = {
     "ml_ensemble_weight": (-2.0, 2.0),       # sweep best-loss at -2.0; was floored at 0.0
     "ml_disagree_damp": (0.0, 1.5),          # sweep best at 0.0; slight ceiling raise
     "spread_clamp": (3.0, 15.0),             # sweep best-loss at 6.9; tighten ceiling, lower floor
-    "ff_efg_weight": (0.0, 3.0),             # NEW — sweep best-loss at 1.38
-    "ff_tov_weight": (-0.5, 2.0),            # NEW — sweep best-loss at 0.22
-    "ff_oreb_weight": (0.0, 3.0),            # NEW — sweep best-loss at 1.31
-    "ff_fta_weight": (0.0, 2.0),             # NEW — sweep best-loss at 0.57
-    "blocks_penalty": (-0.5, 2.0),           # NEW — sweep best-loss at 0.55
-    "steals_penalty": (-0.5, 2.0),           # NEW — sweep best-loss at 0.25
-    "oreb_mult": (-0.5, 2.0),               # NEW — sweep best-loss at 0.08
-    "pace_baseline": (80.0, 115.0),           # NEW — sweep best-loss at 85.0
+    "ff_efg_weight": (0.0, 5.0),             # pairwise found 3.21 optimal; raise ceiling from 3.0
+    "ff_tov_weight": (-0.5, 6.0),            # pairwise found 1.77–5.0 optimal; raise ceiling from 2.0
+    "ff_oreb_weight": (0.0, 3.0),            # sweep best-loss at 1.31; current range OK
+    "ff_fta_weight": (0.0, 2.0),             # sweep best-loss at 0.57; current range OK
+    "blocks_penalty": (-0.5, 2.0),           # sweep best-loss at 0.55; current range OK
+    "steals_penalty": (-0.5, 2.0),           # sweep best-loss at 0.25; current range OK
+    "oreb_mult": (-0.5, 2.0),               # sweep best-loss at 0.08; current range OK
+    "pace_baseline": (80.0, 115.0),           # sweep best-loss at 85.0; current range OK
 }
 
 
