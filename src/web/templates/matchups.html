@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% set active = "matchups" %}
+{% block title %}Matchups — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Matchup Prediction</h1>
+
+<div class="card mb-4">
+    <form method="get" action="/matchups">
+        <div class="team-select">
+            <div class="form-group">
+                <label>Home Team</label>
+                <select name="home_team" required>
+                    <option value="">Select...</option>
+                    {% for t in teams %}
+                    <option value="{{ t.team_id }}" {% if home_team == t.team_id %}selected{% endif %}>
+                        {{ t.abbreviation }} — {{ t.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="vs-label">VS</div>
+            <div class="form-group">
+                <label>Away Team</label>
+                <select name="away_team" required>
+                    <option value="">Select...</option>
+                    {% for t in teams %}
+                    <option value="{{ t.team_id }}" {% if away_team == t.team_id %}selected{% endif %}>
+                        {{ t.abbreviation }} — {{ t.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Predict</button>
+    </form>
+</div>
+
+{% if prediction %}
+    {% if prediction.error %}
+    <div class="alert alert-danger">{{ prediction.error }}</div>
+    {% else %}
+    <div class="prediction-card mb-4 fade-in">
+        <div class="team-side">
+            <div class="team-name">{{ prediction.get('away_team', 'AWAY') }}</div>
+            <div class="team-score">{{ '%.1f'|format(prediction.get('away_score', 0)) }}</div>
+        </div>
+        <div class="prediction-center">
+            <div class="spread">{{ '%+.1f'|format(prediction.get('spread', 0)) }}</div>
+            <div class="total">O/U {{ '%.1f'|format(prediction.get('total', 0)) }}</div>
+            <div class="text-xs text-muted mt-2">
+                Win Prob: {{ '%.0f'|format(prediction.get('home_win_prob', 50)) }}%
+            </div>
+        </div>
+        <div class="team-side">
+            <div class="team-name">{{ prediction.get('home_team', 'HOME') }}</div>
+            <div class="team-score">{{ '%.1f'|format(prediction.get('home_score', 0)) }}</div>
+        </div>
+    </div>
+
+    <!-- Breakdown -->
+    {% if prediction.get('breakdown') %}
+    <div class="card mb-4">
+        <div class="card-header">Prediction Breakdown</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Factor</th><th>Value</th></tr></thead>
+                <tbody>
+                    {% for key, val in prediction['breakdown'].items() %}
+                    <tr>
+                        <td>{{ key|replace('_', ' ')|title }}</td>
+                        <td class="font-mono">{{ val if val is string else '%.2f'|format(val) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Injury Impact -->
+    {% if prediction.get('injuries') %}
+    <div class="card mb-4">
+        <div class="card-header">Injury Impact</div>
+        {% for side in ['home', 'away'] %}
+        {% set injuries = prediction['injuries'].get(side, []) %}
+        {% if injuries %}
+        <h4 class="section-sub">{{ side|title }} Team</h4>
+        {% for inj in injuries %}
+        <div class="player-card">
+            <div class="player-info">
+                <div class="name">{{ inj.player_name }}</div>
+                <div class="meta">
+                    <span class="injury-tag injury-{{ inj.status|lower|replace(' ', '-') }}">{{ inj.status }}</span>
+                    {% if inj.play_probability is defined %}
+                    — Play: {{ '%.0f'|format(inj.play_probability * 100) }}%
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% endif %}
+{% endif %}
+{% endblock %}

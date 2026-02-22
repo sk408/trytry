@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% set active = "players" %}
+{% block title %}Players — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Players</h1>
+
+<!-- Injured Players -->
+{% if injured %}
+<div class="card mb-4">
+    <div class="card-header">Injured Players ({{ injured|length }})</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Team</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                    <th>PPG</th>
+                    <th>MPG</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in injured %}
+                <tr>
+                    <td class="font-bold">{{ p.player_name }}</td>
+                    <td>{{ p.abbreviation }}</td>
+                    <td>
+                        <span class="injury-tag injury-{{ p.injury_status|lower|replace(' ', '-') }}">
+                            {{ p.injury_status }}
+                        </span>
+                    </td>
+                    <td class="text-muted text-sm">{{ p.injury_reason or '' }}</td>
+                    <td>{{ '%.1f'|format(p.ppg or 0) }}</td>
+                    <td>{{ '%.1f'|format(p.mpg or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Manual Injury Management -->
+<div class="card mb-4">
+    <div class="card-header">Manual Injury Entry</div>
+    <form action="/players/injury/add" method="post" class="inline-form">
+        <div class="form-group">
+            <label>Player ID</label>
+            <input type="number" name="player_id" required>
+        </div>
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" name="player_name">
+        </div>
+        <div class="form-group">
+            <label>Team ID</label>
+            <input type="number" name="team_id" value="0">
+        </div>
+        <div class="form-group">
+            <label>Status</label>
+            <select name="status">
+                <option>Out</option>
+                <option>Doubtful</option>
+                <option>Questionable</option>
+                <option>Probable</option>
+                <option>Day-To-Day</option>
+                <option>GTD</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Reason</label>
+            <input type="text" name="reason">
+        </div>
+        <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+
+    {% if manual_injuries %}
+    <div class="mt-3">
+        <h4 class="text-sm text-secondary mb-2">Manual Entries</h4>
+        {% for m in manual_injuries %}
+        <div class="flex items-center gap-2 mb-2">
+            <span>{{ m.player_name }} — {{ m.status }}</span>
+            <form action="/players/injury/remove" method="post" style="display:inline">
+                <input type="hidden" name="player_id" value="{{ m.player_id }}">
+                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- All Players Table -->
+<div class="card">
+    <div class="card-header">All Players ({{ players|length }})</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Team</th>
+                    <th>Pos</th>
+                    <th>PPG</th>
+                    <th>RPG</th>
+                    <th>APG</th>
+                    <th>MPG</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in players[:300] %}
+                <tr>
+                    <td class="font-bold">{{ p.player_name }}</td>
+                    <td>{{ p.abbreviation }}</td>
+                    <td>{{ p.position or '' }}</td>
+                    <td>{{ '%.1f'|format(p.ppg or 0) }}</td>
+                    <td>{{ '%.1f'|format(p.rpg or 0) }}</td>
+                    <td>{{ '%.1f'|format(p.apg or 0) }}</td>
+                    <td>{{ '%.1f'|format(p.mpg or 0) }}</td>
+                    <td>
+                        {% if p.injury_status %}
+                        <span class="injury-tag injury-{{ p.injury_status|lower|replace(' ', '-') }}">
+                            {{ p.injury_status }}
+                        </span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

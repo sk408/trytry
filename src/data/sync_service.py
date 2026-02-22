@@ -1,0 +1,502 @@
+"""Central data sync orchestrator: full_sync() with 6 sub-steps."""
+
+import logging
+import time
+from datetime import datetime, timedelta
+from typing import Callable, Optional
+
+from src.database import db
+from src.config import get_season
+from src.data import nba_fetcher, injury_scraper
+
+logger = logging.getLogger(__name__)
+
+
+def _get_sync_meta(step_name: str) -> dict:
+    """Get sync metadata for a step."""
+    row = db.fetch_one("SELECT * FROM sync_meta WHERE step_name = ?", (step_name,))
+    if row:
+        return dict(row)
+    return {"step_name": step_name, "last_synced_at": "", "game_count_at_sync": 0,
+            "last_game_date_at_sync": "", "extra": ""}
+
+
+def _set_sync_meta(step_name: str, game_count: int = 0, last_game_date: str = ""):
+    """Update sync metadata."""
+    now = datetime.now().isoformat()
+    db.execute(
+        """INSERT INTO sync_meta (step_name, last_synced_at, game_count_at_sync, last_game_date_at_sync)
+           VALUES (?,?,?,?)
+           ON CONFLICT(step_name) DO UPDATE SET
+             last_synced_at=excluded.last_synced_at,
+             game_count_at_sync=excluded.game_count_at_sync,
+             last_game_date_at_sync=excluded.last_game_date_at_sync""",
+        (step_name, now, game_count, last_game_date)
+    )
+
+
+def _is_fresh(step_name: str, hours: int = 24) -> bool:
+    """Check if a sync step is still fresh."""
+    meta = _get_sync_meta(step_name)
+    if not meta["last_synced_at"]:
+        return False
+    try:
+        last = datetime.fromisoformat(meta["last_synced_at"])
+        return (datetime.now() - last).total_seconds() < hours * 3600
+    except (ValueError, TypeError):
+        return False
+
+
+def _get_game_count() -> int:
+    row = db.fetch_one("SELECT COUNT(*) as cnt FROM player_stats")
+    return row["cnt"] if row else 0
+
+
+def _get_last_game_date() -> str:
+    row = db.fetch_one("SELECT MAX(game_date) as d FROM player_stats")
+    return row["d"] if row and row["d"] else ""
+
+
+def clear_sync_cache():
+    """Delete all freshness metadata so next sync re-fetches everything."""
+    db.execute("DELETE FROM sync_meta")
+    db.execute("DELETE FROM player_sync_cache")
+    logger.info("Cleared all sync freshness caches")
+
+
+def sync_reference_data(callback: Optional[Callable] = None, force: bool = False):
+    """Step 1: Sync teams and players."""
+    if not force and _is_fresh("reference_data", 24):
+        team_count = db.fetch_one("SELECT COUNT(*) as cnt FROM teams")
+        player_count = db.fetch_one("SELECT COUNT(*) as cnt FROM players")
+        if team_count and team_count["cnt"] >= 30 and player_count and player_count["cnt"] > 100:
+            if callback:
+                callback("Reference data is fresh, skipping...")
+            return
+    if callback:
+        callback("Fetching NBA teams...")
+    teams = nba_fetcher.fetch_teams()
+    nba_fetcher.save_teams(teams)
+    if callback:
+        callback(f"Saved {len(teams)} teams. Fetching rosters...")
+
+    team_rows = db.fetch_all("SELECT team_id FROM teams")
+    total = len(team_rows)
+    for i, trow in enumerate(team_rows):
+        tid = trow["team_id"]
+        players = nba_fetcher.fetch_players(tid)
+        nba_fetcher.save_players(players)
+        if callback and (i + 1) % 5 == 0:
+            callback(f"Rosters: {i + 1}/{total} teams...")
+
+    _set_sync_meta("reference_data")
+    if callback:
+        callback("Reference data sync complete")
+
+
+def sync_player_game_logs(callback: Optional[Callable] = None, force: bool = False):
+    """Step 2: Sync player game logs with per-player caching."""
+    if callback:
+        callback("Syncing player game logs...")
+
+    players = db.fetch_all("SELECT player_id, name FROM players")
+    now = datetime.now()
+    total = len(players)
+
+    for i, p in enumerate(players):
+        pid = p["player_id"]
+
+        # Check per-player cache (skip if force)
+        if not force:
+          cache_row = db.fetch_one(
+              "SELECT last_synced_at, latest_game_date FROM player_sync_cache WHERE player_id = ?",
+              (pid,)
+          )
+        else:
+          cache_row = None
+        if cache_row and cache_row["last_synced_at"]:
+            try:
+                last_sync = datetime.fromisoformat(cache_row["last_synced_at"])
+                hours_ago = (now - last_sync).total_seconds() / 3600
+                # Skip if synced within 24h, unless game was recent (3 days)
+                if hours_ago < 24:
+                    latest = cache_row["latest_game_date"] or ""
+                    if latest:
+                        try:
+                            game_dt = datetime.strptime(latest, "%Y-%m-%d")
+                            if (now - game_dt).days > 3:
+                                continue
+                        except ValueError:
+                            continue
+                    else:
+                        continue
+            except (ValueError, TypeError):
+                pass
+
+        logs = nba_fetcher.fetch_player_game_logs(pid)
+        nba_fetcher.save_game_logs(logs)
+
+        # Update sync cache
+        latest_date = logs[0]["game_date"] if logs else ""
+        db.execute(
+            """INSERT INTO player_sync_cache (player_id, last_synced_at, games_synced, latest_game_date)
+               VALUES (?,?,?,?)
+               ON CONFLICT(player_id) DO UPDATE SET
+                 last_synced_at=excluded.last_synced_at,
+                 games_synced=excluded.games_synced,
+                 latest_game_date=excluded.latest_game_date""",
+            (pid, now.isoformat(), len(logs), latest_date)
+        )
+
+        if callback and (i + 1) % 25 == 0:
+            callback(f"Game logs: {i + 1}/{total} players...")
+
+    _set_sync_meta("player_game_logs", _get_game_count(), _get_last_game_date())
+    if callback:
+        callback(f"Player game logs sync complete ({total} players)")
+
+
+def sync_injuries_step(callback: Optional[Callable] = None, force: bool = False):
+    """Step 3: Sync current injuries."""
+    count = injury_scraper.sync_injuries(callback)
+    _set_sync_meta("injuries")
+    if callback:
+        callback(f"Injury sync complete: {count} injuries")
+
+
+def sync_injury_history(callback: Optional[Callable] = None, force: bool = False):
+    """Step 4: Build injury history from game log gaps."""
+    meta = _get_sync_meta("injury_history")
+    current_gc = _get_game_count()
+    if not force and _is_fresh("injury_history", 168) and meta.get("game_count_at_sync", 0) == current_gc:
+        if callback:
+            callback("Injury history is fresh, skipping...")
+        return
+
+    if callback:
+        callback("Building injury history from game logs...")
+
+    from src.analytics.injury_history import infer_injuries_from_logs
+    result = infer_injuries_from_logs(callback=callback)
+    count = result.get("records", 0) if isinstance(result, dict) else 0
+    _set_sync_meta("injury_history", current_gc, _get_last_game_date())
+    if callback:
+        callback(f"Injury history built: {count} records")
+
+
+def sync_team_metrics(callback: Optional[Callable] = None, force: bool = False):
+    """Step 5: Sync team advanced metrics (8 API calls)."""
+    meta = _get_sync_meta("team_metrics")
+    current_gc = _get_game_count()
+    if not force and _is_fresh("team_metrics", 168) and meta.get("game_count_at_sync", 0) == current_gc:
+        if callback:
+            callback("Team metrics are fresh, skipping...")
+        return
+
+    if callback:
+        callback("Fetching team estimated metrics...")
+    season = get_season()
+    now = datetime.now().isoformat()
+
+    # 1. Estimated metrics
+    est_metrics = nba_fetcher.fetch_team_estimated_metrics()
+    for m in est_metrics:
+        tid = m["team_id"]
+        db.execute(
+            """INSERT INTO team_metrics (team_id, season, gp, w, l, w_pct,
+                 e_off_rating, e_def_rating, e_net_rating, e_pace,
+                 e_ast_ratio, e_oreb_pct, e_dreb_pct, e_reb_pct, e_tm_tov_pct, last_synced_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(team_id, season) DO UPDATE SET
+                 gp=excluded.gp, w=excluded.w, l=excluded.l, w_pct=excluded.w_pct,
+                 e_off_rating=excluded.e_off_rating, e_def_rating=excluded.e_def_rating,
+                 e_net_rating=excluded.e_net_rating, e_pace=excluded.e_pace,
+                 e_ast_ratio=excluded.e_ast_ratio, e_oreb_pct=excluded.e_oreb_pct,
+                 e_dreb_pct=excluded.e_dreb_pct, e_reb_pct=excluded.e_reb_pct,
+                 e_tm_tov_pct=excluded.e_tm_tov_pct, last_synced_at=excluded.last_synced_at""",
+            (tid, season, m["gp"], m["w"], m["l"], m["w_pct"],
+             m["e_off_rating"], m["e_def_rating"], m["e_net_rating"], m["e_pace"],
+             m["e_ast_ratio"], m["e_oreb_pct"], m["e_dreb_pct"], m["e_reb_pct"],
+             m["e_tm_tov_pct"], now)
+        )
+
+    if callback:
+        callback("Fetching advanced team stats...")
+
+    # 2. Advanced
+    _update_team_dash_stats(season, "Advanced", "", now, callback)
+
+    # 3. Four Factors
+    if callback:
+        callback("Fetching four factors...")
+    _update_team_dash_stats(season, "Four Factors", "", now, callback)
+
+    # 4. Opponent
+    if callback:
+        callback("Fetching opponent stats...")
+    _update_opponent_stats(season, now, callback)
+
+    # 5. Home splits
+    if callback:
+        callback("Fetching home splits...")
+    _update_home_road_stats(season, "Home", now, callback)
+
+    # 6. Road splits
+    if callback:
+        callback("Fetching road splits...")
+    _update_home_road_stats(season, "Road", now, callback)
+
+    # 7. Clutch
+    if callback:
+        callback("Fetching clutch stats...")
+    _update_clutch_stats(season, now, callback)
+
+    # 8. Hustle
+    if callback:
+        callback("Fetching hustle stats...")
+    _update_hustle_stats(season, now, callback)
+
+    _set_sync_meta("team_metrics", current_gc, _get_last_game_date())
+    if callback:
+        callback("Team metrics sync complete")
+
+
+def _update_team_dash_stats(season, measure, location, now, callback):
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type=measure, location=location)
+    for row in data:
+        tid = row.get("TEAM_ID", 0)
+        if not tid:
+            continue
+        if measure == "Advanced":
+            db.execute(
+                """UPDATE team_metrics SET
+                     off_rating=?, def_rating=?, net_rating=?, pace=?,
+                     efg_pct=?, ts_pct=?, ast_ratio=?, ast_to=?,
+                     oreb_pct=?, dreb_pct=?, reb_pct=?, tm_tov_pct=?, pie=?,
+                     last_synced_at=?
+                   WHERE team_id=? AND season=?""",
+                (row.get("OFF_RATING", 0), row.get("DEF_RATING", 0),
+                 row.get("NET_RATING", 0), row.get("PACE", 0),
+                 row.get("EFG_PCT", 0), row.get("TS_PCT", 0),
+                 row.get("AST_RATIO", 0), row.get("AST_TO", 0),
+                 row.get("OREB_PCT", 0), row.get("DREB_PCT", 0),
+                 row.get("REB_PCT", 0), row.get("TM_TOV_PCT", 0),
+                 row.get("PIE", 0), now, tid, season)
+            )
+        elif measure == "Four Factors":
+            db.execute(
+                """UPDATE team_metrics SET
+                     ff_efg_pct=?, ff_fta_rate=?, ff_tm_tov_pct=?, ff_oreb_pct=?,
+                     opp_efg_pct=?, opp_fta_rate=?, opp_tm_tov_pct=?, opp_oreb_pct=?,
+                     last_synced_at=?
+                   WHERE team_id=? AND season=?""",
+                (row.get("EFG_PCT", 0), row.get("FTA_RATE", 0),
+                 row.get("TM_TOV_PCT", 0), row.get("OREB_PCT", 0),
+                 row.get("OPP_EFG_PCT", 0), row.get("OPP_FTA_RATE", 0),
+                 row.get("OPP_TM_TOV_PCT", 0), row.get("OPP_OREB_PCT", 0),
+                 now, tid, season)
+            )
+
+
+def _update_opponent_stats(season, now, callback):
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Opponent")
+    for row in data:
+        tid = row.get("TEAM_ID", 0)
+        if not tid:
+            continue
+        db.execute(
+            """UPDATE team_metrics SET
+                 opp_pts=?, opp_fg_pct=?, opp_fg3_pct=?, opp_ft_pct=?, last_synced_at=?
+               WHERE team_id=? AND season=?""",
+            (row.get("OPP_PTS", 0), row.get("OPP_FG_PCT", 0),
+             row.get("OPP_FG3_PCT", 0), row.get("OPP_FT_PCT", 0),
+             now, tid, season)
+        )
+
+
+def _update_home_road_stats(season, location, now, callback):
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Base", location=location)
+    prefix = "home" if location == "Home" else "road"
+    for row in data:
+        tid = row.get("TEAM_ID", 0)
+        if not tid:
+            continue
+        gp = row.get("GP", 0)
+        w = row.get("W", 0)
+        l_val = row.get("L", 0)
+        pts = row.get("PTS", 0)
+        # Estimate opp_pts from available data
+        opp_pts = row.get("OPP_PTS", 0) or 0
+        db.execute(
+            f"""UPDATE team_metrics SET
+                 {prefix}_gp=?, {prefix}_w=?, {prefix}_l=?,
+                 {prefix}_pts=?, {prefix}_opp_pts=?, last_synced_at=?
+               WHERE team_id=? AND season=?""",
+            (gp, w, l_val, pts, opp_pts, now, tid, season)
+        )
+
+
+def _update_clutch_stats(season, now, callback):
+    data = nba_fetcher.fetch_team_clutch_stats()
+    for row in data:
+        tid = row.get("TEAM_ID", 0)
+        if not tid:
+            continue
+        db.execute(
+            """UPDATE team_metrics SET
+                 clutch_gp=?, clutch_w=?, clutch_l=?,
+                 clutch_net_rating=?, clutch_efg_pct=?, clutch_ts_pct=?,
+                 last_synced_at=?
+               WHERE team_id=? AND season=?""",
+            (row.get("GP", 0), row.get("W", 0), row.get("L", 0),
+             row.get("NET_RATING", 0), row.get("EFG_PCT", 0), row.get("TS_PCT", 0),
+             now, tid, season)
+        )
+
+
+def _update_hustle_stats(season, now, callback):
+    data = nba_fetcher.fetch_team_hustle_stats()
+    for row in data:
+        tid = row.get("TEAM_ID", 0)
+        if not tid:
+            continue
+        db.execute(
+            """UPDATE team_metrics SET
+                 deflections=?, loose_balls_recovered=?, contested_shots=?,
+                 charges_drawn=?, screen_assists=?, last_synced_at=?
+               WHERE team_id=? AND season=?""",
+            (row.get("DEFLECTIONS", 0), row.get("LOOSE_BALLS_RECOVERED", 0),
+             row.get("CONTESTED_SHOTS", 0), row.get("CHARGES_DRAWN", 0),
+             row.get("SCREEN_ASSISTS", 0), now, tid, season)
+        )
+
+
+def sync_player_impact(callback: Optional[Callable] = None, force: bool = False):
+    """Step 6: Sync player impact (estimated metrics + on/off)."""
+    meta = _get_sync_meta("player_impact")
+    current_gc = _get_game_count()
+    if not force and _is_fresh("player_impact", 168) and meta.get("game_count_at_sync", 0) == current_gc:
+        if callback:
+            callback("Player impact is fresh, skipping...")
+        return
+
+    season = get_season()
+    now = datetime.now().isoformat()
+
+    if callback:
+        callback("Fetching player estimated metrics...")
+    est = nba_fetcher.fetch_player_estimated_metrics()
+    est_map = {int(r.get("PLAYER_ID", 0)): r for r in est}
+
+    if callback:
+        callback("Fetching player on/off data per team...")
+    team_rows = db.fetch_all("SELECT team_id FROM teams")
+    on_off_map = {}
+    for i, trow in enumerate(team_rows):
+        tid = trow["team_id"]
+        data = nba_fetcher.fetch_player_on_off(tid)
+        for rec in data.get("on", []):
+            pid = int(rec.get("VS_PLAYER_ID", rec.get("PLAYER_ID", 0)))
+            on_off_map.setdefault(pid, {})["on"] = rec
+        for rec in data.get("off", []):
+            pid = int(rec.get("VS_PLAYER_ID", rec.get("PLAYER_ID", 0)))
+            on_off_map.setdefault(pid, {}).setdefault("off", rec)
+        if callback and (i + 1) % 10 == 0:
+            callback(f"On/off: {i + 1}/{len(team_rows)} teams...")
+
+    players = db.fetch_all("SELECT player_id, team_id FROM players")
+    for p in players:
+        pid = p["player_id"]
+        tid = p["team_id"]
+        e = est_map.get(pid, {})
+        oo = on_off_map.get(pid, {})
+        on_data = oo.get("on", {})
+        off_data = oo.get("off", {})
+
+        on_off_r = float(on_data.get("OFF_RATING", 0) or 0)
+        on_def_r = float(on_data.get("DEF_RATING", 0) or 0)
+        on_net = float(on_data.get("NET_RATING", 0) or 0)
+        off_off_r = float(off_data.get("OFF_RATING", 0) or 0)
+        off_def_r = float(off_data.get("DEF_RATING", 0) or 0)
+        off_net = float(off_data.get("NET_RATING", 0) or 0)
+        net_diff = on_net - off_net
+        on_min = float(on_data.get("MIN", 0) or 0)
+
+        db.execute(
+            """INSERT INTO player_impact
+               (player_id, team_id, season,
+                on_court_off_rating, on_court_def_rating, on_court_net_rating,
+                off_court_off_rating, off_court_def_rating, off_court_net_rating,
+                net_rating_diff, on_court_minutes,
+                e_usg_pct, e_off_rating, e_def_rating, e_net_rating,
+                e_pace, e_ast_ratio, e_oreb_pct, e_dreb_pct, last_synced_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(player_id, season) DO UPDATE SET
+                 team_id=excluded.team_id,
+                 on_court_off_rating=excluded.on_court_off_rating,
+                 on_court_def_rating=excluded.on_court_def_rating,
+                 on_court_net_rating=excluded.on_court_net_rating,
+                 off_court_off_rating=excluded.off_court_off_rating,
+                 off_court_def_rating=excluded.off_court_def_rating,
+                 off_court_net_rating=excluded.off_court_net_rating,
+                 net_rating_diff=excluded.net_rating_diff,
+                 on_court_minutes=excluded.on_court_minutes,
+                 e_usg_pct=excluded.e_usg_pct,
+                 e_off_rating=excluded.e_off_rating,
+                 e_def_rating=excluded.e_def_rating,
+                 e_net_rating=excluded.e_net_rating,
+                 e_pace=excluded.e_pace,
+                 e_ast_ratio=excluded.e_ast_ratio,
+                 e_oreb_pct=excluded.e_oreb_pct,
+                 e_dreb_pct=excluded.e_dreb_pct,
+                 last_synced_at=excluded.last_synced_at""",
+            (pid, tid, season,
+             on_off_r, on_def_r, on_net,
+             off_off_r, off_def_r, off_net,
+             net_diff, on_min,
+             float(e.get("E_USG_PCT", 0) or 0),
+             float(e.get("E_OFF_RATING", 0) or 0),
+             float(e.get("E_DEF_RATING", 0) or 0),
+             float(e.get("E_NET_RATING", 0) or 0),
+             float(e.get("E_PACE", 0) or 0),
+             float(e.get("E_AST_RATIO", 0) or 0),
+             float(e.get("E_OREB_PCT", 0) or 0),
+             float(e.get("E_DREB_PCT", 0) or 0),
+             now)
+        )
+
+    _set_sync_meta("player_impact", current_gc, _get_last_game_date())
+    if callback:
+        callback("Player impact sync complete")
+
+
+def full_sync(callback: Optional[Callable] = None, force: bool = False):
+    """Full 6-step data sync.
+
+    Args:
+        force: If True, bypass all freshness checks and re-fetch everything.
+    """
+    if force:
+        if callback:
+            callback("Force mode: clearing sync caches...")
+        clear_sync_cache()
+
+    steps = [
+        ("1/6 Reference data", sync_reference_data),
+        ("2/6 Player game logs", sync_player_game_logs),
+        ("3/6 Injuries", sync_injuries_step),
+        ("4/6 Injury history", sync_injury_history),
+        ("5/6 Team metrics", sync_team_metrics),
+        ("6/6 Player impact", sync_player_impact),
+    ]
+    for label, func in steps:
+        if callback:
+            callback(f"=== {label} ===")
+        try:
+            func(callback=callback, force=force)
+        except Exception as e:
+            logger.error(f"Error in {label}: {e}")
+            if callback:
+                callback(f"ERROR in {label}: {e}")
+    if callback:
+        callback("Full data sync complete!")

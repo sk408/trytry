@@ -1,0 +1,198 @@
+"""Dashboard tab — 4 stat cards, 6 sync buttons, activity log."""
+
+import logging
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTextEdit, QFrame, QGridLayout,
+)
+from PySide6.QtCore import Qt
+
+from src.ui.workers import start_sync_worker, start_injury_worker
+
+logger = logging.getLogger(__name__)
+
+
+class StatCard(QFrame):
+    """A single stat card widget."""
+
+    def __init__(self, label: str, value: str = "0"):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet("""
+            StatCard {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.value_label = QLabel(value)
+        self.value_label.setStyleSheet("font-size: 28px; font-weight: 700; color: #3b82f6;")
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.text_label = QLabel(label)
+        self.text_label.setStyleSheet(
+            "font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #64748b;"
+        )
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(self.value_label)
+        layout.addWidget(self.text_label)
+
+    def set_value(self, value: str):
+        self.value_label.setText(value)
+
+
+class DashboardView(QWidget):
+    """Dashboard tab content."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window = parent
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # Header
+        header = QLabel("Dashboard")
+        header.setProperty("class", "header")
+        layout.addWidget(header)
+
+        # Stat cards
+        cards_layout = QGridLayout()
+        self.teams_card = StatCard("Teams")
+        self.players_card = StatCard("Players")
+        self.games_card = StatCard("Game Logs")
+        self.injuries_card = StatCard("Injured")
+
+        cards_layout.addWidget(self.teams_card, 0, 0)
+        cards_layout.addWidget(self.players_card, 0, 1)
+        cards_layout.addWidget(self.games_card, 0, 2)
+        cards_layout.addWidget(self.injuries_card, 0, 3)
+        layout.addLayout(cards_layout)
+
+        # Sync buttons
+        btn_layout = QHBoxLayout()
+        btns = [
+            ("Full Sync", self._on_full_sync),
+            ("Force Full Sync", self._on_force_sync),
+            ("Injuries", self._on_injuries),
+            ("Injury History", self._on_injury_history),
+            ("Team Metrics", self._on_team_metrics),
+            ("Player Impact", self._on_player_impact),
+            ("Images", self._on_images),
+        ]
+        for text, handler in btns:
+            btn = QPushButton(text)
+            btn.clicked.connect(handler)
+            btn_layout.addWidget(btn)
+
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setProperty("class", "danger")
+        self.stop_btn.clicked.connect(self._on_stop)
+        btn_layout.addWidget(self.stop_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Activity log
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumHeight(300)
+        layout.addWidget(self.log)
+
+        layout.addStretch()
+
+        # Current worker
+        self._worker = None
+
+        # Load initial stats
+        self._refresh_stats()
+
+    def _refresh_stats(self):
+        """Refresh stat card values from DB."""
+        try:
+            from src.database import db
+            self.teams_card.set_value(
+                str(db.fetch_one("SELECT COUNT(*) as c FROM teams")["c"])
+            )
+            self.players_card.set_value(
+                str(db.fetch_one("SELECT COUNT(*) as c FROM players")["c"])
+            )
+            self.games_card.set_value(
+                str(db.fetch_one("SELECT COUNT(*) as c FROM player_stats")["c"])
+            )
+            try:
+                self.injuries_card.set_value(
+                    str(db.fetch_one("SELECT COUNT(*) as c FROM injuries")["c"])
+                )
+            except Exception as e:
+                logger.warning("Injuries count query failed: %s", e)
+                self.injuries_card.set_value("0")
+        except Exception as e:
+            logger.debug(f"Stats refresh error: {e}")
+
+    def _append_log(self, msg: str):
+        """Append colored HTML to activity log."""
+        color = "#94a3b8"
+        if "error" in msg.lower():
+            color = "#ef4444"
+        elif "complete" in msg.lower() or "done" in msg.lower():
+            color = "#22c55e"
+        elif "progress" in msg.lower() or "step" in msg.lower():
+            color = "#3b82f6"
+
+        self.log.append(f'<span style="color:{color}">{msg}</span>')
+
+    def _on_full_sync(self):
+        self.log.clear()
+        self._worker = start_sync_worker(
+            "full", self._append_log, self._on_sync_done
+        )
+
+    def _on_force_sync(self):
+        self.log.clear()
+        self._append_log("Starting FORCE sync — bypassing all freshness checks...")
+        self._worker = start_sync_worker(
+            "full", self._append_log, self._on_sync_done, force=True
+        )
+
+    def _on_injuries(self):
+        self.log.clear()
+        self._worker = start_injury_worker(self._append_log, self._on_sync_done)
+
+    def _on_injury_history(self):
+        self.log.clear()
+        self._worker = start_sync_worker(
+            "injury_history", self._append_log, self._on_sync_done
+        )
+
+    def _on_team_metrics(self):
+        self.log.clear()
+        self._worker = start_sync_worker(
+            "team_metrics", self._append_log, self._on_sync_done
+        )
+
+    def _on_player_impact(self):
+        self.log.clear()
+        self._worker = start_sync_worker(
+            "player_impact", self._append_log, self._on_sync_done
+        )
+
+    def _on_images(self):
+        self.log.clear()
+        self._worker = start_sync_worker(
+            "images", self._append_log, self._on_sync_done
+        )
+
+    def _on_stop(self):
+        if self._worker:
+            self._worker.stop()
+        self._append_log("Stop requested")
+
+    def _on_sync_done(self):
+        self._append_log("Operation complete")
+        self._refresh_stats()
+        if self.main_window:
+            self.main_window.set_status("Sync complete")

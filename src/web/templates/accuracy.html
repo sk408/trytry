@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% set active = "accuracy" %}
+{% block title %}Accuracy — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Model Accuracy</h1>
+
+<div class="card mb-4">
+    <div class="card-header">Backtest Controls</div>
+    <div class="btn-group mb-3">
+        <button class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
+        <button class="btn btn-outline" onclick="runAction('/api/optimize', 'Optimizing...')">Optimize Weights</button>
+        <button class="btn btn-outline" onclick="runAction('/api/calibrate', 'Calibrating...')">Residual Calibration</button>
+        <button class="btn btn-outline" onclick="runAction('/api/feature-importance', 'Analyzing...')">Feature Importance</button>
+        <button class="btn btn-outline" onclick="runAction('/api/ml-train', 'Training...')">Train ML</button>
+        <button class="btn btn-outline" onclick="runAction('/api/team-refinement', 'Refining...')">Team Refinement</button>
+        <button class="btn btn-outline" onclick="runAction('/api/fft-analysis', 'FFT...')">FFT Analysis</button>
+    </div>
+    {% if cache_age is not none %}
+    <p class="text-sm text-muted">Cache age: {{ '%.1f'|format(cache_age) }} minutes</p>
+    {% endif %}
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">Activity Log</div>
+    <div class="log-output" id="activityLog"></div>
+</div>
+
+<div id="resultsSection" class="hidden">
+    <div class="card mb-4">
+        <div class="card-header">Results Summary</div>
+        <div class="accuracy-grid" id="summaryCards"></div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">Per-Team Accuracy</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Team</th>
+                        <th>Games</th>
+                        <th>Winner %</th>
+                        <th>Spread MAE</th>
+                        <th>Total MAE</th>
+                        <th>Spread &le;5</th>
+                        <th>Total &le;10</th>
+                    </tr>
+                </thead>
+                <tbody id="teamTable"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentES = null;
+
+function runBacktest() {
+    runAction('/api/backtest', 'Backtesting...', function(results) {
+        showResults(results);
+    });
+}
+
+function runAction(url, label, onResult) {
+    if (currentES) currentES.close();
+    const log = document.getElementById('activityLog');
+    log.innerHTML = `<div class="log-line">${label}</div>`;
+    currentES = startSSE(url, log, onResult);
+}
+
+function showResults(r) {
+    if (!r || r.error) return;
+    document.getElementById('resultsSection').classList.remove('hidden');
+
+    // Summary cards
+    const cards = document.getElementById('summaryCards');
+    cards.innerHTML = `
+        <div class="accuracy-metric"><div class="value">${r.total_games}</div><div class="label">Games</div></div>
+        <div class="accuracy-metric"><div class="value val-good">${r.overall_spread_accuracy}%</div><div class="label">Winner Pick %</div></div>
+        <div class="accuracy-metric"><div class="value">${r.avg_spread_error}</div><div class="label">Spread MAE</div></div>
+        <div class="accuracy-metric"><div class="value">${r.avg_total_error}</div><div class="label">Total MAE</div></div>
+        <div class="accuracy-metric"><div class="value">${r.spread_within_5_pct}%</div><div class="label">Spread ≤5</div></div>
+        <div class="accuracy-metric"><div class="value">${r.total_within_10_pct}%</div><div class="label">Total ≤10</div></div>
+    `;
+
+    // Per-team table
+    const tbody = document.getElementById('teamTable');
+    let html = '';
+    if (r.per_team) {
+        for (const [tid, t] of Object.entries(r.per_team)) {
+            html += `<tr>
+                <td>${tid}</td>
+                <td>${t.games}</td>
+                <td>${(t.wins / t.games * 100).toFixed(1)}%</td>
+                <td>${t.avg_spread_error}</td>
+                <td>${t.avg_total_error}</td>
+                <td>${t.spread_accuracy}%</td>
+                <td>${t.total_accuracy}%</td>
+            </tr>`;
+        }
+    }
+    tbody.innerHTML = html;
+}
+</script>
+{% endblock %}

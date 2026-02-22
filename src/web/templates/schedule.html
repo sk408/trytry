@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set active = "schedule" %}
+{% block title %}Schedule — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">NBA Schedule</h1>
+
+{% if schedule %}
+{% set ns = namespace(current_date='') %}
+{% for g in schedule %}
+    {% if g.get('game_date', '') != ns.current_date %}
+        {% set ns.current_date = g.get('game_date', '') %}
+        <div class="schedule-date">{{ ns.current_date }}</div>
+    {% endif %}
+    <div class="card" style="padding: 0.75rem 1.25rem; margin-bottom: 0.5rem;">
+        <div class="flex items-center justify-between">
+            <div>
+                <span class="font-bold">{{ g.get('away_team', '???') }}</span>
+                <span class="text-muted mx-2">@</span>
+                <span class="font-bold">{{ g.get('home_team', '???') }}</span>
+            </div>
+            <div class="text-sm text-muted">
+                {{ g.get('game_time', '') }}
+                {% if g.get('status') == 'Final' %}
+                    <span class="badge badge-primary ml-2">
+                        {{ g.get('away_score', '') }}-{{ g.get('home_score', '') }}
+                    </span>
+                {% endif %}
+            </div>
+            <div>
+                <a href="/matchups?home_team={{ g.get('home_team_id', '') }}&away_team={{ g.get('away_team_id', '') }}" 
+                   class="btn btn-outline btn-sm">Predict</a>
+            </div>
+        </div>
+    </div>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <div class="icon">📅</div>
+    <p>No scheduled games. Sync data to load the schedule.</p>
+</div>
+{% endif %}
+{% endblock %}

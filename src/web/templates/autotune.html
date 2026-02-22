@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active = "autotune" %}
+{% block title %}Autotune — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Autotune</h1>
+
+<div class="card mb-4">
+    <div class="card-header">Controls</div>
+    <div class="btn-group">
+        <form action="/autotune/clear" method="post" style="display:inline">
+            <button type="submit" class="btn btn-danger" onclick="return confirm('Clear all corrections?')">
+                Clear All Corrections
+            </button>
+        </form>
+    </div>
+</div>
+
+{% if tuning %}
+<div class="card">
+    <div class="card-header">Per-Team Corrections ({{ tuning|length }})</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Team</th>
+                    <th>Home Adj</th>
+                    <th>Away Adj</th>
+                    <th>Games</th>
+                    <th>Mode</th>
+                    <th>Last Tuned</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in tuning %}
+                <tr>
+                    <td class="font-bold">{{ t.abbreviation }}</td>
+                    <td class="font-mono {% if t.home_adjustment and t.home_adjustment > 0 %}text-success{% elif t.home_adjustment and t.home_adjustment < 0 %}text-danger{% endif %}">
+                        {{ '%+.2f'|format(t.home_adjustment or 0) }}
+                    </td>
+                    <td class="font-mono {% if t.away_adjustment and t.away_adjustment > 0 %}text-success{% elif t.away_adjustment and t.away_adjustment < 0 %}text-danger{% endif %}">
+                        {{ '%+.2f'|format(t.away_adjustment or 0) }}
+                    </td>
+                    <td>{{ t.games_analyzed or 0 }}</td>
+                    <td class="text-muted">{{ t.mode or 'classic' }}</td>
+                    <td class="text-muted text-sm">{{ t.last_tuned or '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="icon">⚙️</div>
+    <p>No team corrections yet. Run the pipeline or autotune from the accuracy page.</p>
+</div>
+{% endif %}
+{% endblock %}

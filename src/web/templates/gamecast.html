@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% set active = "gamecast" %}
+{% block title %}Gamecast — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Gamecast</h1>
+
+<div class="card mb-4">
+    <div class="card-header">Select Game</div>
+    <div id="gameList" class="btn-group">Loading games...</div>
+</div>
+
+<div id="gameDetail" class="hidden">
+    <div class="scoreboard mb-4" id="scoreboard">
+        <div class="team">
+            <div class="name" id="awayTeam">Away</div>
+            <div class="score" id="awayScore">0</div>
+        </div>
+        <div class="vs">VS</div>
+        <div class="team">
+            <div class="name" id="homeTeam">Home</div>
+            <div class="score" id="homeScore">0</div>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-header">Prediction</div>
+            <div id="predictionInfo">
+                <p>Spread: <span id="predSpread" class="font-bold text-accent">-</span></p>
+                <p>Total: <span id="predTotal" class="font-bold">-</span></p>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">Odds</div>
+            <div id="oddsInfo">Loading...</div>
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header">Play-by-Play</div>
+        <div class="play-by-play" id="plays"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let gameES = null;
+
+async function loadGames() {
+    try {
+        const r = await fetch('/api/gamecast/games');
+        const games = await r.json();
+        const el = document.getElementById('gameList');
+        if (!games || games.error || !Array.isArray(games) || games.length === 0) {
+            el.innerHTML = '<span class="text-muted">No games today</span>';
+            return;
+        }
+        el.innerHTML = games.map(g => {
+            const id = g.espn_id || g.id || g.game_id;
+            const label = (g.away_team || '???') + ' @ ' + (g.home_team || '???');
+            return `<button class="btn btn-outline btn-sm" onclick="selectGame('${id}')">${label}</button>`;
+        }).join('');
+
+        {% if game_id %}
+        selectGame('{{ game_id }}');
+        {% endif %}
+    } catch(e) {
+        document.getElementById('gameList').innerHTML = '<span class="text-muted">Error loading games</span>';
+    }
+}
+
+function selectGame(gameId) {
+    document.getElementById('gameDetail').classList.remove('hidden');
+    if (gameES) gameES.close();
+
+    gameES = new EventSource('/api/gamecast/stream/' + gameId);
+    gameES.onmessage = function(e) {
+        try {
+            const data = JSON.parse(e.data);
+            updateScoreboard(data.summary);
+            updatePlays(data.plays);
+            updateOdds(data.odds);
+        } catch(err) {}
+    };
+
+    // Load odds
+    fetch('/api/gamecast/odds/' + gameId).then(r => r.json()).then(odds => {
+        updateOdds(odds);
+    }).catch(() => {});
+}
+
+function updateScoreboard(summary) {
+    if (!summary) return;
+    document.getElementById('homeTeam').textContent = summary.home_team || 'Home';
+    document.getElementById('awayTeam').textContent = summary.away_team || 'Away';
+    document.getElementById('homeScore').textContent = summary.home_score || '0';
+    document.getElementById('awayScore').textContent = summary.away_score || '0';
+}
+
+function updatePlays(plays) {
+    if (!plays) return;
+    const el = document.getElementById('plays');
+    el.innerHTML = plays.map(p =>
+        `<div class="play-item"><span class="time">${p.clock || ''}</span><span>${p.text || ''}</span></div>`
+    ).join('');
+}
+
+function updateOdds(odds) {
+    if (!odds) return;
+    const el = document.getElementById('oddsInfo');
+    let html = '';
+    if (odds.spread != null) html += `<p>Spread: <span class="font-bold">${odds.spread > 0 ? '+' : ''}${odds.spread}</span></p>`;
+    if (odds.over_under != null) html += `<p>O/U: <span class="font-bold">${odds.over_under}</span></p>`;
+    if (odds.home_ml != null) html += `<p>Home ML: ${odds.home_ml}</p>`;
+    if (odds.away_ml != null) html += `<p>Away ML: ${odds.away_ml}</p>`;
+    if (!html) html = '<span class="text-muted">No odds available</span>';
+    el.innerHTML = html;
+}
+
+loadGames();
+</script>
+{% endblock %}

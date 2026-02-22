@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block title %}Dashboard — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Dashboard</h1>
+
+<div class="card-grid mb-4">
+    <div class="stat-card">
+        <div class="stat-value">{{ teams }}</div>
+        <div class="stat-label">Teams</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ players }}</div>
+        <div class="stat-label">Players</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ game_logs }}</div>
+        <div class="stat-label">Game Logs</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ injured }}</div>
+        <div class="stat-label">Injured</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Data Sync</div>
+    <div class="btn-group mb-3">
+        <button class="btn btn-primary" onclick="runSync('/api/sync/data')">Full Sync</button>
+        <button class="btn btn-outline" onclick="runSync('/api/sync/injuries')">Injuries</button>
+        <button class="btn btn-outline" onclick="runSync('/api/sync/injury-history')">Injury History</button>
+        <button class="btn btn-outline" onclick="runSync('/api/sync/team-metrics')">Team Metrics</button>
+        <button class="btn btn-outline" onclick="runSync('/api/sync/player-impact')">Player Impact</button>
+        <button class="btn btn-outline" onclick="runSync('/api/sync/images')">Images</button>
+        <button class="btn btn-danger btn-sm" onclick="cancelSync()">Stop</button>
+    </div>
+    <div class="log-output" id="syncLog"></div>
+</div>
+
+<div class="card">
+    <div class="card-header">Pipeline</div>
+    <div class="btn-group mb-3">
+        <button class="btn btn-success" onclick="runSync('/api/full-pipeline')">Run Full Pipeline</button>
+        <button class="btn btn-danger btn-sm" onclick="cancelPipeline()">Stop</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentES = null;
+function runSync(url) {
+    if (currentES) currentES.close();
+    const log = document.getElementById('syncLog');
+    log.innerHTML = '';
+    currentES = startSSE(url, log);
+}
+function cancelSync() {
+    fetch('/api/sync/cancel', {method: 'POST'});
+    if (currentES) currentES.close();
+}
+function cancelPipeline() {
+    fetch('/api/pipeline/cancel', {method: 'POST'});
+    if (currentES) currentES.close();
+}
+</script>
+{% endblock %}

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NBA Predictor{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/dashboard">NBA Predictor</a>
+            <button class="hamburger" onclick="toggleNav()" aria-label="Menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+        <ul class="nav-links" id="navLinks">
+            <li><a href="/dashboard" {% if active == 'dashboard' %}class="active"{% endif %}>Dashboard</a></li>
+            <li><a href="/live" {% if active == 'live' %}class="active"{% endif %}>Live</a></li>
+            <li><a href="/gamecast" {% if active == 'gamecast' %}class="active"{% endif %}>Gamecast</a></li>
+            <li><a href="/players" {% if active == 'players' %}class="active"{% endif %}>Players</a></li>
+            <li><a href="/matchups" {% if active == 'matchups' %}class="active"{% endif %}>Matchups</a></li>
+            <li><a href="/schedule" {% if active == 'schedule' %}class="active"{% endif %}>Schedule</a></li>
+            <li><a href="/accuracy" {% if active == 'accuracy' %}class="active"{% endif %}>Accuracy</a></li>
+            <li><a href="/autotune" {% if active == 'autotune' %}class="active"{% endif %}>Autotune</a></li>
+            <li><a href="/admin" {% if active == 'admin' %}class="active"{% endif %}>Admin</a></li>
+        </ul>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        function toggleNav() {
+            document.getElementById('navLinks').classList.toggle('show');
+        }
+
+        // SSE helper
+        function startSSE(url, logEl, onResult) {
+            const es = new EventSource(url);
+            es.onmessage = function(e) {
+                if (e.data === '[DONE]') {
+                    es.close();
+                    if (logEl) logEl.innerHTML += '<div class="log-done">Done</div>';
+                    return;
+                }
+                if (e.data === '[CANCELLED]') {
+                    es.close();
+                    if (logEl) logEl.innerHTML += '<div class="log-warn">Cancelled</div>';
+                    return;
+                }
+                if (e.data.startsWith('[RESULTS_JSON]')) {
+                    const json = JSON.parse(e.data.substring(14));
+                    if (onResult) onResult(json);
+                    return;
+                }
+                if (logEl) {
+                    logEl.innerHTML += '<div class="log-line">' + e.data + '</div>';
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+            };
+            es.onerror = function() {
+                es.close();
+                if (logEl) logEl.innerHTML += '<div class="log-error">Connection lost</div>';
+            };
+            return es;
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

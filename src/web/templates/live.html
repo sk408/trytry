@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set active = "live" %}
+{% block title %}Live Games — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Live Games</h1>
+
+{% if games %}
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Status</th>
+                <th>Away</th>
+                <th>Score</th>
+                <th>Home</th>
+                <th>Clock</th>
+                <th>Period</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in games %}
+            <tr class="live-row {% if g.status == 'In Progress' %}live{% elif g.status == 'Final' %}final{% else %}scheduled{% endif %}">
+                <td>
+                    {% if g.status == 'In Progress' %}
+                        <span class="badge badge-success">LIVE</span>
+                    {% elif g.status == 'Final' %}
+                        <span class="badge badge-primary">FINAL</span>
+                    {% else %}
+                        <span class="badge badge-info">{{ g.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="font-bold">{{ g.get('away_team', '???') }}</td>
+                <td class="text-center font-mono">
+                    {{ g.get('away_score', '-') }} — {{ g.get('home_score', '-') }}
+                </td>
+                <td class="font-bold">{{ g.get('home_team', '???') }}</td>
+                <td class="font-mono text-muted">{{ g.get('clock', '') }}</td>
+                <td class="text-muted">{{ g.get('period', '') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="icon">🏀</div>
+    <p>No games currently. Check back during game time.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh every 30 seconds
+setTimeout(() => location.reload(), 30000);
+</script>
+{% endblock %}
