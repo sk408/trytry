@@ -29,6 +29,9 @@ from src.ui.widgets.image_utils import get_team_logo, get_player_photo
 
 logger = logging.getLogger(__name__)
 
+# Import ESPN→NBA abbreviation mapping from the data layer
+from src.data.gamecast import normalize_espn_abbr  # noqa: E402
+
 # ──────────────────────────────────────────────────────────────
 # In-memory caches
 # ──────────────────────────────────────────────────────────────
@@ -38,7 +41,6 @@ _espn_headshot_cache: Dict[tuple, QPixmap] = {}   # (url, size) → QPixmap
 _CACHE_TTL_LIVE = 12        # seconds — live games refresh often
 _CACHE_TTL_PRE = 55         # seconds — pre-game (odds may update)
 _CACHE_TTL_FINAL = 86400    # seconds — final games almost never change
-
 
 class _GameCache:
     """Thread-safe in-memory cache for parsed game data."""
@@ -356,8 +358,8 @@ class GamecastView(QWidget):
         for g in games:
             status = g.get("status", "")
             short_detail = g.get("short_detail", "") or status
-            away = g.get("away_team", "?")
-            home = g.get("home_team", "?")
+            away = normalize_espn_abbr(g.get("away_team", "?"))
+            home = normalize_espn_abbr(g.get("home_team", "?"))
             a_score = g.get("away_score", 0)
             h_score = g.get("home_score", 0)
             state = g.get("state", "")
@@ -681,18 +683,26 @@ class GamecastView(QWidget):
             return None
 
     def _resolve_team_id(self, abbr: str) -> Optional[int]:
-        """Lookup NBA team_id from abbreviation with per-session cache."""
-        if abbr in self._team_id_cache:
-            return self._team_id_cache[abbr]
+        """Lookup NBA team_id from abbreviation with per-session cache.
+
+        Automatically translates ESPN abbreviations (GS, SA, NY, etc.)
+        to NBA-standard abbreviations (GSW, SAS, NYK, etc.) before lookup.
+        """
+        nba_abbr = normalize_espn_abbr(abbr)
+        if nba_abbr in self._team_id_cache:
+            return self._team_id_cache[nba_abbr]
         try:
             from src.database import db
             row = db.fetch_one(
-                "SELECT team_id FROM teams WHERE abbreviation = ?", (abbr,)
+                "SELECT team_id FROM teams WHERE abbreviation = ?", (nba_abbr,)
             )
             tid = row["team_id"] if row else None
         except Exception:
             tid = None
-        self._team_id_cache[abbr] = tid
+        self._team_id_cache[nba_abbr] = tid
+        # Also cache the original ESPN abbreviation so repeat lookups are fast
+        if abbr != nba_abbr:
+            self._team_id_cache[abbr] = tid
         return tid
 
     def _flatten_plays(self, plays) -> list:

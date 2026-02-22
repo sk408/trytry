@@ -582,6 +582,7 @@ async def sse_gamecast_stream(game_id: str):
         from src.data.gamecast import (
             fetch_espn_game_summary, get_espn_odds,
             get_espn_plays, get_espn_boxscore,
+            normalize_espn_abbr,
         )
         while True:
             try:
@@ -598,8 +599,8 @@ async def sse_gamecast_stream(game_id: str):
                 home_c = next((c for c in competitors if c.get("homeAway") == "home"), {})
                 away_c = next((c for c in competitors if c.get("homeAway") == "away"), {})
                 summary = {
-                    "home_team": home_c.get("team", {}).get("abbreviation", "Home"),
-                    "away_team": away_c.get("team", {}).get("abbreviation", "Away"),
+                    "home_team": normalize_espn_abbr(home_c.get("team", {}).get("abbreviation", "Home")),
+                    "away_team": normalize_espn_abbr(away_c.get("team", {}).get("abbreviation", "Away")),
                     "home_score": int(home_c.get("score", 0) or 0),
                     "away_score": int(away_c.get("score", 0) or 0),
                     "status": comp.get("status", {}).get("type", {}).get("description", ""),

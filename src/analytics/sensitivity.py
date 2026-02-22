@@ -123,7 +123,7 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
             "loss": round(metrics["loss"], 4),
         })
         if callback and (i + 1) % 50 == 0:
-            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} → MAE={metrics['spread_mae']:.2f})")
+            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} -> MAE={metrics['spread_mae']:.2f})")
 
     return results
 
@@ -185,9 +185,9 @@ def format_ascii_chart(param_name: str, results: List[Dict],
     range_m = max_m - min_m if max_m != min_m else 1.0
 
     lines = []
-    lines.append(f"  {param_name} → {metric}")
+    lines.append(f"  {param_name} -> {metric}")
     lines.append(f"  Range: [{min_v:.3f}, {max_v:.3f}]  Best: {best_val:.4f} ({metric}={best_metric:.4f})")
-    lines.append(f"  {'─' * chart_width}")
+    lines.append(f"  {'-' * chart_width}")
 
     # Downsample to height rows
     step = max(1, len(results) // height)
@@ -198,12 +198,12 @@ def format_ascii_chart(param_name: str, results: List[Dict],
         m = r[metric]
         bar_len = int((m - min_m) / range_m * (chart_width - 2)) if range_m > 0 else 0
         bar_len = max(0, min(chart_width - 2, bar_len))
-        marker = "█" * bar_len
+        marker = "#" * bar_len
         is_best = abs(val - best_val) < (max_v - min_v) / len(results) * 2
-        prefix = "★" if is_best else " "
+        prefix = "*" if is_best else " "
         lines.append(f"{prefix}{val:>8.3f} |{marker}")
 
-    lines.append(f"  {'─' * chart_width}")
+    lines.append(f"  {'-' * chart_width}")
     lines.append(f"  {min_m:<10.3f}{' ' * (chart_width - 20)}{max_m:>10.3f}")
 
     # Current default value
@@ -706,7 +706,7 @@ def format_pairwise_ascii(result: Dict[str, Any], metric: str = "loss", size: in
             row += chars[idx]
         lines.append(f"  {va:>10.3f}|{row}|")
 
-    lines.append(f"  {'':>10} {'‾' * len(bv)}")
+    lines.append(f"  {'':>10} {'-' * len(bv)}")
     lines.append(f"  ^ {pa}")
     lines.append(f"  Legend: ' '=best  '@'=worst  (for {metric})")
 

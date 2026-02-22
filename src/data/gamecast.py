@@ -15,6 +15,22 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
 }
 
+# ESPN uses shorter/different abbreviations than the NBA standard stored in our DB
+ESPN_TO_NBA_ABBR: Dict[str, str] = {
+    "GS":   "GSW",
+    "SA":   "SAS",
+    "NY":   "NYK",
+    "NO":   "NOP",
+    "WSH":  "WAS",
+    "UTAH": "UTA",
+    "PHO":  "PHX",
+    "BK":   "BKN",
+}
+
+def normalize_espn_abbr(abbr: str) -> str:
+    """Translate an ESPN abbreviation to the NBA/DB standard."""
+    return ESPN_TO_NBA_ABBR.get(abbr.upper(), abbr)
+
 
 def fetch_espn_scoreboard() -> List[Dict[str, Any]]:
     """Fetch today's ESPN scoreboard."""
@@ -36,8 +52,8 @@ def fetch_espn_scoreboard() -> List[Dict[str, Any]]:
                 "period": event.get("status", {}).get("period", 0),
                 "clock": event.get("status", {}).get("displayClock", ""),
                 "state": event.get("status", {}).get("type", {}).get("state", ""),
-                "home_team": home.get("team", {}).get("abbreviation", ""),
-                "away_team": away.get("team", {}).get("abbreviation", ""),
+                "home_team": normalize_espn_abbr(home.get("team", {}).get("abbreviation", "")),
+                "away_team": normalize_espn_abbr(away.get("team", {}).get("abbreviation", "")),
                 "home_score": int(home.get("score", 0) or 0),
                 "away_score": int(away.get("score", 0) or 0),
             })
