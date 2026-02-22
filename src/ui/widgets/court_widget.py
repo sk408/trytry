@@ -96,16 +96,19 @@ class CourtWidget(QWidget):
         self._last_play_text = text
         self._last_play_team_id = team_id
 
-        # Convert ESPN coords (0-100 range, full court) to half-court feet
-        cx = coord.get("x", 50) if coord else 50
-        cy = coord.get("y", 50) if coord else 50
-        # ESPN: x=0-100 (sideline to sideline), y=0-100 (baseline to baseline)
-        shot_x = cx / 100.0 * _COURT_W          # horizontal → court width
-        # Map full-court y to half-court depth (mirror far-half plays)
-        if cy > 50:
-            cy = 100 - cy
-        shot_y = cy / 50.0 * _COURT_H           # 0-50 → 0-47 ft depth
-        shot_y = min(shot_y, _COURT_H - 1)
+        # ESPN coordinates are already in half-court feet:
+        #   x: 0-50 (sideline to sideline, 0=left, 50=right)
+        #   y: 0-47 (baseline to half-court, 0=baseline near hoop)
+        # Sentinel values (~-2.1e8) appear for jump balls / non-shot plays.
+        cx = coord.get("x", 25) if coord else 25
+        cy = coord.get("y", 20) if coord else 20
+
+        # Discard sentinel / garbage values (ESPN uses ~-2.1e8 for n/a)
+        if cx < -100 or cx > 200 or cy < -100 or cy > 200:
+            cx, cy = 25, 20  # default to mid-court
+
+        shot_x = max(0, min(cx, _COURT_W))      # clamp to court width
+        shot_y = max(0, min(cy, _COURT_H - 1))   # clamp to court depth
 
         if is_shooting or is_scoring:
             self._shots.append({

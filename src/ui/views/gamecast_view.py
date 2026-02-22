@@ -206,6 +206,7 @@ class GamecastView(QWidget):
         self._known_play_count = 0
         self._game_ids: list = []         # all game IDs in combo order
         self._team_id_cache: Dict[str, Optional[int]] = {}  # abbr -> team_id
+        self._pending_headshots: set = set()  # URLs already queued for bg fetch
 
         # Thread pool for preloading (limit concurrency to avoid ESPN rate-limit)
         self._pool = QThreadPool()
@@ -682,6 +683,48 @@ class GamecastView(QWidget):
         except Exception:
             return None
 
+    def _queue_headshot_fetch(self, url: str, size: int):
+        """Schedule a headshot download on the thread pool (non-blocking).
+
+        The image will appear on the next UI refresh once cached.
+        """
+        cache_key = (url, size)
+        if cache_key in _espn_headshot_cache or url in self._pending_headshots:
+            return
+        self._pending_headshots.add(url)
+
+        class _HeadshotRunnable(QRunnable):
+            def __init__(self, u, s):
+                super().__init__()
+                self.url = u
+                self.size = s
+                self.setAutoDelete(True)
+
+            def run(self):
+                try:
+                    import requests as _req
+                    resp = _req.get(self.url, timeout=5)
+                    if resp.status_code != 200:
+                        return
+                    # Store raw bytes — QPixmap creation must happen on main thread
+                    # but QImage is thread-safe for loading
+                    img = QImage()
+                    img.loadFromData(resp.content)
+                    if img.isNull():
+                        return
+                    pixmap = QPixmap.fromImage(img).scaled(
+                        self.size, self.size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    from src.ui.widgets.image_utils import _make_circle_pixmap
+                    pixmap = _make_circle_pixmap(pixmap)
+                    _espn_headshot_cache[(self.url, self.size)] = pixmap
+                except Exception:
+                    pass
+
+        self._pool.start(_HeadshotRunnable(url, size))
+
     def _resolve_team_id(self, abbr: str) -> Optional[int]:
         """Lookup NBA team_id from abbreviation with per-session cache.
 
@@ -820,18 +863,23 @@ class GamecastView(QWidget):
 
             table.setRowHeight(r, 30)
 
-            # Column 0: Player photo (28px)
+            # Column 0: Player photo (28px) — local cache only, never block UI
             photo_item = QTableWidgetItem()
             if player_id:
                 try:
                     pixmap = get_player_photo(int(player_id), 28, circle=True)
                     if not pixmap:
-                        # Fallback: use ESPN headshot URL
+                        # Check in-memory headshot cache (already downloaded)
                         headshot_url = athlete_info.get("headshot", {}).get("href", "")
-                        if headshot_url:
-                            pixmap = self._fetch_espn_headshot(headshot_url, 28)
+                        if headshot_url and (headshot_url, 28) in _espn_headshot_cache:
+                            pixmap = _espn_headshot_cache[(headshot_url, 28)]
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
+                    elif player_id:
+                        # Schedule background fetch for next refresh
+                        headshot_url = athlete_info.get("headshot", {}).get("href", "")
+                        if headshot_url and (headshot_url, 28) not in _espn_headshot_cache:
+                            self._queue_headshot_fetch(headshot_url, 28)
                 except Exception:
                     pass
             table.setItem(r, 0, photo_item)
