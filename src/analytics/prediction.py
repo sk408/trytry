@@ -287,15 +287,15 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     spread += reb_adj
     pred.rebound_adj = reb_adj
 
-    # Off/Def rating matchup — net rating difference
+    # Off/Def rating matchup — cross-team matchup (aligned with VectorizedGames)
     home_off = home_metrics.get("off_rating", _RATING_FALLBACK) or _RATING_FALLBACK
     away_off = away_metrics.get("off_rating", _RATING_FALLBACK) or _RATING_FALLBACK
     home_def = home_metrics.get("def_rating", _RATING_FALLBACK) or _RATING_FALLBACK
     away_def = away_metrics.get("def_rating", _RATING_FALLBACK) or _RATING_FALLBACK
 
-    home_net_rating = home_off - home_def
-    away_net_rating = away_off - away_def
-    rating_adj = (home_net_rating - away_net_rating) * w.rating_matchup_mult
+    home_matchup_edge = home_off - away_def   # home offense vs away defense
+    away_matchup_edge = away_off - home_def   # away offense vs home defense
+    rating_adj = (home_matchup_edge - away_matchup_edge) * w.rating_matchup_mult
     spread += rating_adj
     pred.rating_matchup_adj = rating_adj
 
@@ -698,10 +698,10 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     away_reb = g.away_proj.get("rebounds", 0)
     spread += (home_reb - away_reb) * w.rebound_diff_mult
 
-    # Rating matchup — net rating difference
-    home_net_r = g.home_off - g.home_def
-    away_net_r = g.away_off - g.away_def
-    spread += (home_net_r - away_net_r) * w.rating_matchup_mult
+    # Rating matchup — cross-team matchup (aligned with VectorizedGames)
+    home_me = g.home_off - g.away_def   # home offense vs away defense
+    away_me = g.away_off - g.home_def   # away offense vs home defense
+    spread += (home_me - away_me) * w.rating_matchup_mult
 
     # Four Factors — raw team diffs
     hff = g.home_ff

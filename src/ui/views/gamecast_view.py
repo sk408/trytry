@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QSplitter, QFrame, QTabWidget,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject, QRunnable, QThreadPool
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QImage, QPixmap
 
 from src.ui.widgets.scoreboard_widget import ScoreboardWidget
 from src.ui.widgets.court_widget import CourtWidget
@@ -30,8 +30,10 @@ from src.ui.widgets.image_utils import get_team_logo, get_player_photo
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────
-# In-memory cache for ESPN data
+# In-memory caches
 # ──────────────────────────────────────────────────────────────
+
+_espn_headshot_cache: Dict[tuple, QPixmap] = {}   # (url, size) → QPixmap
 
 _CACHE_TTL_LIVE = 12        # seconds — live games refresh often
 _CACHE_TTL_PRE = 55         # seconds — pre-game (odds may update)
@@ -317,9 +319,15 @@ class GamecastView(QWidget):
         table.setHorizontalHeaderLabels([
             "", "Player", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "+/-",
         ])
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Interactive resize so users can drag column widths
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
+        # Photo column fixed, Player column wider
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(0, 32)
+        table.setColumnWidth(1, 120)  # Player name
+        for col in range(2, 11):
+            table.setColumnWidth(col, 50)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
@@ -347,14 +355,36 @@ class GamecastView(QWidget):
 
         for g in games:
             status = g.get("status", "")
+            short_detail = g.get("short_detail", "") or status
             away = g.get("away_team", "?")
             home = g.get("home_team", "?")
             a_score = g.get("away_score", 0)
             h_score = g.get("home_score", 0)
+            state = g.get("state", "")
+
+            # Convert ET times to local for scheduled games
+            display_detail = short_detail
+            if state == "pre" and "ET" in short_detail:
+                try:
+                    from datetime import datetime
+                    from zoneinfo import ZoneInfo
+                    # Parse "7:00 PM ET" → convert to local
+                    time_str = short_detail.replace(" ET", "").strip()
+                    et_time = datetime.strptime(time_str, "%I:%M %p")
+                    et_tz = ZoneInfo("America/New_York")
+                    local_tz = ZoneInfo("America/Los_Angeles")
+                    now = datetime.now()
+                    et_dt = now.replace(hour=et_time.hour, minute=et_time.minute,
+                                        second=0, microsecond=0, tzinfo=et_tz)
+                    local_dt = et_dt.astimezone(local_tz)
+                    display_detail = local_dt.strftime("%I:%M %p PT").lstrip("0")
+                except Exception:
+                    display_detail = short_detail
+
             if a_score or h_score:
-                label = f"{away} {a_score}  @  {home} {h_score}  —  {status}"
+                label = f"{away} {a_score}  @  {home} {h_score}  —  {display_detail}"
             else:
-                label = f"{away}  @  {home}  —  {status}"
+                label = f"{away}  @  {home}  —  {display_detail}"
             espn_id = str(g.get("espn_id", ""))
             self.game_combo.addItem(label, espn_id)
             self._game_ids.append(espn_id)
@@ -623,6 +653,33 @@ class GamecastView(QWidget):
 
     # ──────────────────────── HELPERS ────────────────────────
 
+    @staticmethod
+    def _fetch_espn_headshot(url: str, size: int) -> Optional[QPixmap]:
+        """Download ESPN player headshot and return as circular QPixmap."""
+        cache_key = (url, size)
+        if cache_key in _espn_headshot_cache:
+            return _espn_headshot_cache[cache_key]
+        try:
+            import requests
+            resp = requests.get(url, timeout=5)
+            if resp.status_code != 200:
+                return None
+            img = QImage()
+            img.loadFromData(resp.content)
+            if img.isNull():
+                return None
+            pixmap = QPixmap.fromImage(img).scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            from src.ui.widgets.image_utils import _make_circle_pixmap
+            pixmap = _make_circle_pixmap(pixmap)
+            _espn_headshot_cache[cache_key] = pixmap
+            return pixmap
+        except Exception:
+            return None
+
     def _resolve_team_id(self, abbr: str) -> Optional[int]:
         """Lookup NBA team_id from abbreviation with per-session cache."""
         if abbr in self._team_id_cache:
@@ -758,6 +815,11 @@ class GamecastView(QWidget):
             if player_id:
                 try:
                     pixmap = get_player_photo(int(player_id), 28, circle=True)
+                    if not pixmap:
+                        # Fallback: use ESPN headshot URL
+                        headshot_url = athlete_info.get("headshot", {}).get("href", "")
+                        if headshot_url:
+                            pixmap = self._fetch_espn_headshot(headshot_url, 28)
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
                 except Exception:

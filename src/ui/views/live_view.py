@@ -1,6 +1,8 @@
 """Live Games tab — auto-refresh 30s, color-coded rows."""
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox,
@@ -13,6 +15,25 @@ logger = logging.getLogger(__name__)
 _GREEN = QColor(34, 197, 94)
 _PURPLE = QColor(168, 85, 247)
 _WHITE = QColor(226, 232, 240)
+
+_ET = ZoneInfo("America/New_York")
+_LOCAL = ZoneInfo("America/Los_Angeles")
+
+
+def _convert_et_to_local(text: str) -> str:
+    """Convert 'HH:MM PM ET' times in status strings to local time."""
+    if "ET" not in text:
+        return text
+    try:
+        time_str = text.replace(" ET", "").strip()
+        et_time = datetime.strptime(time_str, "%I:%M %p")
+        now = datetime.now()
+        et_dt = now.replace(hour=et_time.hour, minute=et_time.minute,
+                            second=0, microsecond=0, tzinfo=_ET)
+        local_dt = et_dt.astimezone(_LOCAL)
+        return local_dt.strftime("%I:%M %p PT").lstrip("0")
+    except Exception:
+        return text
 
 
 class LiveView(QWidget):
@@ -100,7 +121,7 @@ class LiveView(QWidget):
 
         self.table.setRowCount(len(games))
         for row, g in enumerate(games):
-            status = g.get("status", "")
+            status = _convert_et_to_local(g.get("status", ""))
             away = g.get("away_team", "")
             home = g.get("home_team", "")
             away_score = str(g.get("away_score", ""))

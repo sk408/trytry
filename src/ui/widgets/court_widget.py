@@ -99,10 +99,12 @@ class CourtWidget(QWidget):
         # Convert ESPN coords (0-100 range, full court) to half-court feet
         cx = coord.get("x", 50) if coord else 50
         cy = coord.get("y", 50) if coord else 50
-        # ESPN: x=0-100 (baseline to baseline), y=0-100 (sideline to sideline)
-        shot_x = cy / 100.0 * _COURT_W  # sideline maps to court width
-        shot_y = cx / 100.0 * _COURT_H  # baseline maps to depth
-        # The half-court is the first 47 feet — clamp
+        # ESPN: x=0-100 (sideline to sideline), y=0-100 (baseline to baseline)
+        shot_x = cx / 100.0 * _COURT_W          # horizontal → court width
+        # Map full-court y to half-court depth (mirror far-half plays)
+        if cy > 50:
+            cy = 100 - cy
+        shot_y = cy / 50.0 * _COURT_H           # 0-50 → 0-47 ft depth
         shot_y = min(shot_y, _COURT_H - 1)
 
         if is_shooting or is_scoring:
