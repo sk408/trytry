@@ -177,7 +177,7 @@ OPTIMIZER_RANGES = {
     "ml_disagree_damp": (0.0, 1.5),          # sweep best at 0.0; slight ceiling raise
     "spread_clamp": (3.0, 15.0),             # sweep best-loss at 6.9; tighten ceiling, lower floor
     "ff_efg_weight": (0.0, 5.0),             # pairwise found 3.21 optimal; raise ceiling from 3.0
-    "ff_tov_weight": (-0.5, 6.0),            # pairwise found 1.77–5.0 optimal; raise ceiling from 2.0
+    "ff_tov_weight": (-0.5, 8.0),            # pairwise found 1.77–5.0 optimal; widen for triplet search
     "ff_oreb_weight": (0.0, 3.0),            # sweep best-loss at 1.31; current range OK
     "ff_fta_weight": (0.0, 2.0),             # sweep best-loss at 0.57; current range OK
     "blocks_penalty": (-0.5, 2.0),           # sweep best-loss at 0.55; current range OK

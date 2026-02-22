@@ -48,7 +48,7 @@ EXTREME_RANGES = {
     "ml_disagree_damp":      (0.0,   3.0),
     "spread_clamp":          (3.0, 100.0),
     "ff_efg_weight":         (-2.0,  5.0),
-    "ff_tov_weight":         (-2.0,  5.0),
+    "ff_tov_weight":         (-2.0,  8.0),
     "ff_oreb_weight":        (-2.0,  5.0),
     "ff_fta_weight":         (-2.0,  5.0),
     "fatigue_b2b":           (-5.0,  15.0),
@@ -801,6 +801,247 @@ def run_pairwise_analysis(params: Optional[List[str]] = None,
 
 
 # ──────────────────────────────────────────────────────────────
+# 3-Parameter Triplet Interaction Sweep
+# ──────────────────────────────────────────────────────────────
+
+def sweep_triplet(param_a: str, param_b: str, param_c: str,
+                  steps: int = 15,
+                  vg: Optional[VectorizedGames] = None,
+                  games: Optional[List] = None,
+                  callback: Optional[Callable] = None) -> Dict[str, Any]:
+    """Sweep three parameters simultaneously on a 3D grid.
+
+    Evaluates all steps³ combinations. With steps=15 that's 3375 evals per triplet
+    (~3-4s with vectorized evaluation).
+
+    Returns:
+        Dict with best joint values, interaction strength vs independent optima,
+        and vs best pairwise optima.
+    """
+    if vg is None:
+        if games is None:
+            games = _load_games(callback)
+        vg = VectorizedGames(games)
+
+    lo_a, hi_a = EXTREME_RANGES.get(param_a, (-10, 10))
+    lo_b, hi_b = EXTREME_RANGES.get(param_b, (-10, 10))
+    lo_c, hi_c = EXTREME_RANGES.get(param_c, (-10, 10))
+    a_vals = np.linspace(lo_a, hi_a, steps)
+    b_vals = np.linspace(lo_b, hi_b, steps)
+    c_vals = np.linspace(lo_c, hi_c, steps)
+
+    base_w = get_weight_config()
+
+    best_loss = float("inf")
+    best_a = best_b = best_c = 0.0
+    best_mae = best_win = 0.0
+
+    for i, va in enumerate(a_vals):
+        for j, vb in enumerate(b_vals):
+            for k, vc in enumerate(c_vals):
+                w_dict = base_w.to_dict()
+                w_dict[param_a] = float(va)
+                w_dict[param_b] = float(vb)
+                w_dict[param_c] = float(vc)
+                m = vg.evaluate(WeightConfig.from_dict(w_dict))
+                if m["loss"] < best_loss:
+                    best_loss = m["loss"]
+                    best_a, best_b, best_c = float(va), float(vb), float(vc)
+                    best_mae = m["spread_mae"]
+                    best_win = m["winner_pct"]
+
+    # Find independent (single-param) optima applied together
+    indep_best = {}
+    for pname, vals in [(param_a, a_vals), (param_b, b_vals), (param_c, c_vals)]:
+        ind_best_loss = float("inf")
+        ind_best_val = base_w.to_dict()[pname]
+        for v in vals:
+            d = base_w.to_dict()
+            d[pname] = float(v)
+            l = vg.evaluate(WeightConfig.from_dict(d))["loss"]
+            if l < ind_best_loss:
+                ind_best_loss = l
+                ind_best_val = float(v)
+        indep_best[pname] = ind_best_val
+
+    # Loss with all 3 independent optima applied simultaneously
+    d_indep = base_w.to_dict()
+    for pname, val in indep_best.items():
+        d_indep[pname] = val
+    indep_loss = vg.evaluate(WeightConfig.from_dict(d_indep))["loss"]
+
+    # Find best pairwise among the 3 sub-pairs
+    pair_losses = {}
+    for p1, v1s, p2, v2s in [
+        (param_a, a_vals, param_b, b_vals),
+        (param_a, a_vals, param_c, c_vals),
+        (param_b, b_vals, param_c, c_vals),
+    ]:
+        pair_best = float("inf")
+        for v1 in v1s:
+            for v2 in v2s:
+                d = base_w.to_dict()
+                d[p1] = float(v1)
+                d[p2] = float(v2)
+                l = vg.evaluate(WeightConfig.from_dict(d))["loss"]
+                if l < pair_best:
+                    pair_best = l
+        pair_losses[f"{p1}+{p2}"] = pair_best
+
+    best_pair_loss = min(pair_losses.values())
+
+    interaction_vs_indep = best_loss - indep_loss  # negative = 3-way synergy vs independent
+    interaction_vs_pair = best_loss - best_pair_loss  # negative = 3-way adds value over best pair
+
+    return {
+        "param_a": param_a, "param_b": param_b, "param_c": param_c,
+        "best_a": best_a, "best_b": best_b, "best_c": best_c,
+        "best_loss": best_loss, "best_mae": best_mae, "best_win": best_win,
+        "indep_loss": indep_loss, "indep_best": indep_best,
+        "pair_losses": pair_losses, "best_pair_loss": best_pair_loss,
+        "interaction_vs_indep": interaction_vs_indep,
+        "interaction_vs_pair": interaction_vs_pair,
+    }
+
+
+def run_triplet_analysis(anchor: str = "ff_tov_weight",
+                         params: Optional[List[str]] = None,
+                         steps: int = 15,
+                         callback: Optional[Callable] = None) -> str:
+    """Run 3-parameter triplet analysis: anchor × every pair of other active params.
+
+    Outputs a single combined CSV (triplet_summary.csv) and text summary instead
+    of individual files per triplet, to keep output manageable.
+
+    Args:
+        anchor: The anchored parameter tested in every triplet.
+        params: List of params to pair with anchor. Defaults to all active params.
+        steps: Grid resolution per axis (total evals = steps³ per triplet).
+        callback: Progress callback.
+
+    Returns:
+        Output directory path.
+    """
+    if params is None:
+        params = sorted(p for p in EXTREME_RANGES.keys()
+                        if p not in VECTORIZED_EXCLUDED and p != anchor)
+
+    games = _load_games(callback)
+    vg = VectorizedGames(games)
+
+    # Filter to active params (those that influence loss meaningfully)
+    base_w = get_weight_config()
+    active_params = []
+    for p in params:
+        lo, hi = EXTREME_RANGES.get(p, (-10, 10))
+        lo_w = base_w.to_dict()
+        hi_w = base_w.to_dict()
+        lo_w[p] = lo
+        hi_w[p] = hi
+        lo_loss = vg.evaluate(WeightConfig.from_dict(lo_w))["loss"]
+        hi_loss = vg.evaluate(WeightConfig.from_dict(hi_w))["loss"]
+        if abs(lo_loss - hi_loss) > 0.03:
+            active_params.append(p)
+
+    n_triplets = len(active_params) * (len(active_params) - 1) // 2
+    evals_per = steps ** 3
+    total_evals = n_triplets * evals_per
+
+    if callback:
+        callback(f"Triplet analysis: {anchor} × {len(active_params)} active params")
+        callback(f"  {n_triplets} triplets, {steps}³={evals_per} evals each, ~{total_evals:,} total")
+
+    os.makedirs(_OUTPUT_DIR, exist_ok=True)
+
+    results = []
+    triplet_idx = 0
+
+    for i, pb in enumerate(active_params):
+        for j, pc in enumerate(active_params):
+            if j <= i:
+                continue
+            triplet_idx += 1
+            if callback:
+                callback(f"  [{triplet_idx}/{n_triplets}] {anchor} × {pb} × {pc} ...")
+
+            r = sweep_triplet(anchor, pb, pc, steps=steps, vg=vg)
+            results.append(r)
+
+    # Sort by best joint loss
+    results.sort(key=lambda r: r["best_loss"])
+
+    # Write combined CSV
+    csv_path = os.path.join(_OUTPUT_DIR, f"triplet_{anchor}_summary.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "rank", "param_b", "param_c",
+            f"best_{anchor}", "best_param_b", "best_param_c",
+            "joint_loss", "joint_mae", "joint_win_pct",
+            "indep_loss", "best_pair_loss",
+            "interaction_vs_indep", "interaction_vs_pair", "label",
+        ])
+        for rank, r in enumerate(results, 1):
+            inter = r["interaction_vs_pair"]
+            label = "SYNERGY" if inter < -0.005 else ("CONFLICT" if inter > 0.005 else "NEUTRAL")
+            writer.writerow([
+                rank, r["param_b"], r["param_c"],
+                f"{r['best_a']:.6f}", f"{r['best_b']:.6f}", f"{r['best_c']:.6f}",
+                f"{r['best_loss']:.4f}", f"{r['best_mae']:.4f}", f"{r['best_win']:.2f}",
+                f"{r['indep_loss']:.4f}", f"{r['best_pair_loss']:.4f}",
+                f"{r['interaction_vs_indep']:.4f}", f"{r['interaction_vs_pair']:.4f}",
+                label,
+            ])
+
+    # Write text summary
+    txt_path = os.path.join(_OUTPUT_DIR, f"triplet_{anchor}_summary.txt")
+    lines = [
+        "=" * 80,
+        f"TRIPLET INTERACTION SUMMARY — anchor: {anchor}",
+        f"  Steps per axis: {steps} ({steps}³ = {evals_per} evals/triplet)",
+        f"  Triplets tested: {n_triplets}",
+        f"  Current {anchor} = {getattr(base_w, anchor):.4f}",
+        "=" * 80, "",
+    ]
+
+    base_loss = vg.evaluate(base_w)["loss"]
+    lines.append(f"  Baseline loss (current weights): {base_loss:.4f}\n")
+
+    for rank, r in enumerate(results, 1):
+        inter_i = r["interaction_vs_indep"]
+        inter_p = r["interaction_vs_pair"]
+        label_i = "SYNERGY" if inter_i < -0.005 else ("CONFLICT" if inter_i > 0.005 else "NEUTRAL")
+        label_p = "3WAY-SYNERGY" if inter_p < -0.005 else ("NO-EXTRA" if inter_p > -0.005 else "NEUTRAL")
+        improvement = base_loss - r["best_loss"]
+
+        lines.append(f"  #{rank}: {anchor} × {r['param_b']} × {r['param_c']}")
+        lines.append(f"    Best values: {anchor}={r['best_a']:.4f}, "
+                     f"{r['param_b']}={r['best_b']:.4f}, {r['param_c']}={r['best_c']:.4f}")
+        lines.append(f"    Joint loss={r['best_loss']:.4f}  ({improvement:+.4f} vs baseline)")
+        lines.append(f"    MAE={r['best_mae']:.2f}  Win%={r['best_win']:.1f}%")
+        lines.append(f"    vs indep: {inter_i:+.4f} ({label_i})  "
+                     f"vs best pair: {inter_p:+.4f} ({label_p})")
+        lines.append(f"    Sub-pair losses: {', '.join(f'{k}={v:.4f}' for k, v in r['pair_losses'].items())}")
+        lines.append("")
+
+    summary_text = "\n".join(lines)
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(summary_text)
+
+    if callback:
+        callback(f"\nTriplet analysis complete:")
+        callback(f"  CSV: {csv_path}")
+        callback(f"  Summary: {txt_path}")
+        callback(f"\n  Top 5 triplets by joint loss:")
+        for r in results[:5]:
+            callback(f"    {anchor}={r['best_a']:.3f} × {r['param_b']}={r['best_b']:.3f} "
+                     f"× {r['param_c']}={r['best_c']:.3f} -> loss={r['best_loss']:.4f} "
+                     f"Win%={r['best_win']:.1f}%")
+
+    return _OUTPUT_DIR
+
+
+# ──────────────────────────────────────────────────────────────
 # CLI entry point
 # ──────────────────────────────────────────────────────────────
 
@@ -817,6 +1058,7 @@ def main():
   Coordinate descent:       --descent --steps 100
   Pairwise interactions:    --pairwise --steps 40
   Single pair:              --pairwise --param rating_matchup_mult --param2 def_factor_dampening
+  Triplet analysis:         --triplet --anchor ff_tov_weight --steps 15
 """)
     parser.add_argument("--param", type=str, help="Parameter name to sweep")
     parser.add_argument("--param2", type=str, help="Second parameter for pairwise sweep")
@@ -838,6 +1080,10 @@ def main():
                         help="Max rounds for coordinate descent (default: 10)")
     parser.add_argument("--pairwise", action="store_true",
                         help="Run pairwise interaction analysis on active parameters")
+    parser.add_argument("--triplet", action="store_true",
+                        help="Run 3-parameter triplet interaction analysis")
+    parser.add_argument("--anchor", type=str, default="ff_tov_weight",
+                        help="Anchor parameter for triplet analysis (default: ff_tov_weight)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -909,6 +1155,18 @@ def main():
             save_weight_config(new_w)
             invalidate_weight_cache()
             print(f"\n  Applied! Snapshot: {snap_path}")
+        return
+
+    # --triplet: 3-parameter interaction analysis
+    if args.triplet:
+        t0 = time.time()
+        run_triplet_analysis(
+            anchor=args.anchor,
+            steps=min(args.steps, 20),  # cap at 20 (8000 evals/triplet)
+            callback=cb,
+        )
+        elapsed = time.time() - t0
+        print(f"\n  Completed in {elapsed:.0f}s")
         return
 
     # --pairwise: interaction analysis
