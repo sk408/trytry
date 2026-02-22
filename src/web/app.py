@@ -429,9 +429,32 @@ async def matchups_page(request: Request,
         try:
             from datetime import datetime
             from src.analytics.prediction import predict_matchup
+            import math
             today = datetime.now().strftime("%Y-%m-%d")
             pred = predict_matchup(home_team, away_team, game_date=today)
             prediction = pred.__dict__
+            
+            # Alias keys for the web template
+            prediction["spread"] = pred.predicted_spread
+            prediction["total"] = pred.predicted_total
+            prediction["home_score"] = pred.predicted_home_score
+            prediction["away_score"] = pred.predicted_away_score
+            
+            # Calculate win prob
+            prediction["home_win_prob"] = 100.0 / (1.0 + math.pow(10, -pred.predicted_spread / 15.0))
+            
+            # Populate breakdown
+            prediction["breakdown"] = {
+                "Home Court": pred.home_court_advantage,
+                "Fatigue Adj": pred.fatigue_adj,
+                "Turnover Adj": pred.turnover_adj,
+                "Rebound Adj": pred.rebound_adj,
+                "Four Factors": pred.four_factors_adj,
+                "Clutch Adj": pred.clutch_adj,
+                "ML Blend": pred.ml_blend_adj,
+            }
+            # Remove zero-value breakdown items
+            prediction["breakdown"] = {k: v for k, v in prediction["breakdown"].items() if v != 0}
         except Exception as e:
             prediction = {"error": str(e)}
 
