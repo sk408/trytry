@@ -11,32 +11,73 @@
 </div>
 
 <div id="gameDetail" class="hidden">
+    <!-- Scoreboard with quarter scores -->
     <div class="scoreboard mb-4" id="scoreboard">
         <div class="team">
+            <img id="awayLogo" src="" alt="" style="width:48px;height:48px;display:none;">
             <div class="name" id="awayTeam">Away</div>
             <div class="score" id="awayScore">0</div>
         </div>
-        <div class="vs">VS</div>
+        <div style="text-align:center;">
+            <div id="statusText" class="text-muted text-sm" style="margin-bottom:4px;"></div>
+            <div id="quarterScores" style="font-size:0.75rem;color:var(--text-muted);"></div>
+        </div>
         <div class="team">
+            <img id="homeLogo" src="" alt="" style="width:48px;height:48px;display:none;">
             <div class="name" id="homeTeam">Home</div>
             <div class="score" id="homeScore">0</div>
         </div>
     </div>
 
+    <!-- Win Probability Bar -->
+    <div class="card mb-4" id="winProbCard" style="padding:0.75rem 1.25rem;">
+        <div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:4px;">
+            <span id="wpAway" class="font-bold">50%</span>
+            <span class="text-muted">WIN PROBABILITY</span>
+            <span id="wpHome" class="font-bold">50%</span>
+        </div>
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--bg-input);">
+            <div id="wpBarAway" style="width:50%;background:var(--danger);transition:width 0.5s;"></div>
+            <div id="wpBarHome" style="width:50%;background:var(--accent);transition:width 0.5s;"></div>
+        </div>
+    </div>
+
+    <!-- Prediction + Odds -->
     <div class="grid-2">
         <div class="card">
-            <div class="card-header">Prediction</div>
+            <div class="card-header">Model Prediction</div>
             <div id="predictionInfo">
-                <p>Spread: <span id="predSpread" class="font-bold text-accent">-</span></p>
-                <p>Total: <span id="predTotal" class="font-bold">-</span></p>
+                <div class="text-muted text-sm">Waiting for data...</div>
             </div>
         </div>
         <div class="card">
-            <div class="card-header">Odds</div>
+            <div class="card-header">Vegas Odds</div>
             <div id="oddsInfo">Loading...</div>
         </div>
     </div>
 
+    <!-- Box Score -->
+    <div class="card mt-4">
+        <div class="card-header">Box Score</div>
+        <div class="tabs" id="boxTabs">
+            <div class="tab active" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></div>
+            <div class="tab" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></div>
+        </div>
+        <div id="boxAway" class="tab-content active">
+            <div class="table-wrap"><table id="boxAwayTable">
+                <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                <tbody></tbody>
+            </table></div>
+        </div>
+        <div id="boxHome" class="tab-content">
+            <div class="table-wrap"><table id="boxHomeTable">
+                <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                <tbody></tbody>
+            </table></div>
+        </div>
+    </div>
+
+    <!-- Play-by-Play -->
     <div class="card mt-4">
         <div class="card-header">Play-by-Play</div>
         <div class="play-by-play" id="plays"></div>
@@ -47,6 +88,7 @@
 {% block scripts %}
 <script>
 let gameES = null;
+let currentSummary = null;
 
 async function loadGames() {
     try {
@@ -62,7 +104,6 @@ async function loadGames() {
             const label = (g.away_team || '???') + ' @ ' + (g.home_team || '???');
             return `<button class="btn btn-outline btn-sm" onclick="selectGame('${id}')">${label}</button>`;
         }).join('');
-
         {% if game_id %}
         selectGame('{{ game_id }}');
         {% endif %}
@@ -74,49 +115,187 @@ async function loadGames() {
 function selectGame(gameId) {
     document.getElementById('gameDetail').classList.remove('hidden');
     if (gameES) gameES.close();
-
     gameES = new EventSource('/api/gamecast/stream/' + gameId);
     gameES.onmessage = function(e) {
         try {
             const data = JSON.parse(e.data);
+            if (data.error) return;
+            currentSummary = data.summary;
             updateScoreboard(data.summary);
-            updatePlays(data.plays);
+            updateWinProb(data.prediction, data.summary);
+            updatePrediction(data.prediction, data.summary);
             updateOdds(data.odds);
-        } catch(err) {}
+            updateBoxScore(data.boxscore, data.summary);
+            updatePlays(data.plays, data.summary);
+        } catch(err) { console.error(err); }
     };
-
-    // Load odds
-    fetch('/api/gamecast/odds/' + gameId).then(r => r.json()).then(odds => {
-        updateOdds(odds);
-    }).catch(() => {});
 }
 
-function updateScoreboard(summary) {
-    if (!summary) return;
-    document.getElementById('homeTeam').textContent = summary.home_team || 'Home';
-    document.getElementById('awayTeam').textContent = summary.away_team || 'Away';
-    document.getElementById('homeScore').textContent = summary.home_score || '0';
-    document.getElementById('awayScore').textContent = summary.away_score || '0';
+function updateScoreboard(s) {
+    if (!s) return;
+    document.getElementById('homeTeam').textContent = s.home_team || 'Home';
+    document.getElementById('awayTeam').textContent = s.away_team || 'Away';
+    document.getElementById('homeScore').textContent = s.home_score || '0';
+    document.getElementById('awayScore').textContent = s.away_score || '0';
+    document.getElementById('boxAwayLabel').textContent = s.away_team;
+    document.getElementById('boxHomeLabel').textContent = s.home_team;
+
+    // Status
+    let st = s.status || '';
+    if (s.status_state === 'in') st = 'Q' + s.period + ' ' + s.clock;
+    document.getElementById('statusText').textContent = st;
+
+    // Logos
+    if (s.home_team_id) {
+        const hl = document.getElementById('homeLogo');
+        hl.src = '/images/logos/' + s.home_team_id + '.png';
+        hl.style.display = 'block';
+        hl.onerror = function() { this.style.display='none'; };
+    }
+    if (s.away_team_id) {
+        const al = document.getElementById('awayLogo');
+        al.src = '/images/logos/' + s.away_team_id + '.png';
+        al.style.display = 'block';
+        al.onerror = function() { this.style.display='none'; };
+    }
+
+    // Quarter scores table
+    const hq = s.home_quarters || [];
+    const aq = s.away_quarters || [];
+    if (hq.length > 0) {
+        let headers = hq.map(function(_, i) { return i < 4 ? 'Q' + (i+1) : 'OT' + (i-3); }).join('</th><th>');
+        let html = '<table style="width:auto;margin:0 auto;font-size:0.7rem;">' +
+            '<tr><th></th><th>' + headers + '</th><th>T</th></tr>' +
+            '<tr><td class="font-bold" style="padding:2px 8px;">' + s.away_team + '</td>' +
+            aq.map(function(q) { return '<td style="padding:2px 6px;text-align:center;">' + q + '</td>'; }).join('') +
+            '<td class="font-bold" style="padding:2px 8px;">' + s.away_score + '</td></tr>' +
+            '<tr><td class="font-bold" style="padding:2px 8px;">' + s.home_team + '</td>' +
+            hq.map(function(q) { return '<td style="padding:2px 6px;text-align:center;">' + q + '</td>'; }).join('') +
+            '<td class="font-bold" style="padding:2px 8px;">' + s.home_score + '</td></tr>' +
+            '</table>';
+        document.getElementById('quarterScores').innerHTML = html;
+    }
 }
 
-function updatePlays(plays) {
-    if (!plays) return;
-    const el = document.getElementById('plays');
-    el.innerHTML = plays.map(p =>
-        `<div class="play-item"><span class="time">${p.clock || ''}</span><span>${p.text || ''}</span></div>`
-    ).join('');
+function updateWinProb(pred, s) {
+    let homeWP = 50;
+    if (pred && pred.home_win_prob != null) homeWP = pred.home_win_prob;
+    const awayWP = Math.round(100 - homeWP);
+    document.getElementById('wpHome').textContent = (s ? s.home_team + ' ' : '') + Math.round(homeWP) + '%';
+    document.getElementById('wpAway').textContent = (s ? s.away_team + ' ' : '') + awayWP + '%';
+    document.getElementById('wpBarHome').style.width = homeWP + '%';
+    document.getElementById('wpBarAway').style.width = awayWP + '%';
+}
+
+function updatePrediction(pred, s) {
+    const el = document.getElementById('predictionInfo');
+    if (!pred) {
+        el.innerHTML = '<div class="text-muted text-sm">No prediction available</div>';
+        return;
+    }
+    const sp = pred.spread || 0;
+    const spSign = sp > 0 ? '+' : '';
+    el.innerHTML =
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">' +
+        '<div class="stat-card" style="padding:0.75rem;">' +
+            '<div class="stat-value" style="font-size:1.5rem;color:var(--success);">' + spSign + sp.toFixed(1) + '</div>' +
+            '<div class="stat-label">Spread</div>' +
+        '</div>' +
+        '<div class="stat-card" style="padding:0.75rem;">' +
+            '<div class="stat-value" style="font-size:1.5rem;">' + (pred.total || 0).toFixed(1) + '</div>' +
+            '<div class="stat-label">Total</div>' +
+        '</div>' +
+        '<div class="stat-card" style="padding:0.75rem;">' +
+            '<div class="stat-value" style="font-size:1.25rem;">' + (pred.away_score || 0).toFixed(1) + '</div>' +
+            '<div class="stat-label">' + (s ? s.away_team : 'Away') + '</div>' +
+        '</div>' +
+        '<div class="stat-card" style="padding:0.75rem;">' +
+            '<div class="stat-value" style="font-size:1.25rem;">' + (pred.home_score || 0).toFixed(1) + '</div>' +
+            '<div class="stat-label">' + (s ? s.home_team : 'Home') + '</div>' +
+        '</div>' +
+        '</div>';
 }
 
 function updateOdds(odds) {
     if (!odds) return;
     const el = document.getElementById('oddsInfo');
     let html = '';
-    if (odds.spread != null) html += `<p>Spread: <span class="font-bold">${odds.spread > 0 ? '+' : ''}${odds.spread}</span></p>`;
-    if (odds.over_under != null) html += `<p>O/U: <span class="font-bold">${odds.over_under}</span></p>`;
-    if (odds.home_ml != null) html += `<p>Home ML: ${odds.home_ml}</p>`;
-    if (odds.away_ml != null) html += `<p>Away ML: ${odds.away_ml}</p>`;
+    if (odds.spread != null) html += '<p>Spread: <span class="font-bold">' + odds.spread + '</span></p>';
+    if (odds.over_under != null) html += '<p>O/U: <span class="font-bold">' + odds.over_under + '</span></p>';
+    if (odds.home_moneyline != null) html += '<p>Home ML: <span class="font-mono">' + odds.home_moneyline + '</span></p>';
+    if (odds.away_moneyline != null) html += '<p>Away ML: <span class="font-mono">' + odds.away_moneyline + '</span></p>';
+    if (odds.provider) html += '<p class="text-xs text-muted">' + odds.provider + '</p>';
     if (!html) html = '<span class="text-muted">No odds available</span>';
     el.innerHTML = html;
+}
+
+function switchBoxTab(side) {
+    document.querySelectorAll('#boxTabs .tab').forEach(function(t) { t.classList.remove('active'); });
+    document.getElementById('boxAway').classList.remove('active');
+    document.getElementById('boxHome').classList.remove('active');
+    if (side === 'home') {
+        document.querySelectorAll('#boxTabs .tab')[1].classList.add('active');
+        document.getElementById('boxHome').classList.add('active');
+    } else {
+        document.querySelectorAll('#boxTabs .tab')[0].classList.add('active');
+        document.getElementById('boxAway').classList.add('active');
+    }
+}
+
+function updateBoxScore(box, s) {
+    if (!box) return;
+    fillBoxTable('boxAwayTable', box.away || []);
+    fillBoxTable('boxHomeTable', box.home || []);
+}
+
+function fillBoxTable(tableId, players) {
+    const tbody = document.querySelector('#' + tableId + ' tbody');
+    if (!tbody) return;
+    tbody.innerHTML = players.map(function(p) {
+        const photo = p.headshot ?
+            '<img src="' + p.headshot + '" style="width:24px;height:24px;border-radius:50%;object-fit:cover;" onerror="this.style.display=\'none\'">' :
+            '';
+        return '<tr>' +
+            '<td style="width:32px;padding:4px;">' + photo + '</td>' +
+            '<td class="font-bold">' + (p.name || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.min || '') + '</td>' +
+            '<td class="font-mono text-center font-bold">' + (p.pts || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.reb || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.ast || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.stl || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.blk || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.fg || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.threept || '') + '</td>' +
+            '<td class="font-mono text-center">' + (p.plusminus || '') + '</td>' +
+        '</tr>';
+    }).join('');
+}
+
+function updatePlays(plays, s) {
+    if (!plays) return;
+    const el = document.getElementById('plays');
+    const homeTid = s ? s.home_team_id : null;
+    // Show newest first
+    const reversed = plays.slice().reverse();
+    el.innerHTML = reversed.map(function(p) {
+        let borderColor = 'transparent';
+        let bg = '';
+        let logoHtml = '';
+        if (p.team_id) {
+            logoHtml = '<img src="/images/logos/' + p.team_id + '.png" style="width:18px;height:18px;border-radius:50%;" onerror="this.style.display=\'none\'">';
+            borderColor = p.team_id === homeTid ? 'var(--accent)' : 'var(--danger)';
+        }
+        if (p.scoring) bg = 'background:rgba(34,197,94,0.06);';
+        const perLabel = p.period <= 4 ? 'Q' + p.period : 'OT' + (p.period - 4);
+        const scoreText = (p.away_score || p.home_score) ?
+            '<span class="font-mono text-xs" style="min-width:40px;text-align:right;">' + p.away_score + '-' + p.home_score + '</span>' : '';
+        return '<div class="play-item" style="border-left:3px solid ' + borderColor + ';' + bg + 'align-items:center;">' +
+            '<span style="min-width:18px;">' + logoHtml + '</span>' +
+            '<span class="time" style="min-width:60px;">' + perLabel + ' ' + (p.clock || '') + '</span>' +
+            '<span style="flex:1;' + (p.scoring ? 'font-weight:600;color:var(--success);' : '') + '">' + (p.text || '') + '</span>' +
+            scoreText +
+        '</div>';
+    }).join('');
 }
 
 loadGames();

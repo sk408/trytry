@@ -5,6 +5,13 @@
 {% block content %}
 <h1 class="section-header">Players</h1>
 
+<!-- Search Filter -->
+<div class="card mb-4" style="padding:0.75rem 1.25rem;">
+    <input type="text" id="playerSearch" placeholder="Search players by name or team..."
+           style="width:100%;padding:0.5rem 0.75rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;"
+           oninput="filterPlayers(this.value)">
+</div>
+
 <!-- Injured Players -->
 {% if injured %}
 <div class="card mb-4">
@@ -132,4 +139,17 @@
         </table>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterPlayers(query) {
+    const q = query.toLowerCase();
+    // Filter all tables (injured + all players)
+    document.querySelectorAll('table tbody tr').forEach(function(row) {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+    });
+}
+</script>
 {% endblock %}

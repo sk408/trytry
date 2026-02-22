@@ -51,6 +51,13 @@
             <div class="text-xs text-muted mt-2">
                 Win Prob: {{ '%.0f'|format(prediction.get('home_win_prob', 50)) }}%
             </div>
+            {% if prediction.get('confidence') %}
+            <div class="text-xs mt-1">
+                <span class="badge {% if prediction.confidence > 0.7 %}badge-success{% elif prediction.confidence > 0.5 %}badge-warning{% else %}badge-info{% endif %}">
+                    Confidence: {{ '%.0f'|format(prediction.confidence * 100) }}%
+                </span>
+            </div>
+            {% endif %}
         </div>
         <div class="team-side">
             <div class="team-name">{{ prediction.get('home_team', 'HOME') }}</div>

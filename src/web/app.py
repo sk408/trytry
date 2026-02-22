@@ -26,9 +26,16 @@ app = FastAPI(title="NBA Game Prediction System")
 # Static files & templates
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 _template_dir = os.path.join(os.path.dirname(__file__), "templates")
+_data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+_logos_dir = os.path.join(_data_dir, "cache", "team_logos")
+_photos_dir = os.path.join(_data_dir, "cache", "player_photos")
 os.makedirs(_static_dir, exist_ok=True)
 os.makedirs(_template_dir, exist_ok=True)
+os.makedirs(_logos_dir, exist_ok=True)
+os.makedirs(_photos_dir, exist_ok=True)
 
+app.mount("/images/logos", StaticFiles(directory=_logos_dir), name="logos")
+app.mount("/images/players", StaticFiles(directory=_photos_dir), name="player_photos")
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 templates = Jinja2Templates(directory=_template_dir)
 
@@ -137,11 +144,30 @@ async def dashboard_player_impact():
 
 @app.get("/live", response_class=HTMLResponse)
 async def live_page(request: Request):
+    # Merge NBA live scores with ESPN scoreboard for ESPN game IDs
     from src.data.live_scores import fetch_live_scores
+    from src.data.gamecast import fetch_espn_scoreboard, normalize_espn_abbr
     try:
         games = fetch_live_scores()
     except Exception:
         games = []
+
+    # Build ESPN ID lookup by team abbreviation pair
+    espn_lookup = {}
+    try:
+        espn_games = fetch_espn_scoreboard()
+        for eg in espn_games:
+            key = (eg.get("away_team", ""), eg.get("home_team", ""))
+            espn_lookup[key] = eg.get("espn_id", "")
+    except Exception:
+        pass
+
+    # Enrich live games with ESPN IDs
+    for g in games:
+        away = g.get("away_team", "")
+        home = g.get("home_team", "")
+        g["espn_id"] = espn_lookup.get((away, home), "")
+
     return templates.TemplateResponse("live.html", {
         "request": request,
         "games": games,
@@ -584,6 +610,22 @@ async def sse_gamecast_stream(game_id: str):
             get_espn_plays, get_espn_boxscore,
             normalize_espn_abbr,
         )
+        # Resolve NBA team IDs once
+        _team_cache = {}
+
+        def _resolve_tid(abbr):
+            nba = normalize_espn_abbr(abbr)
+            if nba in _team_cache:
+                return _team_cache[nba]
+            try:
+                row = db.fetch_one(
+                    "SELECT team_id FROM teams WHERE abbreviation = ?", (nba,))
+                tid = row["team_id"] if row else None
+            except Exception:
+                tid = None
+            _team_cache[nba] = tid
+            return tid
+
         while True:
             try:
                 raw_summary = fetch_espn_game_summary(game_id)
@@ -591,42 +633,171 @@ async def sse_gamecast_stream(game_id: str):
                 plays = get_espn_plays(game_id)
                 boxscore = get_espn_boxscore(game_id)
 
-                # Parse summary into a simple dict for the frontend
+                # Parse header
                 header = raw_summary.get("header", {})
                 competitions = header.get("competitions", [{}])
                 comp = competitions[0] if competitions else {}
                 competitors = comp.get("competitors", [])
                 home_c = next((c for c in competitors if c.get("homeAway") == "home"), {})
                 away_c = next((c for c in competitors if c.get("homeAway") == "away"), {})
+
+                home_abbr = normalize_espn_abbr(home_c.get("team", {}).get("abbreviation", "HOME"))
+                away_abbr = normalize_espn_abbr(away_c.get("team", {}).get("abbreviation", "AWAY"))
+                home_score = int(home_c.get("score", 0) or 0)
+                away_score = int(away_c.get("score", 0) or 0)
+                home_tid = _resolve_tid(home_abbr)
+                away_tid = _resolve_tid(away_abbr)
+                home_espn_id = str(home_c.get("team", {}).get("id", ""))
+                away_espn_id = str(away_c.get("team", {}).get("id", ""))
+
+                status_detail = comp.get("status", {})
+                status_text = status_detail.get("type", {}).get("description", "")
+                status_state = status_detail.get("type", {}).get("state", "")
+                period = int(status_detail.get("period", 0) or 0)
+                clock_str = status_detail.get("displayClock", "0:00")
+
+                # Quarter scores
+                home_quarters = []
+                away_quarters = []
+                for ls_comp in competitors:
+                    linescores = ls_comp.get("linescores", [])
+                    quarters = [int(q.get("displayValue", 0) or 0) for q in linescores]
+                    if ls_comp.get("homeAway") == "home":
+                        home_quarters = quarters
+                    else:
+                        away_quarters = quarters
+
                 summary = {
-                    "home_team": normalize_espn_abbr(home_c.get("team", {}).get("abbreviation", "Home")),
-                    "away_team": normalize_espn_abbr(away_c.get("team", {}).get("abbreviation", "Away")),
-                    "home_score": int(home_c.get("score", 0) or 0),
-                    "away_score": int(away_c.get("score", 0) or 0),
-                    "status": comp.get("status", {}).get("type", {}).get("description", ""),
+                    "home_team": home_abbr,
+                    "away_team": away_abbr,
+                    "home_score": home_score,
+                    "away_score": away_score,
+                    "home_team_id": home_tid,
+                    "away_team_id": away_tid,
+                    "home_espn_id": home_espn_id,
+                    "away_espn_id": away_espn_id,
+                    "status": status_text,
+                    "status_state": status_state,
+                    "clock": clock_str,
+                    "period": period,
+                    "home_quarters": home_quarters,
+                    "away_quarters": away_quarters,
                 }
 
-                # Parse plays into simple list
+                # Model prediction
+                prediction = None
+                if home_tid and away_tid:
+                    try:
+                        from src.analytics.live_prediction import live_predict
+                        import math
+                        q = 0
+                        mins_el = 0.0
+                        if status_state == "in":
+                            q = min(max(0, period - 1), 4)
+                            try:
+                                parts = clock_str.split(":")
+                                mins_left = int(parts[0]) if parts else 0
+                                secs_left = int(parts[1]) if len(parts) > 1 else 0
+                                period_len = 12 * 60 if period <= 4 else 5 * 60
+                                mins_el = ((period - 1) * 12.0 if period <= 4
+                                           else 48.0 + (period - 5) * 5.0)
+                                elapsed_in_q = period_len - (mins_left * 60 + secs_left)
+                                mins_el += max(0, elapsed_in_q) / 60.0
+                            except Exception:
+                                mins_el = min(q, 4) * 12.0
+                        elif status_state == "post":
+                            q = 4
+                            ot = max(0, period - 4) if period > 4 else 0
+                            mins_el = 48.0 + ot * 5.0
+
+                        pred = live_predict(
+                            home_team_id=home_tid, away_team_id=away_tid,
+                            home_score=home_score, away_score=away_score,
+                            quarter=q, minutes_elapsed=mins_el,
+                        )
+                        spread = pred.get("spread", 0)
+                        home_wp = 100.0 / (1.0 + math.exp(-0.15 * spread)) if spread else 50.0
+                        if status_state == "post":
+                            home_wp = 100.0 if home_score > away_score else (0.0 if away_score > home_score else 50.0)
+                        prediction = {
+                            "spread": round(spread, 1) if spread else 0,
+                            "total": round(pred.get("total", 0), 1),
+                            "home_score": round(pred.get("home_score", 0), 1),
+                            "away_score": round(pred.get("away_score", 0), 1),
+                            "home_win_prob": round(home_wp, 1),
+                        }
+                    except Exception:
+                        pass
+
+                # Parse plays with team attribution
                 play_items = []
                 if isinstance(plays, list):
                     for play in plays:
                         items = play.get("items", [play])
                         for item in items:
-                            if isinstance(item, dict):
-                                text = item.get("text", "")
+                            if isinstance(item, dict) and item.get("text"):
                                 clock = item.get("clock", {})
-                                clock_str = clock.get("displayValue", "") if isinstance(clock, dict) else str(clock)
-                                play_items.append({"text": text, "clock": clock_str})
+                                clock_val = clock.get("displayValue", "") if isinstance(clock, dict) else str(clock)
+                                per = item.get("period", {})
+                                per_num = per.get("number", 0) if isinstance(per, dict) else 0
+                                espn_tid = str(item.get("team", {}).get("id", ""))
+                                team_id = None
+                                if espn_tid == home_espn_id:
+                                    team_id = home_tid
+                                elif espn_tid == away_espn_id:
+                                    team_id = away_tid
+                                play_items.append({
+                                    "text": item.get("text", ""),
+                                    "clock": clock_val,
+                                    "period": per_num,
+                                    "scoring": item.get("scoringPlay", False),
+                                    "home_score": item.get("homeScore", ""),
+                                    "away_score": item.get("awayScore", ""),
+                                    "team_id": team_id,
+                                })
+
+                # Parse box score into simple format
+                box_parsed = {"home": [], "away": []}
+                box_players = boxscore.get("players", []) if isinstance(boxscore, dict) else []
+                for tb in box_players:
+                    tb_tid = str(tb.get("team", {}).get("id", ""))
+                    side = "home" if tb_tid == home_espn_id else "away"
+                    stats_blocks = tb.get("statistics", [])
+                    if not stats_blocks:
+                        continue
+                    labels = stats_blocks[0].get("labels", [])
+                    for ath in stats_blocks[0].get("athletes", []):
+                        ainfo = ath.get("athlete", {})
+                        stats = ath.get("stats", [])
+                        smap = dict(zip(labels, stats)) if len(labels) == len(stats) else {}
+                        headshot = ainfo.get("headshot", {}).get("href", "")
+                        box_parsed[side].append({
+                            "name": ainfo.get("displayName", ""),
+                            "id": ainfo.get("id", ""),
+                            "headshot": headshot,
+                            "min": smap.get("MIN", ""),
+                            "pts": smap.get("PTS", ""),
+                            "reb": smap.get("REB", ""),
+                            "ast": smap.get("AST", ""),
+                            "stl": smap.get("STL", ""),
+                            "blk": smap.get("BLK", ""),
+                            "fg": smap.get("FG", ""),
+                            "threept": smap.get("3PT", ""),
+                            "plusminus": smap.get("+/-", ""),
+                        })
 
                 data = {
                     "summary": summary,
                     "odds": odds,
-                    "plays": play_items[-10:] if play_items else [],
-                    "boxscore": boxscore,
+                    "prediction": prediction,
+                    "plays": play_items[-50:] if play_items else [],
+                    "boxscore": box_parsed,
                 }
                 yield f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            # Poll rate: 10s live, 30s otherwise
             await asyncio.sleep(10)
 
     return StreamingResponse(generate(), media_type="text/event-stream")

@@ -11,16 +11,21 @@
         <thead>
             <tr>
                 <th>Status</th>
+                <th></th>
                 <th>Away</th>
                 <th>Score</th>
                 <th>Home</th>
+                <th></th>
                 <th>Clock</th>
                 <th>Period</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
             {% for g in games %}
-            <tr class="live-row {% if g.status == 'In Progress' %}live{% elif g.status == 'Final' %}final{% else %}scheduled{% endif %}">
+            <tr class="live-row {% if g.status == 'In Progress' %}live{% elif g.status == 'Final' %}final{% else %}scheduled{% endif %}"
+                style="cursor:pointer;"
+                onclick="window.location='/gamecast?game_id={{ g.get('espn_id', '') }}'">
                 <td>
                     {% if g.status == 'In Progress' %}
                         <span class="badge badge-success">LIVE</span>
@@ -30,13 +35,28 @@
                         <span class="badge badge-info">{{ g.status }}</span>
                     {% endif %}
                 </td>
+                <td style="width:24px;padding:4px;">
+                    {% if g.get('away_team_id') %}
+                    <img src="/images/logos/{{ g.away_team_id }}.png" style="width:22px;height:22px;" onerror="this.style.display='none'">
+                    {% endif %}
+                </td>
                 <td class="font-bold">{{ g.get('away_team', '???') }}</td>
                 <td class="text-center font-mono">
                     {{ g.get('away_score', '-') }} — {{ g.get('home_score', '-') }}
                 </td>
                 <td class="font-bold">{{ g.get('home_team', '???') }}</td>
+                <td style="width:24px;padding:4px;">
+                    {% if g.get('home_team_id') %}
+                    <img src="/images/logos/{{ g.home_team_id }}.png" style="width:22px;height:22px;" onerror="this.style.display='none'">
+                    {% endif %}
+                </td>
                 <td class="font-mono text-muted">{{ g.get('clock', '') }}</td>
                 <td class="text-muted">{{ g.get('period', '') }}</td>
+                <td>
+                    {% if g.get('espn_id') %}
+                    <a href="/gamecast?game_id={{ g.espn_id }}" class="btn btn-outline btn-sm" onclick="event.stopPropagation();">Gamecast</a>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -52,7 +72,7 @@
 
 {% block scripts %}
 <script>
-// Auto-refresh every 30 seconds
-setTimeout(() => location.reload(), 30000);
+// Auto-refresh every 30 seconds using fetch instead of full reload
+let refreshTimer = setTimeout(function() { location.reload(); }, 30000);
 </script>
 {% endblock %}

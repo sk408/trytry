@@ -14,10 +14,16 @@
     {% endif %}
     <div class="card" style="padding: 0.75rem 1.25rem; margin-bottom: 0.5rem;">
         <div class="flex items-center justify-between">
-            <div>
+            <div class="flex items-center gap-2">
+                {% if g.get('away_team_id') %}
+                <img src="/images/logos/{{ g.away_team_id }}.png" style="width:20px;height:20px;" onerror="this.style.display='none'">
+                {% endif %}
                 <span class="font-bold">{{ g.get('away_team', '???') }}</span>
-                <span class="text-muted mx-2">@</span>
+                <span class="text-muted">@</span>
                 <span class="font-bold">{{ g.get('home_team', '???') }}</span>
+                {% if g.get('home_team_id') %}
+                <img src="/images/logos/{{ g.home_team_id }}.png" style="width:20px;height:20px;" onerror="this.style.display='none'">
+                {% endif %}
             </div>
             <div class="text-sm text-muted">
                 {{ g.get('game_time', '') }}
@@ -27,7 +33,7 @@
                     </span>
                 {% endif %}
             </div>
-            <div>
+            <div class="flex gap-2">
                 <a href="/matchups?home_team={{ g.get('home_team_id', '') }}&away_team={{ g.get('away_team_id', '') }}" 
                    class="btn btn-outline btn-sm">Predict</a>
             </div>
