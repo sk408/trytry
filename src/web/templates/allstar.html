@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}All-Star Weekend — NBA Predictor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>All-Star Weekend 2026</h1>
+    <p class="text-muted">Prop betting analysis & predictions</p>
+</div>
+
+<!-- Tab navigation -->
+<div class="tab-nav">
+    <button class="tab-btn active" onclick="switchTab('mvp')">MVP</button>
+    <button class="tab-btn" onclick="switchTab('three')">3PT Contest</button>
+    <button class="tab-btn" onclick="switchTab('rising')">Rising Stars</button>
+    <button class="tab-btn" onclick="switchTab('winner')">Game Winner</button>
+</div>
+
+<!-- MVP Tab -->
+<div class="tab-content active" id="tab-mvp">
+    <div class="card">
+        <div class="card-header">
+            <h2>All-Star Game MVP</h2>
+        </div>
+        <p class="model-info">
+            MVP Scoring Model: PTS×1.0 + AST×1.5 + REB×1.2 + STL×2.0 + BLK×2.0 + 3PM×0.5 − TOV×1.0
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Score</th>
+                        <th>Odds</th>
+                        <th>Edge</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in mvp_candidates %}
+                    <tr>
+                        <td><strong>{{ p.player }}</strong></td>
+                        <td>{{ p.team }}</td>
+                        <td>{{ "%.1f"|format(p.score) }}</td>
+                        <td>{{ p.odds }}</td>
+                        <td class="{{ 'text-success' if p.edge > 3 else 'text-warning' if p.edge > 1 else '' }}">
+                            {{ "%.1f"|format(p.edge) }}%
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 3PT Contest Tab -->
+<div class="tab-content" id="tab-three">
+    <div class="card">
+        <div class="card-header">
+            <h2>Three-Point Contest</h2>
+        </div>
+        <p class="model-info">
+            3PT Model: 3P%×0.4 + 3PM/G×0.3 + Career ASG 3PT%×0.2 + Volume×0.1
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>3P%</th>
+                        <th>3PM/G</th>
+                        <th>Score</th>
+                        <th>Odds</th>
+                        <th>Edge</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in three_pt_contestants %}
+                    <tr>
+                        <td><strong>{{ p.player }}</strong></td>
+                        <td>{{ p.team }}</td>
+                        <td>{{ p.three_pct }}</td>
+                        <td>{{ "%.1f"|format(p.three_pm) }}</td>
+                        <td>{{ "%.1f"|format(p.score) }}</td>
+                        <td>{{ p.odds }}</td>
+                        <td class="{{ 'text-success' if p.edge > 3 else 'text-warning' if p.edge > 1 else '' }}">
+                            {{ "%.1f"|format(p.edge) }}%
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Rising Stars Tab -->
+<div class="tab-content" id="tab-rising">
+    <div class="card">
+        <div class="card-header">
+            <h2>Rising Stars MVP</h2>
+        </div>
+        <p class="model-info">
+            Rising Stars model: Minutes×0.3 + Fantasy Points×0.5 + Highlight Plays×0.2
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Team</th>
+                        <th>Year</th>
+                        <th>PPG</th>
+                        <th>Score</th>
+                        <th>Odds</th>
+                        <th>Edge</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in rising_stars %}
+                    <tr>
+                        <td><strong>{{ p.player }}</strong></td>
+                        <td>{{ p.team }}</td>
+                        <td>{{ p.year }}</td>
+                        <td>{{ "%.1f"|format(p.ppg) }}</td>
+                        <td>{{ "%.1f"|format(p.score) }}</td>
+                        <td>{{ p.odds }}</td>
+                        <td class="{{ 'text-success' if p.edge > 3 else 'text-warning' if p.edge > 1 else '' }}">
+                            {{ "%.1f"|format(p.edge) }}%
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Game Winner Tab -->
+<div class="tab-content" id="tab-winner">
+    <div class="card">
+        <div class="card-header">
+            <h2>All-Star Game Winner</h2>
+        </div>
+        <p class="model-info">
+            Game Winner Model: OFF_RTG×0.4 + DEF_RTG×0.2 + Star Power×0.3 + Chemistry×0.1
+        </p>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Team</th>
+                        <th>Proj Score</th>
+                        <th>Win Prob</th>
+                        <th>Spread</th>
+                        <th>Odds</th>
+                        <th>Edge</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in game_teams %}
+                    <tr>
+                        <td><strong>{{ t.team }}</strong></td>
+                        <td>{{ "%.1f"|format(t.proj_score) }}</td>
+                        <td>{{ t.win_prob }}</td>
+                        <td>{{ t.spread }}</td>
+                        <td>{{ t.odds }}</td>
+                        <td class="{{ 'text-success' if t.edge > 1.5 else '' }}">
+                            {{ "%.1f"|format(t.edge) }}%
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    .tab-nav { display: flex; gap: 0; margin-bottom: 1.5rem; border-bottom: 2px solid var(--border); }
+    .tab-btn {
+        background: none; border: none; color: var(--text-muted); padding: 0.75rem 1.25rem;
+        cursor: pointer; font-size: 0.95rem; font-weight: 500; border-bottom: 2px solid transparent;
+        margin-bottom: -2px; transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .model-info { color: var(--text-muted); font-size: 0.85rem; padding: 0.75rem 1rem; background: rgba(var(--accent-rgb), 0.05); border-radius: var(--radius); margin-bottom: 1rem; }
+    .text-success { color: var(--success); font-weight: 600; }
+    .text-warning { color: var(--warning); font-weight: 500; }
+</style>
+
+<script>
+function switchTab(name) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.target.classList.add('active');
+}
+</script>
+{% endblock %}

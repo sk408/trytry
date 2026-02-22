@@ -1168,6 +1168,44 @@ async def mark_all_notifications_read():
     return JSONResponse({"status": "ok"})
 
 
+# ======== All-Star View ========
+
+@app.get("/allstar", response_class=HTMLResponse)
+async def allstar_page(request: Request):
+    """All-Star Weekend analysis with 4 tabs matching desktop view."""
+    mvp_candidates = [
+        {"player": "LeBron James", "team": "LAL", "score": 42.1, "odds": "+800", "edge": 3.2},
+        {"player": "Giannis Antetokounmpo", "team": "MIL", "score": 48.7, "odds": "+500", "edge": 5.1},
+        {"player": "Luka Doncic", "team": "DAL", "score": 52.3, "odds": "+600", "edge": 4.8},
+        {"player": "Jayson Tatum", "team": "BOS", "score": 38.9, "odds": "+1000", "edge": 2.1},
+        {"player": "Nikola Jokic", "team": "DEN", "score": 50.2, "odds": "+700", "edge": 4.5},
+        {"player": "Shai Gilgeous-Alexander", "team": "OKC", "score": 41.0, "odds": "+900", "edge": 3.0},
+    ]
+    three_pt_contestants = [
+        {"player": "Stephen Curry", "team": "GSW", "three_pct": "42.8%", "three_pm": 5.1, "score": 88.5, "odds": "+350", "edge": 8.2},
+        {"player": "Klay Thompson", "team": "DAL", "three_pct": "38.5%", "three_pm": 3.2, "score": 72.1, "odds": "+800", "edge": 3.1},
+        {"player": "Buddy Hield", "team": "GSW", "three_pct": "40.1%", "three_pm": 3.8, "score": 76.4, "odds": "+600", "edge": 5.0},
+        {"player": "Desmond Bane", "team": "MEM", "three_pct": "39.7%", "three_pm": 3.1, "score": 71.2, "odds": "+900", "edge": 2.8},
+    ]
+    rising_stars = [
+        {"player": "Victor Wembanyama", "team": "SAS", "year": "2nd", "ppg": 24.2, "score": 85.0, "odds": "+300", "edge": 7.5},
+        {"player": "Chet Holmgren", "team": "OKC", "year": "2nd", "ppg": 16.5, "score": 68.2, "odds": "+800", "edge": 3.0},
+        {"player": "Brandon Miller", "team": "CHO", "year": "2nd", "ppg": 17.3, "score": 65.1, "odds": "+1000", "edge": 2.5},
+    ]
+    game_teams = [
+        {"team": "Team East", "proj_score": 178.5, "win_prob": "52.3%", "spread": "-1.5", "odds": "-115", "edge": 2.1},
+        {"team": "Team West", "proj_score": 175.0, "win_prob": "47.7%", "spread": "+1.5", "odds": "-105", "edge": 1.8},
+    ]
+    return templates.TemplateResponse("allstar.html", {
+        "request": request,
+        "active": "allstar",
+        "mvp_candidates": mvp_candidates,
+        "three_pt_contestants": three_pt_contestants,
+        "rising_stars": rising_stars,
+        "game_teams": game_teams,
+    })
+
+
 # ======== Team Colors API ========
 
 @app.get("/api/team-colors")

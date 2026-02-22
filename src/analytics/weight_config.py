@@ -110,9 +110,34 @@ def get_weight_config() -> WeightConfig:
     return _cached_global
 
 
+def _enforce_ranges(w: WeightConfig) -> WeightConfig:
+    """Clamp all tunable parameters to their OPTIMIZER_RANGES bounds.
+
+    Prevents degenerate configurations (negative weights, inverted signs, tiny clamps)
+    from being persisted.
+    """
+    d = w.to_dict()
+    for k, (lo, hi) in OPTIMIZER_RANGES.items():
+        if k in d:
+            old = d[k]
+            d[k] = max(lo, min(hi, d[k]))
+            if d[k] != old:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Weight %s clamped from %.4f to %.4f (range %.4f–%.4f)",
+                    k, old, d[k], lo, hi,
+                )
+    return WeightConfig.from_dict(d)
+
+
 def save_weight_config(w: WeightConfig):
-    """Save global weights to DB and refresh cache."""
+    """Save global weights to DB and refresh cache.
+
+    All tunable parameters are clamped to OPTIMIZER_RANGES before saving
+    to prevent degenerate configurations.
+    """
     global _cached_global
+    w = _enforce_ranges(w)
     for k, v in w.to_dict().items():
         db.execute(
             "INSERT INTO model_weights (key, value) VALUES (?,?) "
@@ -161,29 +186,32 @@ def invalidate_weight_cache():
     _cached_global = None
 
 
-# Optimizer ranges — expanded based on Round 9 sensitivity sweep findings
+# Optimizer ranges — constrained to physically meaningful bounds.
+# IMPORTANT: Signs must match the expected direction of each parameter.
+# Parameters that should always be positive have floor >= 0.
+# spread_clamp must stay large enough to distinguish blowouts from close games.
 OPTIMIZER_RANGES = {
-    "def_factor_dampening": (0.0, 4.0),      # sweep best-loss ~1.38; widen ceiling for interaction effects
-    "turnover_margin_mult": (-1.0, 4.0),     # sweep best ~1.1; allow negative for flexibility
-    "rebound_diff_mult": (-1.5, 2.0),        # pairwise found -0.77 optimal with ff_tov; widen floor
-    "rating_matchup_mult": (-2.0, 2.0),      # pairwise found -1.79 optimal; widen floor
-    "four_factors_scale": (50.0, 500.0),      # pairwise found 384.6 optimal with ff_tov; raise ceiling
-    "clutch_scale": (-0.10, 1.0),            # sweep best-loss at 0.04; lower floor below old 0.02
-    "hustle_effort_mult": (-0.10, 1.0),      # sweep best-loss at 0.04; allow slight negatives
-    "pace_mult": (-0.50, 1.0),              # sweep best-loss at -0.10; was floored at 0.08
-    "fatigue_total_mult": (-0.50, 2.0),      # sweep best-loss at 0.85; widen both ends
-    "espn_model_weight": (0.0, 1.0),         # sweep best-loss at 0.0; was floored at 0.60
-    "ml_ensemble_weight": (-2.0, 2.0),       # sweep best-loss at -2.0; was floored at 0.0
-    "ml_disagree_damp": (0.0, 1.5),          # sweep best at 0.0; slight ceiling raise
-    "spread_clamp": (3.0, 15.0),             # sweep best-loss at 6.9; tighten ceiling, lower floor
-    "ff_efg_weight": (0.0, 5.0),             # pairwise found 3.21 optimal; raise ceiling from 3.0
-    "ff_tov_weight": (-0.5, 8.0),            # pairwise found 1.77–5.0 optimal; widen for triplet search
-    "ff_oreb_weight": (0.0, 3.0),            # sweep best-loss at 1.31; current range OK
-    "ff_fta_weight": (0.0, 2.0),             # sweep best-loss at 0.57; current range OK
-    "blocks_penalty": (-0.5, 2.0),           # sweep best-loss at 0.55; current range OK
-    "steals_penalty": (-0.5, 2.0),           # sweep best-loss at 0.25; current range OK
-    "oreb_mult": (-0.5, 2.0),               # sweep best-loss at 0.08; current range OK
-    "pace_baseline": (80.0, 115.0),           # sweep best-loss at 85.0; current range OK
+    "def_factor_dampening": (0.3, 1.2),      # dampens toward 1.0; >1 amplifies (allow slight)
+    "turnover_margin_mult": (0.0, 1.5),      # more TOs = worse; must be positive
+    "rebound_diff_mult": (0.0, 0.3),         # more rebounds = better; must be positive
+    "rating_matchup_mult": (0.1, 1.5),       # better matchup edge = higher spread; must be positive
+    "four_factors_scale": (80.0, 350.0),      # scales weighted FF edge into spread points
+    "clutch_scale": (0.01, 0.3),             # clutch rating impact; small positive
+    "hustle_effort_mult": (0.0, 0.05),       # hustle has small positive effect
+    "pace_mult": (0.02, 0.3),               # faster pace → more scoring; must be positive
+    "fatigue_total_mult": (0.1, 1.0),        # fatigue reduces total; must be positive
+    "espn_model_weight": (0.50, 0.95),       # model weight in ESPN blend; >0.5 means model-dominant
+    "ml_ensemble_weight": (0.0, 0.50),       # ML blend weight; must be non-negative
+    "ml_disagree_damp": (0.2, 1.0),          # dampening factor; ≤1.0 to dampen, not amplify
+    "spread_clamp": (15.0, 30.0),            # hard cap on spreads; must be high enough for blowouts
+    "ff_efg_weight": (0.1, 1.0),             # relative weight of eFG% in FF composite
+    "ff_tov_weight": (0.05, 0.8),            # relative weight of TOV% in FF composite
+    "ff_oreb_weight": (0.05, 0.6),           # relative weight of OREB% in FF composite
+    "ff_fta_weight": (0.05, 0.5),            # relative weight of FTA rate in FF composite
+    "blocks_penalty": (0.0, 0.5),            # blocks reduce total; must be non-negative
+    "steals_penalty": (0.0, 0.5),            # steals reduce total; must be non-negative
+    "oreb_mult": (0.0, 0.5),                # OREBs boost total; must be non-negative
+    "pace_baseline": (90.0, 105.0),           # league-average pace reference point
 }
 
 
