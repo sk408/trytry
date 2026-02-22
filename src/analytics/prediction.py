@@ -262,8 +262,8 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     away_base_pts += at_corr
 
     # ── Step 5: Fatigue Detection ──
-    home_fatigue = compute_fatigue(home_team_id, game_date)
-    away_fatigue = compute_fatigue(away_team_id, game_date)
+    home_fatigue = compute_fatigue(home_team_id, game_date, w=w)
+    away_fatigue = compute_fatigue(away_team_id, game_date, w=w)
     pred.home_fatigue = home_fatigue["penalty"]
     pred.away_fatigue = away_fatigue["penalty"]
     fatigue_adj = home_fatigue["penalty"] - away_fatigue["penalty"]
@@ -538,9 +538,11 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
             ht = _get_tuning(htid)
             at = _get_tuning(atid)
 
-            # Fatigue
-            hfat = compute_fatigue(htid, gdate)
-            afat = compute_fatigue(atid, gdate)
+            # Fatigue (pass WeightConfig for tunable b2b/3in4/4in6 penalties)
+            from src.analytics.weight_config import get_weight_config as _gwc
+            _w = _gwc()
+            hfat = compute_fatigue(htid, gdate, w=_w)
+            afat = compute_fatigue(atid, gdate, w=_w)
 
             # Ratings
             home_off = hm.get("off_rating", _RATING_FALLBACK) or _RATING_FALLBACK

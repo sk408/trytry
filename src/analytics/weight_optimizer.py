@@ -54,11 +54,15 @@ class VectorizedGames:
         self.home_def = np.array([g.home_def for g in games])
         self.away_def = np.array([g.away_def for g in games])
 
-        # Four Factors edges
-        self.ff_efg_edge = np.array([g.home_ff.get("efg_edge", 0) for g in games])
-        self.ff_tov_edge = np.array([g.home_ff.get("tov_edge", 0) for g in games])
-        self.ff_oreb_edge = np.array([g.home_ff.get("oreb_edge", 0) for g in games])
-        self.ff_fta_edge = np.array([g.home_ff.get("fta_edge", 0) for g in games])
+        # Four Factors edges — compute from raw team values (home_ff has efg/tov/oreb/fta)
+        self.ff_efg_edge = np.array([
+            g.home_ff.get("efg", 0) - g.away_ff.get("efg", 0) for g in games])
+        self.ff_tov_edge = np.array([
+            g.away_ff.get("tov", 0) - g.home_ff.get("tov", 0) for g in games])  # positive = home turns over less
+        self.ff_oreb_edge = np.array([
+            g.home_ff.get("oreb", 0) - g.away_ff.get("oreb", 0) for g in games])
+        self.ff_fta_edge = np.array([
+            g.home_ff.get("fta", 0) - g.away_ff.get("fta", 0) for g in games])
 
         # Clutch
         self.clutch_diff = np.array([

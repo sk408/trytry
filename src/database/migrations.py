@@ -1,6 +1,10 @@
 """Database schema migrations — 16 tables, indexes, init_db()."""
 
+import logging
+
 from src.database.db import execute_script, execute, fetch_all
+
+_log = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS teams (
@@ -363,8 +367,6 @@ def _fix_game_date_formats():
                 future duplicates regardless of date format.
     """
     from src.database.db import execute_many as _exec_many
-    import logging
-    _log = logging.getLogger(__name__)
 
     try:
         from datetime import datetime as _dt
@@ -484,8 +486,7 @@ def _fix_game_date_formats():
             pass  # index may conflict if duplicates still exist
 
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("_fix_game_date_formats failed: %s", exc)
+        _log.warning("_fix_game_date_formats failed: %s", exc)
 
 
 def reset_db():

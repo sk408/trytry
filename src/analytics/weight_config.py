@@ -161,20 +161,21 @@ def invalidate_weight_cache():
     _cached_global = None
 
 
-# Optimizer ranges
+# Optimizer ranges — expanded based on Round 9 sensitivity sweep findings
 OPTIMIZER_RANGES = {
-    "def_factor_dampening": (0.25, 1.10),
-    "turnover_margin_mult": (0.10, 0.65),
-    "rebound_diff_mult": (0.0, 0.15),
-    "rating_matchup_mult": (0.40, 1.20),
-    "four_factors_scale": (80.0, 250.0),
-    "clutch_scale": (0.02, 0.15),
-    "hustle_effort_mult": (0.005, 0.05),
-    "pace_mult": (0.08, 0.35),
-    "fatigue_total_mult": (0.10, 0.60),
-    "espn_model_weight": (0.60, 0.95),
-    "ml_ensemble_weight": (0.0, 0.5),
-    "ml_disagree_damp": (0.3, 1.0),
+    "def_factor_dampening": (0.25, 2.00),    # was (0.25, 1.10) — sweep shows optimal MAE ~1.06, Win% peaks ~3.2
+    "turnover_margin_mult": (0.0, 3.00),     # was (0.10, 0.65) — sweep shows Win% peaks at 2.69
+    "rebound_diff_mult": (-0.30, 1.00),      # was (0.0, 0.15) — sweep shows value in slight negatives and higher
+    "rating_matchup_mult": (-0.50, 1.20),    # was (0.40, 1.20) — sweep shows optimal near -0.10
+    "four_factors_scale": (80.0, 250.0),      # unchanged (four factors sub-weights are flat in vectorized eval)
+    "clutch_scale": (0.02, 0.60),            # was (0.02, 0.15) — sweep shows Win% peak at 0.46
+    "hustle_effort_mult": (0.005, 0.80),     # was (0.005, 0.05) — sweep shows best loss at 0.32
+    "pace_mult": (0.08, 0.35),               # unchanged
+    "fatigue_total_mult": (0.10, 1.20),      # was (0.10, 0.60) — sweep shows best loss at 0.95
+    "espn_model_weight": (0.60, 0.95),       # unchanged
+    "ml_ensemble_weight": (0.0, 0.5),        # unchanged
+    "ml_disagree_damp": (0.0, 1.0),          # was (0.3, 1.0) — sweep shows best at 0.0
+    "spread_clamp": (4.0, 30.0),             # NEW — sweep shows optimal MAE at 5.9, massive effect
 }
 
 

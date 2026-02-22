@@ -264,8 +264,13 @@ def get_home_court_advantage(team_id: int, season: Optional[str] = None) -> floa
     return max(_HOME_COURT_CLAMP[0], min(_HOME_COURT_CLAMP[1], hca))
 
 
-def compute_fatigue(team_id: int, game_date: str) -> Dict[str, Any]:
-    """Detect back-to-back, 3-in-4, 4-in-6 fatigue situations."""
+def compute_fatigue(team_id: int, game_date: str, w=None) -> Dict[str, Any]:
+    """Detect back-to-back, 3-in-4, 4-in-6 fatigue situations.
+
+    Args:
+        w: Optional WeightConfig to read b2b/3in4/4in6 penalties from.
+           Falls back to defaults if None.
+    """
     try:
         gd = datetime.strptime(game_date, "%Y-%m-%d")
     except ValueError:
@@ -304,15 +309,20 @@ def compute_fatigue(team_id: int, game_date: str) -> Dict[str, Any]:
     is_3in4 = games_in_4 >= 3
     is_4in6 = games_in_6 >= 4
 
+    # Read penalties from WeightConfig if provided, else use defaults
+    b2b_pen = w.fatigue_b2b if w else 2.0
+    pen_3in4 = w.fatigue_3in4 if w else 1.0
+    pen_4in6 = w.fatigue_4in6 if w else 1.5
+
     penalty = 0.0
     if is_same_day:
         penalty += 3.0
     if is_b2b:
-        penalty += 2.0
+        penalty += b2b_pen
     if is_3in4:
-        penalty += 1.0
+        penalty += pen_3in4
     if is_4in6:
-        penalty += 1.5
+        penalty += pen_4in6
 
     # Rest bonus
     rest_bonus = 0.0

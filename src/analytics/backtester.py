@@ -545,10 +545,8 @@ def export_diagnostic_csv(
             am = _get_team_metrics(atid)
             ht = _get_tuning(htid)
             at = _get_tuning(atid)
-            hfat = compute_fatigue(htid, gdate)
-            afat = compute_fatigue(atid, gdate)
 
-            # Weights used
+            # Weights used (load before fatigue so we can pass w for b2b/3in4/4in6)
             from src.analytics.weight_config import load_team_weights, get_weight_config
             home_w = load_team_weights(htid)
             away_w = load_team_weights(atid)
@@ -560,6 +558,9 @@ def export_diagnostic_csv(
                 w = away_w
             else:
                 w = get_weight_config()
+
+            hfat = compute_fatigue(htid, gdate, w=w)
+            afat = compute_fatigue(atid, gdate, w=w)
 
             home_abbr = team_abbrev.get(htid, str(htid))
             away_abbr = team_abbrev.get(atid, str(atid))
