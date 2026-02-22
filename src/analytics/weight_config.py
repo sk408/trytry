@@ -163,19 +163,27 @@ def invalidate_weight_cache():
 
 # Optimizer ranges — expanded based on Round 9 sensitivity sweep findings
 OPTIMIZER_RANGES = {
-    "def_factor_dampening": (0.25, 2.00),    # was (0.25, 1.10) — sweep shows optimal MAE ~1.06, Win% peaks ~3.2
-    "turnover_margin_mult": (0.0, 3.00),     # was (0.10, 0.65) — sweep shows Win% peaks at 2.69
-    "rebound_diff_mult": (-0.30, 1.00),      # was (0.0, 0.15) — sweep shows value in slight negatives and higher
-    "rating_matchup_mult": (-0.50, 1.20),    # was (0.40, 1.20) — sweep shows optimal near -0.10
-    "four_factors_scale": (80.0, 250.0),      # unchanged (four factors sub-weights are flat in vectorized eval)
-    "clutch_scale": (0.02, 0.60),            # was (0.02, 0.15) — sweep shows Win% peak at 0.46
-    "hustle_effort_mult": (0.005, 0.80),     # was (0.005, 0.05) — sweep shows best loss at 0.32
-    "pace_mult": (0.08, 0.35),               # unchanged
-    "fatigue_total_mult": (0.10, 1.20),      # was (0.10, 0.60) — sweep shows best loss at 0.95
-    "espn_model_weight": (0.60, 0.95),       # unchanged
-    "ml_ensemble_weight": (0.0, 0.5),        # unchanged
-    "ml_disagree_damp": (0.0, 1.0),          # was (0.3, 1.0) — sweep shows best at 0.0
-    "spread_clamp": (4.0, 30.0),             # NEW — sweep shows optimal MAE at 5.9, massive effect
+    "def_factor_dampening": (0.0, 4.0),      # sweep best-loss ~1.38; widen ceiling for interaction effects
+    "turnover_margin_mult": (-1.0, 4.0),     # sweep best ~1.1; allow negative for flexibility
+    "rebound_diff_mult": (-1.0, 2.0),        # sweep best-loss at -0.40; was clipped at -0.30
+    "rating_matchup_mult": (-1.0, 2.0),      # sweep best ~0.40; keep wide
+    "four_factors_scale": (50.0, 300.0),      # sweep best ~88; lower floor to reach it
+    "clutch_scale": (-0.10, 1.0),            # sweep best-loss at 0.04; lower floor below old 0.02
+    "hustle_effort_mult": (-0.10, 1.0),      # sweep best-loss at 0.04; allow slight negatives
+    "pace_mult": (-0.50, 1.0),              # sweep best-loss at -0.10; was floored at 0.08
+    "fatigue_total_mult": (-0.50, 2.0),      # sweep best-loss at 0.85; widen both ends
+    "espn_model_weight": (0.0, 1.0),         # sweep best-loss at 0.0; was floored at 0.60
+    "ml_ensemble_weight": (-2.0, 2.0),       # sweep best-loss at -2.0; was floored at 0.0
+    "ml_disagree_damp": (0.0, 1.5),          # sweep best at 0.0; slight ceiling raise
+    "spread_clamp": (3.0, 15.0),             # sweep best-loss at 6.9; tighten ceiling, lower floor
+    "ff_efg_weight": (0.0, 3.0),             # NEW — sweep best-loss at 1.38
+    "ff_tov_weight": (-0.5, 2.0),            # NEW — sweep best-loss at 0.22
+    "ff_oreb_weight": (0.0, 3.0),            # NEW — sweep best-loss at 1.31
+    "ff_fta_weight": (0.0, 2.0),             # NEW — sweep best-loss at 0.57
+    "blocks_penalty": (-0.5, 2.0),           # NEW — sweep best-loss at 0.55
+    "steals_penalty": (-0.5, 2.0),           # NEW — sweep best-loss at 0.25
+    "oreb_mult": (-0.5, 2.0),               # NEW — sweep best-loss at 0.08
+    "pace_baseline": (80.0, 115.0),           # NEW — sweep best-loss at 85.0
 }
 
 

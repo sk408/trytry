@@ -1,0 +1,319 @@
+INFO:src.database.db:Database loaded into memory from data/nba_analytics.db
+Starting full sensitivity analysis...
+Loading and precomputing games (this may take a few minutes)...
+Precomputing 844 games...
+Precomputed 25/844 games
+Precomputed 50/844 games
+Precomputed 75/844 games
+Precomputed 100/844 games
+Precomputed 125/844 games
+Precomputed 150/844 games
+Precomputed 175/844 games
+Precomputed 200/844 games
+Precomputed 225/844 games
+Precomputed 250/844 games
+Precomputed 275/844 games
+Precomputed 300/844 games
+Precomputed 325/844 games
+Precomputed 350/844 games
+Precomputed 375/844 games
+Precomputed 400/844 games
+Precomputed 425/844 games
+Precomputed 450/844 games
+Precomputed 475/844 games
+Precomputed 500/844 games
+Precomputed 525/844 games
+Precomputed 550/844 games
+Precomputed 575/844 games
+Precomputed 600/844 games
+Precomputed 625/844 games
+Precomputed 650/844 games
+Precomputed 675/844 games
+Precomputed 700/844 games
+Precomputed 725/844 games
+Precomputed 750/844 games
+Precomputed 775/844 games
+Precomputed 800/844 games
+Precomputed 825/844 games
+Precomputed 844 games total
+Ready: 844 games for evaluation
+[1/25] Sweeping blocks_penalty (-1.0 to 3.0)...
+  blocks_penalty: 50/200 (-0.015 -> MAE=12.08)
+  blocks_penalty: 100/200 (0.990 -> MAE=12.08)
+  blocks_penalty: 150/200 (1.995 -> MAE=12.08)
+  blocks_penalty: 200/200 (3.000 -> MAE=12.08)
+[2/25] Sweeping clutch_scale (-2.0 to 5.0)...
+  clutch_scale: 50/200 (-0.276 -> MAE=12.10)
+  clutch_scale: 100/200 (1.482 -> MAE=12.18)
+  clutch_scale: 150/200 (3.241 -> MAE=12.18)
+  clutch_scale: 200/200 (5.000 -> MAE=12.18)
+[3/25] Sweeping def_factor_dampening (-2.0 to 5.0)...
+  def_factor_dampening: 50/200 (-0.276 -> MAE=12.91)
+  def_factor_dampening: 100/200 (1.482 -> MAE=12.06)
+  def_factor_dampening: 150/200 (3.241 -> MAE=12.04)
+  def_factor_dampening: 200/200 (5.000 -> MAE=12.06)
+[4/25] Sweeping espn_model_weight (0.0 to 1.0)...
+  espn_model_weight: 50/200 (0.246 -> MAE=12.08)
+  espn_model_weight: 100/200 (0.497 -> MAE=12.08)
+  espn_model_weight: 150/200 (0.749 -> MAE=12.08)
+  espn_model_weight: 200/200 (1.000 -> MAE=12.08)
+[5/25] Sweeping espn_weight (0.0 to 1.0)...
+  espn_weight: 50/200 (0.246 -> MAE=12.08)
+  espn_weight: 100/200 (0.497 -> MAE=12.08)
+  espn_weight: 150/200 (0.749 -> MAE=12.08)
+  espn_weight: 200/200 (1.000 -> MAE=12.08)
+[6/25] Sweeping fatigue_3in4 (-5.0 to 10.0)...
+  fatigue_3in4: 50/200 (-1.307 -> MAE=12.08)
+  fatigue_3in4: 100/200 (2.462 -> MAE=12.08)
+  fatigue_3in4: 150/200 (6.231 -> MAE=12.08)
+  fatigue_3in4: 200/200 (10.000 -> MAE=12.08)
+[7/25] Sweeping fatigue_4in6 (-5.0 to 10.0)...
+  fatigue_4in6: 50/200 (-1.307 -> MAE=12.08)
+  fatigue_4in6: 100/200 (2.462 -> MAE=12.08)
+  fatigue_4in6: 150/200 (6.231 -> MAE=12.08)
+  fatigue_4in6: 200/200 (10.000 -> MAE=12.08)
+[8/25] Sweeping fatigue_b2b (-5.0 to 15.0)...
+  fatigue_b2b: 50/200 (-0.075 -> MAE=12.08)
+  fatigue_b2b: 100/200 (4.950 -> MAE=12.08)
+  fatigue_b2b: 150/200 (9.975 -> MAE=12.08)
+  fatigue_b2b: 200/200 (15.000 -> MAE=12.08)
+[9/25] Sweeping fatigue_total_mult (-2.0 to 5.0)...
+  fatigue_total_mult: 50/200 (-0.276 -> MAE=12.08)
+  fatigue_total_mult: 100/200 (1.482 -> MAE=12.08)
+  fatigue_total_mult: 150/200 (3.241 -> MAE=12.08)
+  fatigue_total_mult: 200/200 (5.000 -> MAE=12.08)
+[10/25] Sweeping ff_efg_weight (-2.0 to 5.0)...
+  ff_efg_weight: 50/200 (-0.276 -> MAE=12.17)
+  ff_efg_weight: 100/200 (1.482 -> MAE=12.08)
+  ff_efg_weight: 150/200 (3.241 -> MAE=12.12)
+  ff_efg_weight: 200/200 (5.000 -> MAE=12.17)
+[11/25] Sweeping ff_fta_weight (-2.0 to 5.0)...
+  ff_fta_weight: 50/200 (-0.276 -> MAE=12.13)
+  ff_fta_weight: 100/200 (1.482 -> MAE=12.11)
+  ff_fta_weight: 150/200 (3.241 -> MAE=12.34)
+  ff_fta_weight: 200/200 (5.000 -> MAE=12.47)
+[12/25] Sweeping ff_oreb_weight (-2.0 to 5.0)...
+  ff_oreb_weight: 50/200 (-0.276 -> MAE=12.26)
+  ff_oreb_weight: 100/200 (1.482 -> MAE=12.06)
+  ff_oreb_weight: 150/200 (3.241 -> MAE=12.16)
+  ff_oreb_weight: 200/200 (5.000 -> MAE=12.27)
+[13/25] Sweeping ff_tov_weight (-2.0 to 5.0)...
+  ff_tov_weight: 50/200 (-0.276 -> MAE=12.09)
+  ff_tov_weight: 100/200 (1.482 -> MAE=12.07)
+  ff_tov_weight: 150/200 (3.241 -> MAE=12.06)
+  ff_tov_weight: 200/200 (5.000 -> MAE=12.09)
+[14/25] Sweeping four_factors_scale (-500.0 to 1000.0)...
+  four_factors_scale: 50/200 (-130.653 -> MAE=13.05)
+  four_factors_scale: 100/200 (246.231 -> MAE=12.15)
+  four_factors_scale: 150/200 (623.116 -> MAE=12.40)
+  four_factors_scale: 200/200 (1000.000 -> MAE=12.50)
+[15/25] Sweeping hustle_effort_mult (-2.0 to 5.0)...
+  hustle_effort_mult: 50/200 (-0.276 -> MAE=12.09)
+  hustle_effort_mult: 100/200 (1.482 -> MAE=12.15)
+  hustle_effort_mult: 150/200 (3.241 -> MAE=12.28)
+  hustle_effort_mult: 200/200 (5.000 -> MAE=12.36)
+[16/25] Sweeping ml_disagree_damp (0.0 to 3.0)...
+  ml_disagree_damp: 50/200 (0.739 -> MAE=12.08)
+  ml_disagree_damp: 100/200 (1.492 -> MAE=12.08)
+  ml_disagree_damp: 150/200 (2.246 -> MAE=12.08)
+  ml_disagree_damp: 200/200 (3.000 -> MAE=12.08)
+[17/25] Sweeping ml_ensemble_weight (-2.0 to 5.0)...
+  ml_ensemble_weight: 50/200 (-0.276 -> MAE=12.08)
+  ml_ensemble_weight: 100/200 (1.482 -> MAE=12.08)
+  ml_ensemble_weight: 150/200 (3.241 -> MAE=12.08)
+  ml_ensemble_weight: 200/200 (5.000 -> MAE=12.08)
+[18/25] Sweeping oreb_mult (-2.0 to 5.0)...
+  oreb_mult: 50/200 (-0.276 -> MAE=12.08)
+  oreb_mult: 100/200 (1.482 -> MAE=12.08)
+  oreb_mult: 150/200 (3.241 -> MAE=12.08)
+  oreb_mult: 200/200 (5.000 -> MAE=12.08)
+[19/25] Sweeping pace_baseline (85.0 to 110.0)...
+  pace_baseline: 50/200 (91.156 -> MAE=12.08)
+  pace_baseline: 100/200 (97.437 -> MAE=12.08)
+  pace_baseline: 150/200 (103.719 -> MAE=12.08)
+  pace_baseline: 200/200 (110.000 -> MAE=12.08)
+[20/25] Sweeping pace_mult (-5.0 to 10.0)...
+  pace_mult: 50/200 (-1.307 -> MAE=12.08)
+  pace_mult: 100/200 (2.462 -> MAE=12.08)
+  pace_mult: 150/200 (6.231 -> MAE=12.08)
+  pace_mult: 200/200 (10.000 -> MAE=12.08)
+[21/25] Sweeping rating_matchup_mult (-5.0 to 20.0)...
+  rating_matchup_mult: 50/200 (1.156 -> MAE=12.22)
+  rating_matchup_mult: 100/200 (7.437 -> MAE=13.43)
+  rating_matchup_mult: 150/200 (13.719 -> MAE=13.78)
+  rating_matchup_mult: 200/200 (20.000 -> MAE=13.92)
+[22/25] Sweeping rebound_diff_mult (-5.0 to 10.0)...
+  rebound_diff_mult: 50/200 (-1.307 -> MAE=12.18)
+  rebound_diff_mult: 100/200 (2.462 -> MAE=12.40)
+  rebound_diff_mult: 150/200 (6.231 -> MAE=12.99)
+  rebound_diff_mult: 200/200 (10.000 -> MAE=13.49)
+[23/25] Sweeping spread_clamp (3.0 to 100.0)...
+  spread_clamp: 50/200 (26.884 -> MAE=14.97)
+  spread_clamp: 100/200 (51.256 -> MAE=16.04)
+  spread_clamp: 150/200 (75.628 -> MAE=16.11)
+  spread_clamp: 200/200 (100.000 -> MAE=16.15)
+[24/25] Sweeping steals_penalty (-1.0 to 3.0)...
+  steals_penalty: 50/200 (-0.015 -> MAE=12.08)
+  steals_penalty: 100/200 (0.990 -> MAE=12.08)
+  steals_penalty: 150/200 (1.995 -> MAE=12.08)
+  steals_penalty: 200/200 (3.000 -> MAE=12.08)
+[25/25] Sweeping turnover_margin_mult (-5.0 to 10.0)...
+  turnover_margin_mult: 50/200 (-1.307 -> MAE=12.19)
+  turnover_margin_mult: 100/200 (2.462 -> MAE=12.12)
+  turnover_margin_mult: 150/200 (6.231 -> MAE=12.42)
+  turnover_margin_mult: 200/200 (10.000 -> MAE=12.57)
+Sensitivity analysis complete. Output: C:\Projects\new_nba\src\analytics\..\..\data\sensitivity
+================================================================================
+SENSITIVITY ANALYSIS SUMMARY
+================================================================================
+
+  blocks_penalty:
+    Current=0.1200 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -1.0000
+    Best Win=65.3% at -1.0000
+    Best Loss=20.5882 at 0.5477
+
+  clutch_scale:
+    Current=0.0740 (MAE=12.09, Win=64.3%)
+    Best MAE=12.07 at -0.0302
+    Best Win=65.4% at 0.0402
+    Best Loss=20.5770 at 0.0402 ** OUTSIDE OPT RANGE
+
+  def_factor_dampening:
+    Current=0.9000 (MAE=12.24, Win=61.6%)
+    Best MAE=12.01 at 1.9045
+    Best Win=65.5% at 3.1357
+    Best Loss=20.5999 at 1.3769 ** OUTSIDE OPT RANGE
+
+  espn_model_weight:
+    Current=0.8000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at 0.0000
+    Best Win=65.3% at 0.0000
+    Best Loss=20.5883 at 0.0000 ** OUTSIDE OPT RANGE
+
+  espn_weight:
+    Current=0.2000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at 0.0000
+    Best Win=65.3% at 0.0000
+    Best Loss=20.5883 at 0.0000
+
+  fatigue_3in4:
+    Current=1.0000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -5.0000
+    Best Win=65.3% at -5.0000
+    Best Loss=20.5883 at -5.0000
+
+  fatigue_4in6:
+    Current=1.5000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -5.0000
+    Best Win=65.3% at -5.0000
+    Best Loss=20.5883 at -5.0000
+
+  fatigue_b2b:
+    Current=2.0000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -5.0000
+    Best Win=65.3% at -5.0000
+    Best Loss=20.5883 at -5.0000
+
+  fatigue_total_mult:
+    Current=0.3000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -2.0000
+    Best Win=65.3% at -2.0000
+    Best Loss=20.5871 at 0.8492 ** OUTSIDE OPT RANGE
+
+  ff_efg_weight:
+    Current=0.4000 (MAE=12.11, Win=63.1%)
+    Best MAE=12.08 at 1.9749
+    Best Win=65.4% at 1.3769
+    Best Loss=20.5764 at 1.3769
+
+  ff_fta_weight:
+    Current=0.1500 (MAE=12.08, Win=64.0%)
+    Best MAE=12.08 at 0.2864
+    Best Win=65.3% at 0.5678
+    Best Loss=20.5882 at 0.5678
+
+  ff_oreb_weight:
+    Current=0.2000 (MAE=12.19, Win=63.1%)
+    Best MAE=12.05 at 1.7990
+    Best Win=65.2% at 1.2714
+    Best Loss=20.5971 at 1.3065
+
+  ff_tov_weight:
+    Current=0.2500 (MAE=12.08, Win=65.2%)
+    Best MAE=12.06 at 3.3467
+    Best Win=65.3% at 0.1809
+    Best Loss=20.5883 at 0.2161
+
+  four_factors_scale:
+    Current=180.0000 (MAE=12.07, Win=62.9%)
+    Best MAE=12.04 at 140.7035
+    Best Win=65.0% at 87.9397
+    Best Loss=20.6131 at 87.9397
+
+  hustle_effort_mult:
+    Current=0.0070 (MAE=12.08, Win=65.2%)
+    Best MAE=12.08 at -0.0653
+    Best Win=65.3% at 0.0402
+    Best Loss=20.5884 at 0.0402 ** OUTSIDE OPT RANGE
+
+  ml_disagree_damp:
+    Current=0.5000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at 0.0000
+    Best Win=65.3% at 0.0000
+    Best Loss=20.5883 at 0.0000
+
+  ml_ensemble_weight:
+    Current=0.3300 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -2.0000
+    Best Win=65.3% at -2.0000
+    Best Loss=20.5883 at -2.0000 ** OUTSIDE OPT RANGE
+
+  oreb_mult:
+    Current=0.2000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -2.0000
+    Best Win=65.3% at -2.0000
+    Best Loss=20.5881 at 0.0754
+
+  pace_baseline:
+    Current=98.0000 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at 85.0000
+    Best Win=65.3% at 85.0000
+    Best Loss=20.5883 at 85.0000
+
+  pace_mult:
+    Current=0.0800 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -5.0000
+    Best Win=65.3% at -5.0000
+    Best Loss=20.5925 at -0.1005 ** OUTSIDE OPT RANGE
+
+  rating_matchup_mult:
+    Current=0.4200 (MAE=12.08, Win=65.2%)
+    Best MAE=12.07 at 0.0251
+    Best Win=65.2% at 0.4020
+    Best Loss=20.6018 at 0.4020
+
+  rebound_diff_mult:
+    Current=0.0470 (MAE=12.08, Win=63.6%)
+    Best MAE=12.07 at -0.3266
+    Best Win=65.3% at -0.4020
+    Best Loss=20.5876 at -0.4020 ** OUTSIDE OPT RANGE
+
+  spread_clamp:
+    Current=25.0000 (MAE=14.69, Win=65.3%)
+    Best MAE=12.08 at 6.8995
+    Best Win=65.3% at 3.0000
+    Best Loss=20.5849 at 6.8995 ** OUTSIDE OPT RANGE
+
+  steals_penalty:
+    Current=0.1500 (MAE=12.08, Win=65.3%)
+    Best MAE=12.08 at -1.0000
+    Best Win=65.3% at -1.0000
+    Best Loss=20.5883 at 0.2462
+
+  turnover_margin_mult:
+    Current=0.5000 (MAE=12.09, Win=64.1%)
+    Best MAE=12.08 at 1.1055
+    Best Win=65.0% at 0.9548
+    Best Loss=20.6122 at 1.1055
+
