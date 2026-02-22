@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     category TEXT NOT NULL,
     severity TEXT NOT NULL,
     title TEXT NOT NULL,
-    body TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
     data TEXT DEFAULT '{}',
     created_at TEXT NOT NULL,
     read INTEGER NOT NULL DEFAULT 0
@@ -316,6 +316,7 @@ def init_db():
 def _run_column_migrations():
     """Add columns that may be missing in older databases."""
     _add_column_if_missing("injuries", "expected_return", "TEXT DEFAULT ''")
+    _rename_notifications_body_to_message()
     _fix_game_date_formats()
 
 
@@ -327,6 +328,21 @@ def _add_column_if_missing(table: str, column: str, col_type: str):
             execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:
         pass  # table may not exist yet
+
+
+def _rename_notifications_body_to_message():
+    """Migrate notifications table from 'body' column to 'message' column."""
+    try:
+        cols = fetch_all("PRAGMA table_info(notifications)")
+        col_names = [c["name"] for c in cols]
+        if "body" in col_names and "message" not in col_names:
+            execute("ALTER TABLE notifications RENAME COLUMN body TO message")
+            _log.info("Renamed notifications.body -> notifications.message")
+        elif "body" not in col_names and "message" not in col_names:
+            execute("ALTER TABLE notifications ADD COLUMN message TEXT NOT NULL DEFAULT ''")
+            _log.info("Added notifications.message column")
+    except Exception as e:
+        _log.debug("notifications migration skipped: %s", e)
 
 
 def _fix_game_date_formats():

@@ -1,9 +1,14 @@
 """WeightConfig dataclass — 30+ tunable prediction parameters."""
 
+import json
+import os
 from dataclasses import dataclass, fields, asdict
-from typing import Optional, Dict
+from datetime import datetime
+from typing import Optional, Dict, List
 
 from src.database import db
+
+_SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "snapshots")
 
 
 @dataclass
@@ -171,3 +176,103 @@ OPTIMIZER_RANGES = {
     "ml_ensemble_weight": (0.0, 0.5),
     "ml_disagree_damp": (0.3, 1.0),
 }
+
+
+# ──────────────────────────────────────────────────────────────
+# Pipeline Snapshots
+# ──────────────────────────────────────────────────────────────
+
+def save_snapshot(name: str, notes: str = "", metrics: Optional[Dict] = None) -> str:
+    """Save the current weight config + autotune + optimizer ranges to a named snapshot.
+
+    Returns the path to the snapshot file.
+    """
+    os.makedirs(_SNAPSHOTS_DIR, exist_ok=True)
+    w = get_weight_config()
+
+    # Gather autotune corrections
+    autotune = {}
+    try:
+        rows = db.fetch_all(
+            "SELECT t.abbreviation, tt.home_pts_correction, tt.away_pts_correction, tt.games_analyzed "
+            "FROM team_tuning tt JOIN teams t ON tt.team_id = t.team_id"
+        )
+        for r in rows:
+            autotune[r["abbreviation"]] = {
+                "home_corr": r["home_pts_correction"],
+                "away_corr": r["away_pts_correction"],
+                "games": r["games_analyzed"],
+            }
+    except Exception:
+        pass
+
+    snapshot = {
+        "name": name,
+        "created_at": datetime.now().isoformat(),
+        "notes": notes,
+        "weights": w.to_dict(),
+        "optimizer_ranges": {k: list(v) for k, v in OPTIMIZER_RANGES.items()},
+        "autotune": autotune,
+        "metrics": metrics or {},
+    }
+
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{ts}_{safe_name}.json"
+    path = os.path.join(_SNAPSHOTS_DIR, filename)
+    with open(path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+    return path
+
+
+def load_snapshot(path: str) -> Dict:
+    """Load a snapshot from a JSON file. Returns the parsed dict."""
+    with open(path) as f:
+        return json.load(f)
+
+
+def restore_snapshot(path: str):
+    """Restore weights and autotune corrections from a snapshot file."""
+    snap = load_snapshot(path)
+
+    # Restore global weights
+    w = WeightConfig.from_dict(snap["weights"])
+    save_weight_config(w)
+
+    # Restore autotune corrections
+    if snap.get("autotune"):
+        db.execute("DELETE FROM team_tuning")
+        for abbr, tune in snap["autotune"].items():
+            team = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (abbr,))
+            if team:
+                db.execute(
+                    "INSERT INTO team_tuning (team_id, home_pts_correction, away_pts_correction, "
+                    "games_analyzed, last_tuned_at, tuning_mode) VALUES (?, ?, ?, ?, datetime('now'), 'restored')",
+                    (team["team_id"], tune["home_corr"], tune["away_corr"], tune.get("games", 0))
+                )
+
+    invalidate_weight_cache()
+
+
+def list_snapshots() -> List[Dict]:
+    """List all available snapshots, newest first."""
+    if not os.path.isdir(_SNAPSHOTS_DIR):
+        return []
+    snaps = []
+    for f in sorted(os.listdir(_SNAPSHOTS_DIR), reverse=True):
+        if f.endswith(".json"):
+            try:
+                path = os.path.join(_SNAPSHOTS_DIR, f)
+                with open(path) as fh:
+                    data = json.load(fh)
+                snaps.append({
+                    "filename": f,
+                    "path": path,
+                    "name": data.get("name", f),
+                    "created_at": data.get("created_at", ""),
+                    "notes": data.get("notes", ""),
+                    "metrics": data.get("metrics", {}),
+                })
+            except Exception:
+                continue
+    return snaps

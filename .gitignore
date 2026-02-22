@@ -29,6 +29,8 @@ env/
 data/cache/
 data/backtest_cache/
 data/ml_models/
+data/sensitivity/
+data/snapshots/
 data/pipeline_state.json
 data/_analysis_output.txt
 
