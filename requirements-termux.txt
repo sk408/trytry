@@ -1,0 +1,16 @@
+fastapi==0.99.1
+uvicorn==0.30.6
+jinja2==3.1.4
+python-multipart==0.0.9
+pydantic>=1.10,<2.0
+nba_api==1.11.3
+requests==2.32.5
+beautifulsoup4==4.14.3
+pandas
+numpy
+matplotlib
+websocket-client
+tzdata
+# Note: optuna, shap, and xgboost are excluded for Termux compatibility
+# because they require heavy math compilation (like scipy) which fails on Android.
+# These libraries are lazily imported only during ML training and aren't needed to run the app.
