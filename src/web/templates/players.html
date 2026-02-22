@@ -20,9 +20,11 @@
         <table>
             <thead>
                 <tr>
+                    <th style="width:36px;"></th>
                     <th>Player</th>
                     <th>Team</th>
-                    <th>Status</th>
+                    <th>Impact</th>
+                    <th>Availability</th>
                     <th>Reason</th>
                     <th>PPG</th>
                     <th>MPG</th>
@@ -31,16 +33,24 @@
             <tbody>
                 {% for p in injured %}
                 <tr>
+                    <td style="width:36px;padding:4px;">
+                        <img src="/images/players/{{ p.player_id }}.png"
+                             style="width:28px;height:28px;border-radius:50%;object-fit:cover;"
+                             onerror="this.style.display='none'">
+                    </td>
                     <td class="font-bold">{{ p.player_name }}</td>
                     <td>{{ p.abbreviation }}</td>
                     <td>
-                        <span class="injury-tag injury-{{ p.injury_status|lower|replace(' ', '-') }}">
-                            {{ p.injury_status }}
+                        <span class="badge badge-{{ p.impact_color }}">{{ p.impact }}</span>
+                    </td>
+                    <td>
+                        <span class="badge badge-{{ p.availability_color }}">
+                            {{ p.availability_label }}
                         </span>
                     </td>
                     <td class="text-muted text-sm">{{ p.injury_reason or '' }}</td>
-                    <td>{{ '%.1f'|format(p.ppg or 0) }}</td>
-                    <td>{{ '%.1f'|format(p.mpg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.ppg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.mpg or 0) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -101,11 +111,12 @@
 
 <!-- All Players Table -->
 <div class="card">
-    <div class="card-header">All Players ({{ players|length }})</div>
+    <div class="card-header">All Players ({{ total_players }} total — Page {{ page }}/{{ total_pages }})</div>
     <div class="table-wrap">
         <table>
             <thead>
                 <tr>
+                    <th style="width:36px;"></th>
                     <th>Player</th>
                     <th>Team</th>
                     <th>Pos</th>
@@ -113,19 +124,28 @@
                     <th>RPG</th>
                     <th>APG</th>
                     <th>MPG</th>
+                    <th>Impact</th>
                     <th>Status</th>
                 </tr>
             </thead>
             <tbody>
-                {% for p in players[:300] %}
+                {% for p in players %}
                 <tr>
+                    <td style="width:36px;padding:4px;">
+                        <img src="/images/players/{{ p.player_id }}.png"
+                             style="width:28px;height:28px;border-radius:50%;object-fit:cover;"
+                             onerror="this.style.display='none'">
+                    </td>
                     <td class="font-bold">{{ p.player_name }}</td>
                     <td>{{ p.abbreviation }}</td>
                     <td>{{ p.position or '' }}</td>
-                    <td>{{ '%.1f'|format(p.ppg or 0) }}</td>
-                    <td>{{ '%.1f'|format(p.rpg or 0) }}</td>
-                    <td>{{ '%.1f'|format(p.apg or 0) }}</td>
-                    <td>{{ '%.1f'|format(p.mpg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.ppg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.rpg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.apg or 0) }}</td>
+                    <td class="font-mono">{{ '%.1f'|format(p.mpg or 0) }}</td>
+                    <td>
+                        <span class="badge badge-{{ p.impact_color }}">{{ p.impact }}</span>
+                    </td>
                     <td>
                         {% if p.injury_status %}
                         <span class="injury-tag injury-{{ p.injury_status|lower|replace(' ', '-') }}">
@@ -138,6 +158,30 @@
             </tbody>
         </table>
     </div>
+
+    <!-- Pagination -->
+    {% if total_pages > 1 %}
+    <div class="flex items-center justify-between mt-3" style="flex-wrap:wrap;gap:0.5rem;">
+        <div class="btn-group">
+            {% if page > 1 %}
+            <a href="/players?page={{ page - 1 }}" class="btn btn-outline btn-sm">&laquo; Prev</a>
+            {% endif %}
+            {% for p_num in range(1, total_pages + 1) %}
+                {% if p_num == page %}
+                <span class="btn btn-primary btn-sm">{{ p_num }}</span>
+                {% elif (p_num - page)|abs <= 2 or p_num == 1 or p_num == total_pages %}
+                <a href="/players?page={{ p_num }}" class="btn btn-outline btn-sm">{{ p_num }}</a>
+                {% elif (p_num - page)|abs == 3 %}
+                <span class="btn btn-sm text-muted">...</span>
+                {% endif %}
+            {% endfor %}
+            {% if page < total_pages %}
+            <a href="/players?page={{ page + 1 }}" class="btn btn-outline btn-sm">Next &raquo;</a>
+            {% endif %}
+        </div>
+        <span class="text-sm text-muted">{{ total_players }} players</span>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}
 
@@ -145,7 +189,6 @@
 <script>
 function filterPlayers(query) {
     const q = query.toLowerCase();
-    // Filter all tables (injured + all players)
     document.querySelectorAll('table tbody tr').forEach(function(row) {
         const text = row.textContent.toLowerCase();
         row.style.display = text.includes(q) ? '' : 'none';

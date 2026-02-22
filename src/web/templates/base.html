@@ -22,6 +22,19 @@
             <li><a href="/players" {% if active == 'players' %}class="active"{% endif %}>Players</a></li>
             <li><a href="/matchups" {% if active == 'matchups' %}class="active"{% endif %}>Matchups</a></li>
             <li><a href="/schedule" {% if active == 'schedule' %}class="active"{% endif %}>Schedule</a></li>
+            <li><a href="/allstar" {% if active == 'allstar' %}class="active"{% endif %}>All-Star</a></li>
+            <li style="position:relative;">
+                <a href="#" onclick="toggleNotifications(event)" style="position:relative;">
+                    🔔<span id="notifBadge" class="notif-badge" style="display:none;position:absolute;top:-4px;right:-8px;">0</span>
+                </a>
+                <div id="notifPanel" style="display:none;position:absolute;right:0;top:100%;width:320px;max-height:400px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px var(--shadow);z-index:1001;padding:0;">
+                    <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                        <span class="font-bold text-sm">Notifications</span>
+                        <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:0.7rem;" onclick="markAllRead()">Mark all read</button>
+                    </div>
+                    <div id="notifList" style="padding:0.5rem;"><div class="text-muted text-sm" style="padding:0.5rem;">Loading...</div></div>
+                </div>
+            </li>
         </ul>
     </nav>
 
@@ -33,6 +46,77 @@
         function toggleNav() {
             document.getElementById('navLinks').classList.toggle('show');
         }
+
+        // ---- Notifications ----
+        let notifOpen = false;
+        function toggleNotifications(e) {
+            e.preventDefault();
+            notifOpen = !notifOpen;
+            const panel = document.getElementById('notifPanel');
+            panel.style.display = notifOpen ? 'block' : 'none';
+            if (notifOpen) loadNotifications();
+        }
+
+        function loadNotifications() {
+            fetch('/api/notifications?limit=20')
+                .then(r => r.json())
+                .then(notifs => {
+                    const list = document.getElementById('notifList');
+                    if (!notifs || notifs.length === 0) {
+                        list.innerHTML = '<div class="text-muted text-sm" style="padding:0.75rem;">No notifications</div>';
+                        return;
+                    }
+                    list.innerHTML = notifs.map(function(n) {
+                        const sevColor = n.severity === 'critical' ? 'var(--danger)' :
+                                         n.severity === 'warning' ? 'var(--warning)' : 'var(--accent)';
+                        const readStyle = n.read ? 'opacity:0.6;' : '';
+                        return '<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);' + readStyle + '">' +
+                            '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+                            '<span style="width:6px;height:6px;border-radius:50%;background:' + sevColor + ';flex-shrink:0;"></span>' +
+                            '<span class="font-bold text-sm" style="flex:1;">' + (n.title || '') + '</span>' +
+                            '</div>' +
+                            '<div class="text-xs text-muted" style="margin-top:2px;padding-left:14px;">' + (n.message || '') + '</div>' +
+                            '<div class="text-xs text-muted" style="padding-left:14px;">' + (n.created_at || '') + '</div>' +
+                        '</div>';
+                    }).join('');
+                })
+                .catch(function() {});
+        }
+
+        function markAllRead() {
+            fetch('/api/notifications/read-all', {method:'POST'}).then(function() {
+                document.getElementById('notifBadge').style.display = 'none';
+                loadNotifications();
+            });
+        }
+
+        function pollNotifCount() {
+            fetch('/api/notifications/unread')
+                .then(r => r.json())
+                .then(d => {
+                    const badge = document.getElementById('notifBadge');
+                    if (d.count > 0) {
+                        badge.textContent = d.count > 99 ? '99+' : d.count;
+                        badge.style.display = 'inline-flex';
+                    } else {
+                        badge.style.display = 'none';
+                    }
+                })
+                .catch(function() {});
+        }
+
+        // Close notification panel when clicking outside
+        document.addEventListener('click', function(e) {
+            const panel = document.getElementById('notifPanel');
+            if (notifOpen && panel && !panel.contains(e.target) && !e.target.closest('a[onclick*="toggleNotifications"]')) {
+                notifOpen = false;
+                panel.style.display = 'none';
+            }
+        });
+
+        // Poll for unread notifications every 60s
+        pollNotifCount();
+        setInterval(pollNotifCount, 60000);
 
         // SSE helper
         function startSSE(url, logEl, onResult) {

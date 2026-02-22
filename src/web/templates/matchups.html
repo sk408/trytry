@@ -6,11 +6,28 @@
 <h1 class="section-header">Matchup Prediction</h1>
 
 <div class="card mb-4">
-    <form method="get" action="/matchups">
+    <!-- Game Picker -->
+    {% if upcoming_games %}
+    <div class="form-group mb-3">
+        <label>Quick Pick — Upcoming Game</label>
+        <select id="gamePicker" onchange="pickGame(this.value)"
+                style="width:100%;padding:0.625rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;">
+            <option value="">— Select a game —</option>
+            {% for g in upcoming_games %}
+            <option value="{{ g.get('away_team_id','') }}_{{ g.get('home_team_id','') }}">
+                {{ g.get('game_date','') }} {{ g.get('game_time','') }} — {{ g.get('away_team','???') }} @ {{ g.get('home_team','???') }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <hr style="border-color:var(--border);margin:1rem 0;">
+    {% endif %}
+
+    <form method="get" action="/matchups" id="matchupForm">
         <div class="team-select">
             <div class="form-group">
                 <label>Home Team</label>
-                <select name="home_team" required>
+                <select name="home_team" id="homeSelect" required>
                     <option value="">Select...</option>
                     {% for t in teams %}
                     <option value="{{ t.team_id }}" {% if home_team == t.team_id %}selected{% endif %}>
@@ -22,7 +39,7 @@
             <div class="vs-label">VS</div>
             <div class="form-group">
                 <label>Away Team</label>
-                <select name="away_team" required>
+                <select name="away_team" id="awaySelect" required>
                     <option value="">Select...</option>
                     {% for t in teams %}
                     <option value="{{ t.team_id }}" {% if away_team == t.team_id %}selected{% endif %}>
@@ -32,7 +49,10 @@
                 </select>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">Predict</button>
+        <button type="submit" class="btn btn-primary" id="predictBtn">
+            <span id="predictText">Predict</span>
+            <span id="predictSpinner" class="spinner" style="display:none;"></span>
+        </button>
     </form>
 </div>
 
@@ -85,10 +105,62 @@
     </div>
     {% endif %}
 
-    <!-- Injury Impact -->
+    <!-- Player Rosters -->
+    {% for side_label, side_key in [('Away', 'away'), ('Home', 'home')] %}
+    {% set roster = rosters.get(side_key, []) %}
+    {% if roster %}
+    <div class="card mb-4 fade-in">
+        <div class="card-header">{{ side_label }} Roster ({{ roster|length }})</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Pos</th>
+                        <th>PPG</th>
+                        <th>MPG</th>
+                        <th>Impact</th>
+                        <th>Status</th>
+                        <th>Reason</th>
+                        <th>Est. Impact</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in roster %}
+                    <tr {% if p.injury_status %}style="background:rgba(239,68,68,0.04);"{% endif %}>
+                        <td class="font-bold">{{ p.player_name }}</td>
+                        <td>{{ p.position or '' }}</td>
+                        <td class="font-mono text-center">{{ '%.1f'|format(p.ppg or 0) }}</td>
+                        <td class="font-mono text-center">{{ '%.1f'|format(p.mpg or 0) }}</td>
+                        <td>
+                            <span class="badge badge-{{ p.impact_color }}">{{ p.impact }}</span>
+                        </td>
+                        <td>
+                            {% if p.injury_status %}
+                            <span class="injury-tag injury-{{ p.injury_status|lower|replace(' ', '-') }}">
+                                {{ p.injury_status }}
+                            </span>
+                            {% else %}
+                            <span class="text-success text-xs">Active</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-muted text-sm">{{ p.injury_reason or '' }}</td>
+                        <td class="font-mono text-sm {% if p.injury_impact and 'pts' in p.injury_impact %}text-danger{% endif %}">
+                            {{ p.injury_impact }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <!-- Injury Impact Summary -->
     {% if prediction.get('injuries') %}
     <div class="card mb-4">
-        <div class="card-header">Injury Impact</div>
+        <div class="card-header">Injury Impact Summary</div>
         {% for side in ['home', 'away'] %}
         {% set injuries = prediction['injuries'].get(side, []) %}
         {% if injuries %}
@@ -113,4 +185,33 @@
 
     {% endif %}
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function pickGame(val) {
+    if (!val) return;
+    const parts = val.split('_');
+    if (parts.length === 2) {
+        document.getElementById('awaySelect').value = parts[0];
+        document.getElementById('homeSelect').value = parts[1];
+        document.getElementById('matchupForm').submit();
+        showLoading();
+    }
+}
+
+// Loading indicator
+document.getElementById('matchupForm').addEventListener('submit', function() {
+    showLoading();
+});
+
+function showLoading() {
+    const btn = document.getElementById('predictBtn');
+    const text = document.getElementById('predictText');
+    const spinner = document.getElementById('predictSpinner');
+    if (btn) btn.disabled = true;
+    if (text) text.textContent = 'Predicting...';
+    if (spinner) spinner.style.display = 'inline-block';
+}
+</script>
 {% endblock %}

@@ -162,11 +162,65 @@ async def live_page(request: Request):
     except Exception:
         pass
 
-    # Enrich live games with ESPN IDs
+    # Enrich live games with ESPN IDs and recommendations
     for g in games:
         away = g.get("away_team", "")
         home = g.get("home_team", "")
         g["espn_id"] = espn_lookup.get((away, home), "")
+
+        # Generate recommendations for in-progress games
+        g["spread"] = ""
+        g["over_under"] = ""
+        g["recommendation"] = ""
+        g["rec_confidence"] = ""
+        if g.get("status") == "In Progress" and g.get("home_team_id") and g.get("away_team_id"):
+            try:
+                from src.analytics.live_recommendations import get_live_recommendations
+                period = int(g.get("period", 0) or 0)
+                clock_str = g.get("clock", "12:00")
+                mins_el = 0.0
+                try:
+                    parts = clock_str.split(":")
+                    mins_left = int(parts[0]) if parts else 0
+                    secs_left = int(parts[1]) if len(parts) > 1 else 0
+                    period_len = 12 * 60 if period <= 4 else 5 * 60
+                    mins_el = ((period - 1) * 12.0 if period <= 4
+                               else 48.0 + (period - 5) * 5.0)
+                    elapsed_in_q = period_len - (mins_left * 60 + secs_left)
+                    mins_el += max(0, elapsed_in_q) / 60.0
+                except Exception:
+                    mins_el = min(period, 4) * 12.0
+
+                recs = get_live_recommendations(
+                    home_team_id=g["home_team_id"],
+                    away_team_id=g["away_team_id"],
+                    home_score=float(g.get("home_score", 0) or 0),
+                    away_score=float(g.get("away_score", 0) or 0),
+                    minutes_elapsed=mins_el,
+                    quarter=min(max(0, period - 1), 4),
+                )
+                pred = recs.get("prediction", {})
+                g["spread"] = f"{pred.get('spread', 0):+.1f}" if pred.get("spread") else ""
+                g["over_under"] = f"{pred.get('total', 0):.1f}" if pred.get("total") else ""
+                rec_list = recs.get("recommendations", [])
+                if rec_list:
+                    texts = []
+                    for r in rec_list[:2]:
+                        side = r.get("side", "")
+                        rtype = r.get("type", "")
+                        edge = r.get("edge", 0)
+                        if rtype == "spread":
+                            texts.append(f"{side} {edge:+.1f}pts")
+                        elif rtype == "total":
+                            texts.append(f"{side} {edge:.1f}pts")
+                        elif rtype == "moneyline":
+                            texts.append(f"ML {side} {edge:.0f}%")
+                        else:
+                            texts.append(r.get("reasoning", side))
+                    g["recommendation"] = "; ".join(texts)
+                    g["rec_confidence"] = rec_list[0].get("confidence", "") if rec_list else ""
+            except Exception:
+                pass
 
     return templates.TemplateResponse("live.html", {
         "request": request,
@@ -175,21 +229,128 @@ async def live_page(request: Request):
 
 
 @app.get("/players", response_class=HTMLResponse)
-async def players_page(request: Request):
-    players = db.fetch_all("""
-        SELECT p.*, t.abbreviation, i.status as injury_status, i.reason as injury_reason
+async def players_page(request: Request, page: int = Query(1, ge=1)):
+    import re
+    from datetime import datetime
+
+    def _days_until_return(expected_return: str):
+        if not expected_return or len(expected_return) < 4:
+            return None
+        try:
+            now = datetime.now()
+            m = re.match(r"([A-Za-z]+)\s+(\d+)", expected_return)
+            if m:
+                month_str, day_str = m.group(1), m.group(2)
+                for fmt in ("%b %d %Y", "%B %d %Y"):
+                    for year in (now.year, now.year + 1):
+                        try:
+                            dt = datetime.strptime(f"{month_str} {day_str} {year}", fmt)
+                            delta = (dt - now).days
+                            if delta >= -30:
+                                return max(0, delta)
+                        except ValueError:
+                            continue
+        except Exception:
+            pass
+        return None
+
+    def _estimate_play_probability(status, expected_return, detail):
+        low_status = (status or "").lower()
+        low_detail = (detail or "").lower()
+        season_ending = any(kw in low_detail for kw in (
+            "season-ending", "remainder of the", "rest of the 2025",
+            "rest of the 2026", "torn acl", "torn achilles",
+            "indefinitely", "suspended",
+        ))
+        if expected_return and expected_return.strip().lower().startswith("oct"):
+            season_ending = True
+        if season_ending:
+            return (0.0, "OUT FOR SEASON", "danger")
+        if "surgery" in low_detail and "successful" not in low_detail:
+            return (0.0, "OUT (surgery)", "danger")
+        return_days = _days_until_return(expected_return or "")
+        if low_status in ("out", "o"):
+            if return_days is not None:
+                if return_days <= 0:
+                    return (0.15, "OUT (back soon)", "warning")
+                elif return_days <= 3:
+                    return (0.10, f"OUT ~{return_days}d", "danger")
+                elif return_days <= 14:
+                    return (0.02, f"OUT ~{return_days}d", "danger")
+                else:
+                    wks = return_days // 7
+                    return (0.0, f"OUT ~{wks}wk", "danger")
+            return (0.0, "OUT", "danger")
+        if low_status == "doubtful":
+            return (0.15, "DOUBTFUL 15%", "danger")
+        if low_status in ("questionable", "gtd"):
+            return (0.50, "QUESTIONABLE 50%", "warning")
+        if low_status == "day-to-day":
+            if return_days is not None and return_days <= 1:
+                return (0.65, "DAY-TO-DAY 65%", "warning")
+            return (0.55, "DAY-TO-DAY 55%", "warning")
+        if low_status == "probable":
+            return (0.85, "PROBABLE 85%", "success")
+        return (0.25, (status or "").upper(), "muted")
+
+    players_raw = db.fetch_all("""
+        SELECT p.*, t.abbreviation,
+               i.status as injury_status, i.reason as injury_reason,
+               i.expected_return as injury_return
         FROM players p
         LEFT JOIN teams t ON p.team_id = t.team_id
         LEFT JOIN injuries i ON p.player_id = i.player_id
         ORDER BY p.name
     """)
-    injured = [dict(p) for p in players if p.get("injury_status")]
+    all_players = []
+    injured = []
+    for p in players_raw:
+        pdict = dict(p)
+        mpg = pdict.get("mpg", 0) or 0
+        ppg = pdict.get("ppg", 0) or 0
+        # Impact classification
+        if mpg >= 25:
+            pdict["impact"] = "KEY"
+            pdict["impact_color"] = "danger"
+        elif mpg >= 15:
+            pdict["impact"] = "ROTATION"
+            pdict["impact_color"] = "warning"
+        else:
+            pdict["impact"] = "BENCH"
+            pdict["impact_color"] = "muted"
+        # Play probability for injured
+        if pdict.get("injury_status"):
+            prob, label, color = _estimate_play_probability(
+                pdict.get("injury_status", ""),
+                pdict.get("injury_return", ""),
+                pdict.get("injury_reason", ""),
+            )
+            pdict["play_probability"] = prob
+            pdict["availability_label"] = label
+            pdict["availability_color"] = color
+            injured.append(pdict)
+        all_players.append(pdict)
+
+    # Sort injured by MPG descending (highest impact first)
+    injured.sort(key=lambda x: x.get("mpg", 0) or 0, reverse=True)
+
+    # Pagination
+    per_page = 100
+    total_players = len(all_players)
+    total_pages = max(1, (total_players + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    start = (page - 1) * per_page
+    paginated = all_players[start:start + per_page]
+
     manual = db.fetch_all("SELECT * FROM injuries WHERE source = 'manual'")
     return templates.TemplateResponse("players.html", {
         "request": request,
-        "players": [dict(p) for p in players],
+        "players": paginated,
         "injured": injured,
         "manual_injuries": [dict(m) for m in manual],
+        "page": page,
+        "total_pages": total_pages,
+        "total_players": total_players,
     })
 
 
@@ -214,22 +375,31 @@ async def remove_manual_injury(player_id: int = Form(...)):
 
 
 @app.get("/schedule", response_class=HTMLResponse)
-async def schedule_page(request: Request):
+async def schedule_page(request: Request,
+                        start_date: Optional[str] = None,
+                        days: int = Query(14, ge=1, le=60)):
     from src.data.nba_fetcher import fetch_nba_cdn_schedule
     from datetime import datetime, timedelta
     today = datetime.now().strftime("%Y-%m-%d")
-    end = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+    start = start_date if start_date else today
+    try:
+        end_dt = datetime.strptime(start, "%Y-%m-%d") + timedelta(days=days)
+        end = end_dt.strftime("%Y-%m-%d")
+    except Exception:
+        end = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
     try:
         schedule = fetch_nba_cdn_schedule()
         if schedule:
             schedule = [g for g in schedule
-                       if today <= g.get("game_date", "") <= end]
+                       if start <= g.get("game_date", "") <= end]
     except Exception:
         schedule = []
     return templates.TemplateResponse("schedule.html", {
         "request": request,
         "schedule": schedule,
         "today": today,
+        "start_date": start,
+        "days": days,
     })
 
 
@@ -239,6 +409,22 @@ async def matchups_page(request: Request,
                          away_team: Optional[int] = None):
     teams = db.fetch_all("SELECT team_id, abbreviation, name FROM teams ORDER BY abbreviation")
     prediction = None
+    rosters = {"home": [], "away": []}
+
+    # Load upcoming games for game picker
+    upcoming_games = []
+    try:
+        from src.data.nba_fetcher import fetch_nba_cdn_schedule
+        from datetime import datetime, timedelta
+        today = datetime.now().strftime("%Y-%m-%d")
+        end = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+        sched = fetch_nba_cdn_schedule()
+        if sched:
+            upcoming_games = [g for g in sched
+                             if today <= g.get("game_date", "") <= end]
+    except Exception:
+        pass
+
     if home_team and away_team:
         try:
             from datetime import datetime
@@ -248,12 +434,68 @@ async def matchups_page(request: Request,
             prediction = pred.__dict__
         except Exception as e:
             prediction = {"error": str(e)}
+
+        # Load rosters with injury info and stats
+        for side, tid in [("home", home_team), ("away", away_team)]:
+            try:
+                players = db.fetch_all("""
+                    SELECT p.player_id, p.name as player_name, p.position,
+                           t.abbreviation,
+                           i.status as injury_status, i.reason as injury_reason,
+                           COALESCE((SELECT AVG(ps.points) FROM player_stats ps
+                                     WHERE ps.player_id = p.player_id
+                                     ORDER BY ps.game_date DESC LIMIT 15), 0) as ppg,
+                           COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
+                                     WHERE ps.player_id = p.player_id
+                                     ORDER BY ps.game_date DESC LIMIT 10), 0) as mpg
+                    FROM players p
+                    LEFT JOIN teams t ON p.team_id = t.team_id
+                    LEFT JOIN injuries i ON p.player_id = i.player_id
+                    WHERE p.team_id = ?
+                    ORDER BY COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
+                                       WHERE ps.player_id = p.player_id
+                                       ORDER BY ps.game_date DESC LIMIT 10), 0) DESC
+                """, (tid,))
+                roster_list = []
+                for pl in players:
+                    pdict = dict(pl)
+                    mpg = pdict.get("mpg", 0) or 0
+                    ppg = pdict.get("ppg", 0) or 0
+                    # Impact classification
+                    if mpg >= 25:
+                        pdict["impact"] = "KEY"
+                        pdict["impact_color"] = "danger"
+                    elif mpg >= 15:
+                        pdict["impact"] = "ROTATION"
+                        pdict["impact_color"] = "warning"
+                    else:
+                        pdict["impact"] = "BENCH"
+                        pdict["impact_color"] = "muted"
+                    # Injury impact estimate
+                    pdict["injury_impact"] = ""
+                    if pdict.get("injury_status"):
+                        status_lower = (pdict["injury_status"] or "").lower()
+                        if status_lower in ("out", "o"):
+                            pdict["injury_impact"] = f"-{ppg:.1f} pts"
+                        elif status_lower == "doubtful":
+                            pdict["injury_impact"] = f"~-{ppg*0.8:.1f} pts"
+                        elif status_lower in ("questionable", "gtd", "day-to-day"):
+                            pdict["injury_impact"] = f"~-{ppg*0.4:.1f} pts"
+                        elif status_lower == "probable":
+                            pdict["injury_impact"] = "Likely plays"
+                    roster_list.append(pdict)
+                rosters[side] = roster_list
+            except Exception:
+                pass
+
     return templates.TemplateResponse("matchups.html", {
         "request": request,
         "teams": [dict(t) for t in teams],
         "home_team": home_team,
         "away_team": away_team,
         "prediction": prediction,
+        "rosters": rosters,
+        "upcoming_games": upcoming_games,
     })
 
 
@@ -318,11 +560,13 @@ async def gamecast_page(request: Request, game_id: Optional[str] = None):
 # ======== SSE STREAMING ENDPOINTS ========
 
 @app.get("/api/sync/data")
-async def sse_sync_data():
+async def sse_sync_data(force: bool = False):
     _sync_cancel.clear()
     from src.data.sync_service import full_sync
+    from functools import partial
+    fn = partial(full_sync, force=force) if force else full_sync
     return StreamingResponse(
-        _sse_generator(full_sync, _sync_cancel),
+        _sse_generator(fn, _sync_cancel),
         media_type="text/event-stream",
     )
 
@@ -754,6 +998,8 @@ async def sse_gamecast_stream(game_id: str):
                                     "home_score": item.get("homeScore", ""),
                                     "away_score": item.get("awayScore", ""),
                                     "team_id": team_id,
+                                    "coordinate": item.get("coordinate"),
+                                    "shootingPlay": item.get("shootingPlay", False),
                                 })
 
                 # Parse box score into simple format
@@ -886,9 +1132,64 @@ async def gamecast_boxscore(game_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ======== Notification API ========
+
+@app.get("/api/notifications")
+async def get_notifications(limit: int = 30):
+    try:
+        from src.notifications.service import get_recent
+        notifs = get_recent(limit=limit)
+        return JSONResponse(notifs)
+    except Exception:
+        return JSONResponse([])
+
+
+@app.get("/api/notifications/unread")
+async def get_unread_count():
+    try:
+        from src.notifications.service import get_unread_count
+        count = get_unread_count()
+        return JSONResponse({"count": count})
+    except Exception:
+        return JSONResponse({"count": 0})
+
+
+@app.post("/api/notifications/read/{notification_id}")
+async def mark_notification_read(notification_id: int):
+    from src.notifications.service import mark_read
+    mark_read(notification_id)
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/notifications/read-all")
+async def mark_all_notifications_read():
+    from src.notifications.service import mark_all_read
+    mark_all_read()
+    return JSONResponse({"status": "ok"})
+
+
+# ======== Team Colors API ========
+
+@app.get("/api/team-colors")
+async def team_colors_api():
+    try:
+        from src.ui.widgets.nba_colors import TEAM_COLORS
+        return JSONResponse({str(k): v for k, v in TEAM_COLORS.items()})
+    except Exception:
+        return JSONResponse({})
+
+
 # ======== Startup ========
 
 @app.on_event("startup")
 async def startup():
     init_db()
+    # Start injury monitor for notifications
+    try:
+        from src.notifications.injury_monitor import get_injury_monitor
+        monitor = get_injury_monitor()
+        monitor.start()
+        logger.info("Injury monitor started")
+    except Exception as e:
+        logger.warning(f"Injury monitor failed to start: {e}")
     logger.info("NBA Prediction System started")

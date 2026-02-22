@@ -77,6 +77,14 @@
         </div>
     </div>
 
+    <!-- Court Visualization -->
+    <div class="card mt-4">
+        <div class="card-header">Shot Chart</div>
+        <div style="position:relative;width:100%;max-width:500px;margin:0 auto;">
+            <canvas id="courtCanvas" width="500" height="470" style="width:100%;background:#1a2744;border-radius:8px;"></canvas>
+        </div>
+    </div>
+
     <!-- Play-by-Play -->
     <div class="card mt-4">
         <div class="card-header">Play-by-Play</div>
@@ -122,11 +130,13 @@ function selectGame(gameId) {
             if (data.error) return;
             currentSummary = data.summary;
             updateScoreboard(data.summary);
+            applyTeamColors(data.summary);
             updateWinProb(data.prediction, data.summary);
             updatePrediction(data.prediction, data.summary);
             updateOdds(data.odds);
             updateBoxScore(data.boxscore, data.summary);
             updatePlays(data.plays, data.summary);
+            updateCourt(data.plays);
         } catch(err) { console.error(err); }
     };
 }
@@ -297,6 +307,143 @@ function updatePlays(plays, s) {
         '</div>';
     }).join('');
 }
+
+// ---- Team Colors ----
+const TEAM_COLORS = {
+    1610612737:["#E03A3E","#C1D32F"],1610612738:["#007A33","#BA9653"],1610612739:["#860038","#041E42"],
+    1610612740:["#0C2340","#C8102E"],1610612741:["#CE1141","#000000"],1610612742:["#00538C","#002B5E"],
+    1610612743:["#0E2240","#FEC524"],1610612744:["#1D428A","#FFC72C"],1610612745:["#CE1141","#000000"],
+    1610612746:["#C8102E","#1D428A"],1610612747:["#552583","#FDB927"],1610612748:["#98002E","#F9A01B"],
+    1610612749:["#00471B","#EEE1C6"],1610612750:["#0C2340","#236192"],1610612751:["#000000","#FFFFFF"],
+    1610612752:["#006BB6","#F58426"],1610612753:["#0077C0","#000000"],1610612754:["#002D62","#FDBB30"],
+    1610612755:["#006BB6","#ED174C"],1610612756:["#1D1160","#E56020"],1610612757:["#E03A3E","#000000"],
+    1610612758:["#5A2D81","#63727A"],1610612759:["#C4CED4","#000000"],1610612760:["#007AC1","#EF6100"],
+    1610612761:["#CE1141","#000000"],1610612762:["#002B5C","#00471B"],1610612763:["#5D76A9","#12173F"],
+    1610612764:["#002B5C","#E31837"],1610612765:["#C8102E","#1D42BA"],1610612766:["#1D1160","#00788C"],
+};
+
+function applyTeamColors(s) {
+    if (!s) return;
+    const hc = TEAM_COLORS[s.home_team_id] || ["#3b82f6","#1e293b"];
+    const ac = TEAM_COLORS[s.away_team_id] || ["#ef4444","#1e293b"];
+    document.getElementById('wpBarHome').style.background = hc[0];
+    document.getElementById('wpBarAway').style.background = ac[0];
+    document.getElementById('homeScore').style.color = hc[0];
+    document.getElementById('awayScore').style.color = ac[0];
+    document.documentElement.style.setProperty('--team-home', hc[0]);
+    document.documentElement.style.setProperty('--team-away', ac[0]);
+}
+
+// ---- Court Visualization ----
+const COURT_W = 50, COURT_H = 47, HOOP_X = 25, HOOP_Y = 5.25;
+let courtShots = [];
+
+function drawCourt() {
+    const canvas = document.getElementById('courtCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const margin = 10;
+    const cw = W - 2*margin, ch = H - 2*margin;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1a2744';
+    ctx.fillRect(0, 0, W, H);
+
+    function cx(x) { return margin + (x / COURT_W) * cw; }
+    function cy(y) { return margin + (y / COURT_H) * ch; }
+
+    ctx.strokeStyle = '#ffffff40';
+    ctx.lineWidth = 1.5;
+
+    // Court outline
+    ctx.beginPath();
+    ctx.rect(cx(0), cy(0), cw, ch);
+    ctx.stroke();
+
+    // Paint / key (16ft wide)
+    const keyL = cx(17), keyR = cx(33), keyTop = cy(0), keyBot = cy(19);
+    ctx.beginPath();
+    ctx.rect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
+    ctx.stroke();
+
+    // Free throw circle
+    ctx.beginPath();
+    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Hoop
+    ctx.beginPath();
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), 3, 0, Math.PI*2);
+    ctx.strokeStyle = '#ff6b35';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Backboard
+    ctx.beginPath();
+    ctx.moveTo(cx(22), cy(4));
+    ctx.lineTo(cx(28), cy(4));
+    ctx.strokeStyle = '#ffffff60';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Three-point arc
+    ctx.beginPath();
+    ctx.strokeStyle = '#ffffff40';
+    ctx.lineWidth = 1.5;
+    // Corner 3s (14ft straight lines from baseline at x=3 and x=47)
+    ctx.moveTo(cx(3), cy(0));
+    ctx.lineTo(cx(3), cy(14));
+    // Arc from (3,14) around hoop (25,5.25) radius 23.75
+    const r3 = 23.75;
+    const startAng = Math.atan2(14 - HOOP_Y, 3 - HOOP_X);
+    const endAng = Math.atan2(14 - HOOP_Y, 47 - HOOP_X);
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (r3/COURT_W)*cw, startAng, endAng);
+    ctx.lineTo(cx(47), cy(0));
+    ctx.stroke();
+
+    // Restricted area arc
+    ctx.beginPath();
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (4/COURT_W)*cw, Math.PI, 0);
+    ctx.stroke();
+
+    // Draw shots
+    courtShots.forEach(function(shot) {
+        const sx = cx(shot.x), sy = cy(shot.y);
+        if (shot.made) {
+            ctx.beginPath();
+            ctx.arc(sx, sy, 4, 0, Math.PI*2);
+            ctx.fillStyle = 'rgba(34,197,94,0.8)';
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(sx-3, sy-3); ctx.lineTo(sx+3, sy+3);
+            ctx.moveTo(sx+3, sy-3); ctx.lineTo(sx-3, sy+3);
+            ctx.strokeStyle = 'rgba(239,68,68,0.7)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+    });
+}
+
+function updateCourt(plays) {
+    if (!plays) return;
+    const newShots = [];
+    plays.forEach(function(p) {
+        if (p.coordinate && typeof p.coordinate.x === 'number' && typeof p.coordinate.y === 'number') {
+            if (Math.abs(p.coordinate.x) < 200 && Math.abs(p.coordinate.y) < 200) {
+                newShots.push({ x: p.coordinate.x, y: p.coordinate.y, made: !!p.scoring, team_id: p.team_id });
+            }
+        }
+    });
+    if (newShots.length > 0) {
+        courtShots = newShots.slice(-30);
+        drawCourt();
+    }
+}
+
+// Initial court draw
+setTimeout(drawCourt, 100);
 
 loadGames();
 </script>

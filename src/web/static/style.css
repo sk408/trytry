@@ -363,6 +363,15 @@ textarea:focus {
     font-weight: 600;
 }
 
+.log-success {
+    color: var(--success);
+    font-weight: 500;
+}
+
+.log-progress {
+    color: var(--accent);
+}
+
 /* ---- Prediction Cards ---- */
 .prediction-card {
     background: var(--bg-card);

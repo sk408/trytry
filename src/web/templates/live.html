@@ -6,6 +6,15 @@
 <h1 class="section-header">Live Games</h1>
 
 {% if games %}
+<div class="flex items-center justify-between mb-3" style="flex-wrap:wrap;gap:0.5rem;">
+    <span class="text-sm text-muted" id="lastRefresh"></span>
+    <label class="flex items-center gap-2" style="cursor:pointer;">
+        <input type="checkbox" id="autoRefreshToggle" checked
+               style="accent-color:var(--accent);width:16px;height:16px;">
+        <span class="text-sm">Auto-refresh (30s)</span>
+    </label>
+</div>
+
 <div class="table-wrap">
     <table>
         <thead>
@@ -17,7 +26,9 @@
                 <th>Home</th>
                 <th></th>
                 <th>Clock</th>
-                <th>Period</th>
+                <th>Spread</th>
+                <th>O/U</th>
+                <th>Recommendation</th>
                 <th></th>
             </tr>
         </thead>
@@ -32,7 +43,7 @@
                     {% elif g.status == 'Final' %}
                         <span class="badge badge-primary">FINAL</span>
                     {% else %}
-                        <span class="badge badge-info">{{ g.status }}</span>
+                        <span class="badge badge-info game-time" data-time="{{ g.get('start_time', '') }}">{{ g.status }}</span>
                     {% endif %}
                 </td>
                 <td style="width:24px;padding:4px;">
@@ -50,8 +61,24 @@
                     <img src="/images/logos/{{ g.home_team_id }}.png" style="width:22px;height:22px;" onerror="this.style.display='none'">
                     {% endif %}
                 </td>
-                <td class="font-mono text-muted">{{ g.get('clock', '') }}</td>
-                <td class="text-muted">{{ g.get('period', '') }}</td>
+                <td class="font-mono text-muted">
+                    {% if g.status == 'In Progress' %}
+                        Q{{ g.get('period', '') }} {{ g.get('clock', '') }}
+                    {% endif %}
+                </td>
+                <td class="font-mono text-center {% if g.spread %}font-bold{% endif %}">
+                    {{ g.get('spread', '') }}
+                </td>
+                <td class="font-mono text-center">
+                    {{ g.get('over_under', '') }}
+                </td>
+                <td class="text-sm">
+                    {% if g.recommendation %}
+                    <span class="{% if g.rec_confidence == 'high' %}text-success font-bold{% elif g.rec_confidence == 'medium' %}text-warning{% else %}text-muted{% endif %}">
+                        {{ g.recommendation }}
+                    </span>
+                    {% endif %}
+                </td>
                 <td>
                     {% if g.get('espn_id') %}
                     <a href="/gamecast?game_id={{ g.espn_id }}" class="btn btn-outline btn-sm" onclick="event.stopPropagation();">Gamecast</a>
@@ -72,7 +99,64 @@
 
 {% block scripts %}
 <script>
-// Auto-refresh every 30 seconds using fetch instead of full reload
-let refreshTimer = setTimeout(function() { location.reload(); }, 30000);
+// Auto-refresh with toggle
+let refreshTimer = null;
+const toggle = document.getElementById('autoRefreshToggle');
+
+function scheduleRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    if (toggle && toggle.checked) {
+        refreshTimer = setTimeout(function() {
+            fetch(window.location.href)
+                .then(r => r.text())
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    const newTable = doc.querySelector('.table-wrap');
+                    const oldTable = document.querySelector('.table-wrap');
+                    if (newTable && oldTable) {
+                        oldTable.innerHTML = newTable.innerHTML;
+                        convertETtimes();
+                    }
+                    scheduleRefresh();
+                })
+                .catch(function() { scheduleRefresh(); });
+        }, 30000);
+    }
+}
+
+if (toggle) {
+    toggle.addEventListener('change', function() {
+        if (this.checked) {
+            scheduleRefresh();
+        } else {
+            if (refreshTimer) clearTimeout(refreshTimer);
+        }
+    });
+}
+
+// ET → Local time conversion
+function convertETtimes() {
+    document.querySelectorAll('.game-time').forEach(function(el) {
+        const utc = el.getAttribute('data-time');
+        if (utc) {
+            try {
+                const d = new Date(utc);
+                if (!isNaN(d.getTime())) {
+                    el.textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                }
+            } catch(e) {}
+        }
+    });
+}
+
+// Show last refresh time
+const refreshEl = document.getElementById('lastRefresh');
+if (refreshEl) {
+    refreshEl.textContent = 'Updated ' + new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit', second:'2-digit'});
+}
+
+convertETtimes();
+scheduleRefresh();
 </script>
 {% endblock %}

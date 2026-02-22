@@ -28,6 +28,7 @@
     <div class="card-header">Data Sync</div>
     <div class="btn-group mb-3">
         <button class="btn btn-primary" onclick="runSync('/api/sync/data')">Full Sync</button>
+        <button class="btn btn-warning" onclick="runSync('/api/sync/data?force=true')" title="Bypass freshness checks">Force Sync</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/injuries')">Injuries</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/injury-history')">Injury History</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/team-metrics')">Team Metrics</button>
@@ -41,28 +42,80 @@
 <div class="card">
     <div class="card-header">Pipeline</div>
     <div class="btn-group mb-3">
-        <button class="btn btn-success" onclick="runSync('/api/full-pipeline')">Run Full Pipeline</button>
+        <button class="btn btn-success" onclick="runPipeline()">Run Full Pipeline</button>
         <button class="btn btn-danger btn-sm" onclick="cancelPipeline()">Stop</button>
     </div>
+    <div class="log-output" id="pipelineLog" style="display:none;"></div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 let currentES = null;
+let pipelineES = null;
+
+function classifyMsg(msg) {
+    const lower = msg.toLowerCase();
+    if (lower.includes('error') || lower.startsWith('err')) return 'log-error';
+    if (lower.includes('warning') || lower.includes('warn')) return 'log-warn';
+    if (lower.includes('success') || lower.includes('complete') || lower.includes('✓') || lower.includes('done')) return 'log-success';
+    if (lower.includes('syncing') || lower.includes('fetching') || lower.includes('loading') || lower.includes('processing')) return 'log-progress';
+    return 'log-line';
+}
+
+function startStyledSSE(url, logEl, onResult) {
+    const es = new EventSource(url);
+    es.onmessage = function(e) {
+        if (e.data === '[DONE]') {
+            es.close();
+            if (logEl) logEl.innerHTML += '<div class="log-done">✓ Done</div>';
+            return;
+        }
+        if (e.data === '[CANCELLED]') {
+            es.close();
+            if (logEl) logEl.innerHTML += '<div class="log-warn">⚠ Cancelled</div>';
+            return;
+        }
+        if (e.data.startsWith('[RESULTS_JSON]')) {
+            const json = JSON.parse(e.data.substring(14));
+            if (onResult) onResult(json);
+            return;
+        }
+        if (logEl) {
+            const cls = classifyMsg(e.data);
+            logEl.innerHTML += '<div class="' + cls + '">' + e.data + '</div>';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+    };
+    es.onerror = function() {
+        es.close();
+        if (logEl) logEl.innerHTML += '<div class="log-error">Connection lost</div>';
+    };
+    return es;
+}
+
 function runSync(url) {
     if (currentES) currentES.close();
     const log = document.getElementById('syncLog');
     log.innerHTML = '';
-    currentES = startSSE(url, log);
+    currentES = startStyledSSE(url, log);
 }
+
+function runPipeline() {
+    if (pipelineES) pipelineES.close();
+    const log = document.getElementById('pipelineLog');
+    log.style.display = 'block';
+    log.innerHTML = '';
+    pipelineES = startStyledSSE('/api/full-pipeline', log);
+}
+
 function cancelSync() {
     fetch('/api/sync/cancel', {method: 'POST'});
     if (currentES) currentES.close();
 }
 function cancelPipeline() {
     fetch('/api/pipeline/cancel', {method: 'POST'});
-    if (currentES) currentES.close();
+    if (pipelineES) pipelineES.close();
 }
 </script>
 {% endblock %}

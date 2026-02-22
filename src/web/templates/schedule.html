@@ -5,6 +5,28 @@
 {% block content %}
 <h1 class="section-header">NBA Schedule</h1>
 
+<!-- Date Range Picker -->
+<div class="card mb-4" style="padding:0.75rem 1.25rem;">
+    <form method="get" action="/schedule" class="flex items-center gap-3" style="flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;">
+            <label class="text-xs text-muted">From</label>
+            <input type="date" name="start_date" value="{{ start_date }}"
+                   style="padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;">
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label class="text-xs text-muted">Days</label>
+            <select name="days"
+                    style="padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;">
+                <option value="7" {% if days == 7 %}selected{% endif %}>7 days</option>
+                <option value="14" {% if days == 14 %}selected{% endif %}>14 days</option>
+                <option value="30" {% if days == 30 %}selected{% endif %}>30 days</option>
+                <option value="60" {% if days == 60 %}selected{% endif %}>60 days</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-outline btn-sm" style="align-self:flex-end;">Apply</button>
+    </form>
+</div>
+
 {% if schedule %}
 {% set ns = namespace(current_date='') %}
 {% for g in schedule %}
@@ -43,7 +65,7 @@
 {% else %}
 <div class="empty-state">
     <div class="icon">📅</div>
-    <p>No scheduled games. Sync data to load the schedule.</p>
+    <p>No scheduled games for this date range. Sync data or adjust the date range.</p>
 </div>
 {% endif %}
 {% endblock %}
