@@ -160,20 +160,20 @@ class NotificationPanel(QFrame):
         fl.setSpacing(2)
 
         # Severity indicator + title
-        severity = getattr(notification, "severity", "info")
+        severity = notification.get("severity", "info")
         if isinstance(severity, str):
             sev_name = severity
         else:
             sev_name = severity.value if hasattr(severity, "value") else str(severity)
 
         color = _SEVERITY_COLORS.get(sev_name, _SEVERITY_COLORS["info"])
-        title = getattr(notification, "title", "")
+        title = notification.get("title", "")
         title_label = QLabel(f"● {title}")
         title_label.setStyleSheet(f"color: {color.name()}; font-weight: 600; font-size: 12px;")
         fl.addWidget(title_label)
 
         # Message
-        message = getattr(notification, "message", "")
+        message = notification.get("message", "")
         if message:
             msg_label = QLabel(message)
             msg_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
@@ -181,7 +181,7 @@ class NotificationPanel(QFrame):
             fl.addWidget(msg_label)
 
         # Timestamp
-        ts = getattr(notification, "created_at", "")
+        ts = notification.get("created_at", "")
         if ts:
             ts_label = QLabel(str(ts))
             ts_label.setStyleSheet("color: #475569; font-size: 10px;")

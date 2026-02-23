@@ -120,6 +120,24 @@ def start_injury_worker(on_progress=None, on_done=None):
     return _start_worker(InjuryWorker(), on_progress, on_done)
 
 
+class OddsSyncWorker(BaseWorker):
+    """Runs odds backfill."""
+    def run(self):
+        try:
+            from src.data.odds_sync import backfill_odds
+            cb = lambda msg: self.progress.emit(msg)
+            self.progress.emit("Syncing historical odds...")
+            count = backfill_odds(callback=cb)
+            self.progress.emit(f"Odds sync complete. Saved odds for {count} games.")
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
+
+def start_odds_sync_worker(on_progress=None, on_done=None):
+    return _start_worker(OddsSyncWorker(), on_progress, on_done)
+
+
 # ---------------------------------------------------------------------------
 # Accuracy / Analysis workers
 # ---------------------------------------------------------------------------

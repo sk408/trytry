@@ -16,7 +16,7 @@ from src.ui.workers import (
     start_fft_worker, start_combo_worker,
     start_continuous_worker, start_pipeline_worker,
     start_ml_feature_worker, start_grouped_feature_worker,
-    start_diagnostic_csv_worker,
+    start_diagnostic_csv_worker, start_odds_sync_worker,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ class AccuracyView(QWidget):
             ("Team Refinement", self._on_team_refine),
             ("FFT Analysis", self._on_fft),
             ("Full Pipeline", self._on_pipeline),
+            ("Sync Odds", self._on_sync_odds),
         ]
         for text, handler in actions2:
             btn = QPushButton(text)
@@ -364,6 +365,10 @@ class AccuracyView(QWidget):
         self._current_worker = start_pipeline_worker(
             self._append_log, self._on_results, self._on_done
         )
+
+    def _on_sync_odds(self):
+        self.log.clear()
+        self._current_worker = start_odds_sync_worker(self._append_log, self._on_done)
 
     def _on_diagnostic_csv(self):
         self.log.clear()
