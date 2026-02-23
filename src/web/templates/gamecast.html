@@ -3,97 +3,422 @@
 {% block title %}Gamecast — NBA Predictor{% endblock %}
 
 {% block content %}
-<h1 class="section-header">Gamecast</h1>
+<h1 class="page-title">Gamecast</h1>
 
-<div class="card mb-4">
+<!-- Game Selector -->
+<div class="card mb-4" id="game-selector">
     <div class="card-header">Select Game</div>
-    <div id="gameList" class="btn-group">Loading games...</div>
+    <div id="gameList" class="btn-group" style="padding: 12px; display: flex; flex-wrap: wrap; gap: 8px;">Loading games...</div>
 </div>
 
 <div id="gameDetail" class="hidden">
-    <!-- Scoreboard with quarter scores -->
-    <div class="scoreboard mb-4" id="scoreboard">
-        <div class="team">
-            <img id="awayLogo" src="" alt="" style="width:48px;height:48px;display:none;">
-            <div class="name" id="awayTeam">Away</div>
-            <div class="score" id="awayScore">0</div>
-        </div>
-        <div style="text-align:center;">
-            <div id="statusText" class="text-muted text-sm" style="margin-bottom:4px;"></div>
-            <div id="quarterScores" style="font-size:0.75rem;color:var(--text-muted);"></div>
-        </div>
-        <div class="team">
-            <img id="homeLogo" src="" alt="" style="width:48px;height:48px;display:none;">
-            <div class="name" id="homeTeam">Home</div>
-            <div class="score" id="homeScore">0</div>
-        </div>
-    </div>
-
-    <!-- Win Probability Bar -->
-    <div class="card mb-4" id="winProbCard" style="padding:0.75rem 1.25rem;">
-        <div style="display:flex;justify-content:space-between;font-size:0.75rem;margin-bottom:4px;">
-            <span id="wpAway" class="font-bold">50%</span>
-            <span class="text-muted">WIN PROBABILITY</span>
-            <span id="wpHome" class="font-bold">50%</span>
-        </div>
-        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--bg-input);">
-            <div id="wpBarAway" style="width:50%;background:var(--danger);transition:width 0.5s;"></div>
-            <div id="wpBarHome" style="width:50%;background:var(--accent);transition:width 0.5s;"></div>
-        </div>
-    </div>
-
-    <!-- Prediction + Odds -->
-    <div class="grid-2">
-        <div class="card">
-            <div class="card-header">Model Prediction</div>
-            <div id="predictionInfo">
-                <div class="text-muted text-sm">Waiting for data...</div>
+    <!-- Live Score -->
+    <div class="card" id="score-card">
+        <div class="score-display">
+            <div class="score-team">
+                <img id="awayLogo" src="" width="48" height="48" class="team-logo-lg" alt="" onerror="this.style.display='none'">
+                <span class="team-name" id="awayTeamName">Away Name</span>
+                <span class="team-abbr" id="awayTeam">Away</span>
+                <span class="team-score" id="awayScore">0</span>
+            </div>
+            <div class="score-status">
+                <div id="statusBadge" class="live-badge" style="display:none;">LIVE</div>
+                <div id="finalBadge" class="final-badge" style="display:none;">FINAL</div>
+                <span id="period" style="font-weight:bold;margin-top:4px;"></span>
+                <span id="clock" style="font-size:1.2rem;"></span>
+            </div>
+            <div class="score-team">
+                <img id="homeLogo" src="" width="48" height="48" class="team-logo-lg" alt="" onerror="this.style.display='none'">
+                <span class="team-name" id="homeTeamName">Home Name</span>
+                <span class="team-abbr" id="homeTeam">Home</span>
+                <span class="team-score" id="homeScore">0</span>
             </div>
         </div>
+        <div class="quarter-scores" id="quarterScores" style="text-align:center;font-size:0.8rem;color:var(--text-muted);margin-bottom:12px;"></div>
+    </div>
+
+    <!-- Live Odds & Prediction (Grid) -->
+    <div class="grid-2">
+        <!-- Prediction -->
         <div class="card">
-            <div class="card-header">Vegas Odds</div>
-            <div id="oddsInfo">Loading...</div>
+            <h2>Model Prediction</h2>
+            
+            <!-- Win Probability -->
+            <div class="win-prob-container mt-2 mb-4">
+                <div class="win-prob-labels">
+                    <span><span id="awayLabelWp">AWAY</span> <span id="wpAway">50%</span></span>
+                    <span><span id="wpHome">50%</span> <span id="homeLabelWp">HOME</span></span>
+                </div>
+                <div class="win-prob-bar">
+                    <div class="win-prob-away" id="wpBarAway" style="width: 50%"></div>
+                    <div class="win-prob-home" id="wpBarHome" style="width: 50%"></div>
+                </div>
+            </div>
+
+            <div id="predictionInfo" class="pred-summary">
+                <div class="text-muted text-sm" style="grid-column: 1 / -1;">Waiting for prediction...</div>
+            </div>
+        </div>
+
+        <!-- Vegas Odds -->
+        <div class="card">
+            <h2>Vegas Odds</h2>
+            <div id="oddsInfo" class="odds-grid mt-2">
+                <div class="text-muted text-sm" style="grid-column: 1 / -1;">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Play-by-Play & Court Visualization -->
+    <div class="grid-2 mt-4">
+        <div class="card">
+            <h2>Shot Chart</h2>
+            <div style="position:relative;width:100%;max-width:500px;margin:0 auto;">
+                <canvas id="courtCanvas" width="500" height="470" style="width:100%;background:#1a2744;border-radius:8px;"></canvas>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Play-by-Play</h2>
+            <div class="play-feed" id="plays"></div>
         </div>
     </div>
 
     <!-- Box Score -->
     <div class="card mt-4">
-        <div class="card-header">Box Score</div>
-        <div class="tabs" id="boxTabs">
-            <div class="tab active" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></div>
-            <div class="tab" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></div>
+        <h2>Box Score</h2>
+        <div class="tabs" id="boxTabs" style="margin-bottom: 12px; display:flex; gap: 8px;">
+            <button class="btn btn-primary" id="btnBoxAway" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></button>
+            <button class="btn btn-outline" id="btnBoxHome" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></button>
         </div>
-        <div id="boxAway" class="tab-content active">
-            <div class="table-wrap"><table id="boxAwayTable">
+        <div id="boxAway" class="tab-content active scroll-x">
+            <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
                 <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
                 <tbody></tbody>
-            </table></div>
+            </table>
         </div>
-        <div id="boxHome" class="tab-content">
-            <div class="table-wrap"><table id="boxHomeTable">
+        <div id="boxHome" class="tab-content" style="display:none;" class="scroll-x">
+            <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
                 <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
                 <tbody></tbody>
-            </table></div>
+            </table>
         </div>
-    </div>
-
-    <!-- Court Visualization -->
-    <div class="card mt-4">
-        <div class="card-header">Shot Chart</div>
-        <div style="position:relative;width:100%;max-width:500px;margin:0 auto;">
-            <canvas id="courtCanvas" width="500" height="470" style="width:100%;background:#1a2744;border-radius:8px;"></canvas>
-        </div>
-    </div>
-
-    <!-- Play-by-Play -->
-    <div class="card mt-4">
-        <div class="card-header">Play-by-Play</div>
-        <div class="play-by-play" id="plays"></div>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<style>
+/* Score Display */
+.score-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0;
+}
+
+.score-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.team-name {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.team-abbr {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.team-score {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.score-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+}
+
+.live-badge {
+  background: var(--danger);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  animation: pulse 2s infinite;
+}
+
+.final-badge {
+  background: var(--border);
+  color: var(--text);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Win Probability */
+.win-prob-container {
+  margin-bottom: 20px;
+}
+
+.win-prob-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.win-prob-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-dark);
+}
+
+.win-prob-away {
+  background: var(--danger);
+  transition: width 0.5s ease;
+}
+
+.win-prob-home {
+  background: var(--accent);
+  transition: width 0.5s ease;
+}
+
+/* Odds Grid */
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.odds-item {
+  background: var(--bg-dark);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.odds-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.odds-value {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.odds-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Prediction Summary */
+.pred-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pred-item {
+  background: var(--bg-dark);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+
+.pred-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.pred-value {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+/* Play Feed */
+.play-feed {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.play-item {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.3s;
+}
+
+.play-item:last-child {
+  border-bottom: none;
+}
+
+.play-item.new {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.play-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.play-period {
+  font-weight: 700;
+}
+
+.play-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.play-team-badge {
+  display: inline-block;
+  flex-shrink: 0;
+  min-width: 38px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 3px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  background: var(--bg-dark);
+  color: var(--text-muted);
+}
+.play-team-badge.badge-home {
+  background: rgba(59, 130, 246, 0.18);
+  color: #3b82f6;
+}
+.play-team-badge.badge-away {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+}
+
+.play-text {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  flex: 1;
+}
+
+.play-score {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Team-colored play borders */
+.play-item.play-home {
+  border-left: 3px solid var(--accent);
+}
+.play-item.play-away {
+  border-left: 3px solid var(--danger);
+}
+.play-item.scoring {
+  border-left: 3px solid var(--success);
+}
+.play-item.scoring.play-home {
+  border-left: 3px solid var(--success);
+}
+.play-item.scoring.play-away {
+  border-left: 3px solid var(--success);
+}
+.play-item.foul-play {
+  background: rgba(231, 76, 60, 0.06);
+}
+
+/* Foul tags */
+.foul-tag {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(231, 76, 60, 0.15);
+  color: var(--danger);
+  letter-spacing: 0.3px;
+}
+.foul-tag.foul-shooting {
+  background: rgba(241, 196, 15, 0.2);
+  color: #f39c12;
+}
+.foul-tag.foul-flagrant {
+  background: rgba(231, 76, 60, 0.25);
+  color: #e74c3c;
+  font-weight: 800;
+}
+.foul-tag.foul-technical {
+  background: rgba(155, 89, 182, 0.2);
+  color: #9b59b6;
+}
+.foul-tag.foul-offensive {
+  background: rgba(149, 165, 166, 0.2);
+  color: var(--text-muted);
+}
+
+/* Box Score Table */
+.box-table {
+  font-size: 0.85rem;
+}
+
+.box-table th {
+  font-size: 0.75rem;
+  padding: 8px 6px;
+  color: var(--text-muted);
+}
+
+.box-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Desktop */
+@media (min-width: 768px) {
+  .team-score {
+    font-size: 3.5rem;
+  }
+  .team-name {
+    font-size: 0.875rem;
+  }
+}
+</style>
+
 <script>
 let gameES = null;
 let currentSummary = null;
@@ -145,15 +470,32 @@ function updateScoreboard(s) {
     if (!s) return;
     document.getElementById('homeTeam').textContent = s.home_team || 'Home';
     document.getElementById('awayTeam').textContent = s.away_team || 'Away';
+    document.getElementById('homeTeamName').textContent = s.home_team || '';
+    document.getElementById('awayTeamName').textContent = s.away_team || '';
     document.getElementById('homeScore').textContent = s.home_score || '0';
     document.getElementById('awayScore').textContent = s.away_score || '0';
     document.getElementById('boxAwayLabel').textContent = s.away_team;
     document.getElementById('boxHomeLabel').textContent = s.home_team;
+    document.getElementById('awayLabelWp').textContent = s.away_team;
+    document.getElementById('homeLabelWp').textContent = s.home_team;
 
-    // Status
-    let st = s.status || '';
-    if (s.status_state === 'in') st = 'Q' + s.period + ' ' + s.clock;
-    document.getElementById('statusText').textContent = st;
+    const st = s.status_state;
+    if (st === 'in') {
+        document.getElementById('statusBadge').style.display = 'inline-block';
+        document.getElementById('finalBadge').style.display = 'none';
+        document.getElementById('period').textContent = 'Q' + s.period;
+        document.getElementById('clock').textContent = s.clock;
+    } else if (st === 'post') {
+        document.getElementById('statusBadge').style.display = 'none';
+        document.getElementById('finalBadge').style.display = 'inline-block';
+        document.getElementById('period').textContent = '';
+        document.getElementById('clock').textContent = '';
+    } else {
+        document.getElementById('statusBadge').style.display = 'none';
+        document.getElementById('finalBadge').style.display = 'none';
+        document.getElementById('period').textContent = s.status || '';
+        document.getElementById('clock').textContent = s.clock || '';
+    }
 
     // Logos
     if (s.home_team_id) {
@@ -174,14 +516,14 @@ function updateScoreboard(s) {
     const aq = s.away_quarters || [];
     if (hq.length > 0) {
         let headers = hq.map(function(_, i) { return i < 4 ? 'Q' + (i+1) : 'OT' + (i-3); }).join('</th><th>');
-        let html = '<table style="width:auto;margin:0 auto;font-size:0.7rem;">' +
+        let html = '<table style="width:auto;margin:0 auto;font-size:0.8rem;">' +
             '<tr><th></th><th>' + headers + '</th><th>T</th></tr>' +
-            '<tr><td class="font-bold" style="padding:2px 8px;">' + s.away_team + '</td>' +
-            aq.map(function(q) { return '<td style="padding:2px 6px;text-align:center;">' + q + '</td>'; }).join('') +
-            '<td class="font-bold" style="padding:2px 8px;">' + s.away_score + '</td></tr>' +
-            '<tr><td class="font-bold" style="padding:2px 8px;">' + s.home_team + '</td>' +
-            hq.map(function(q) { return '<td style="padding:2px 6px;text-align:center;">' + q + '</td>'; }).join('') +
-            '<td class="font-bold" style="padding:2px 8px;">' + s.home_score + '</td></tr>' +
+            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.away_team + '</td>' +
+            aq.map(function(q) { return '<td style="padding:4px 8px;text-align:center;">' + q + '</td>'; }).join('') +
+            '<td class="font-bold" style="padding:4px 8px;">' + s.away_score + '</td></tr>' +
+            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.home_team + '</td>' +
+            hq.map(function(q) { return '<td style="padding:4px 8px;text-align:center;">' + q + '</td>'; }).join('') +
+            '<td class="font-bold" style="padding:4px 8px;">' + s.home_score + '</td></tr>' +
             '</table>';
         document.getElementById('quarterScores').innerHTML = html;
     }
@@ -191,8 +533,8 @@ function updateWinProb(pred, s) {
     let homeWP = 50;
     if (pred && pred.home_win_prob != null) homeWP = pred.home_win_prob;
     const awayWP = Math.round(100 - homeWP);
-    document.getElementById('wpHome').textContent = (s ? s.home_team + ' ' : '') + Math.round(homeWP) + '%';
-    document.getElementById('wpAway').textContent = (s ? s.away_team + ' ' : '') + awayWP + '%';
+    document.getElementById('wpHome').textContent = Math.round(homeWP) + '%';
+    document.getElementById('wpAway').textContent = awayWP + '%';
     document.getElementById('wpBarHome').style.width = homeWP + '%';
     document.getElementById('wpBarAway').style.width = awayWP + '%';
 }
@@ -200,55 +542,72 @@ function updateWinProb(pred, s) {
 function updatePrediction(pred, s) {
     const el = document.getElementById('predictionInfo');
     if (!pred) {
-        el.innerHTML = '<div class="text-muted text-sm">No prediction available</div>';
+        el.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1;">No prediction available</div>';
         return;
     }
     const sp = pred.spread || 0;
     const spSign = sp > 0 ? '+' : '';
-    el.innerHTML =
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">' +
-        '<div class="stat-card" style="padding:0.75rem;">' +
-            '<div class="stat-value" style="font-size:1.5rem;color:var(--success);">' + spSign + sp.toFixed(1) + '</div>' +
-            '<div class="stat-label">Spread</div>' +
-        '</div>' +
-        '<div class="stat-card" style="padding:0.75rem;">' +
-            '<div class="stat-value" style="font-size:1.5rem;">' + (pred.total || 0).toFixed(1) + '</div>' +
-            '<div class="stat-label">Total</div>' +
-        '</div>' +
-        '<div class="stat-card" style="padding:0.75rem;">' +
-            '<div class="stat-value" style="font-size:1.25rem;">' + (pred.away_score || 0).toFixed(1) + '</div>' +
-            '<div class="stat-label">' + (s ? s.away_team : 'Away') + '</div>' +
-        '</div>' +
-        '<div class="stat-card" style="padding:0.75rem;">' +
-            '<div class="stat-value" style="font-size:1.25rem;">' + (pred.home_score || 0).toFixed(1) + '</div>' +
-            '<div class="stat-label">' + (s ? s.home_team : 'Home') + '</div>' +
-        '</div>' +
-        '</div>';
+    const hAbbr = s ? s.home_team : 'Home';
+    const aAbbr = s ? s.away_team : 'Away';
+    
+    el.innerHTML = `
+        <div class="pred-item">
+            <span class="pred-label">Spread</span>
+            <span class="pred-value text-success">${hAbbr} ${spSign}${sp.toFixed(1)}</span>
+        </div>
+        <div class="pred-item">
+            <span class="pred-label">Total</span>
+            <span class="pred-value">${(pred.total || 0).toFixed(1)}</span>
+        </div>
+        <div class="pred-item">
+            <span class="pred-label">Proj ${aAbbr}</span>
+            <span class="pred-value">${(pred.away_score || 0).toFixed(1)}</span>
+        </div>
+        <div class="pred-item">
+            <span class="pred-label">Proj ${hAbbr}</span>
+            <span class="pred-value">${(pred.home_score || 0).toFixed(1)}</span>
+        </div>
+    `;
 }
 
 function updateOdds(odds) {
-    if (!odds) return;
     const el = document.getElementById('oddsInfo');
-    let html = '';
-    if (odds.spread != null) html += '<p>Spread: <span class="font-bold">' + odds.spread + '</span></p>';
-    if (odds.over_under != null) html += '<p>O/U: <span class="font-bold">' + odds.over_under + '</span></p>';
-    if (odds.home_moneyline != null) html += '<p>Home ML: <span class="font-mono">' + odds.home_moneyline + '</span></p>';
-    if (odds.away_moneyline != null) html += '<p>Away ML: <span class="font-mono">' + odds.away_moneyline + '</span></p>';
-    if (odds.provider) html += '<p class="text-xs text-muted">' + odds.provider + '</p>';
-    if (!html) html = '<span class="text-muted">No odds available</span>';
-    el.innerHTML = html;
+    if (!odds || (!odds.spread && !odds.away_moneyline && !odds.home_moneyline)) {
+        el.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1;">No odds available</div>';
+        return;
+    }
+    el.innerHTML = `
+        <div class="odds-item">
+            <span class="odds-label">Spread</span>
+            <span class="odds-value">${odds.spread || 'N/A'}</span>
+        </div>
+        <div class="odds-item">
+            <span class="odds-label">Over/Under</span>
+            <span class="odds-value">${odds.over_under || 'N/A'}</span>
+        </div>
+        <div class="odds-item">
+            <span class="odds-label">Away ML</span>
+            <span class="odds-value">${odds.away_moneyline || 'N/A'}</span>
+        </div>
+        <div class="odds-item">
+            <span class="odds-label">Home ML</span>
+            <span class="odds-value">${odds.home_moneyline || 'N/A'}</span>
+        </div>
+        ${odds.provider ? `<div class="text-xs text-muted" style="grid-column: 1 / -1; text-align: right; margin-top: 8px;">Via ${odds.provider}</div>` : ''}
+    `;
 }
 
 function switchBoxTab(side) {
-    document.querySelectorAll('#boxTabs .tab').forEach(function(t) { t.classList.remove('active'); });
-    document.getElementById('boxAway').classList.remove('active');
-    document.getElementById('boxHome').classList.remove('active');
     if (side === 'home') {
-        document.querySelectorAll('#boxTabs .tab')[1].classList.add('active');
-        document.getElementById('boxHome').classList.add('active');
+        document.getElementById('btnBoxHome').className = 'btn btn-primary';
+        document.getElementById('btnBoxAway').className = 'btn btn-outline';
+        document.getElementById('boxHome').style.display = 'block';
+        document.getElementById('boxAway').style.display = 'none';
     } else {
-        document.querySelectorAll('#boxTabs .tab')[0].classList.add('active');
-        document.getElementById('boxAway').classList.add('active');
+        document.getElementById('btnBoxAway').className = 'btn btn-primary';
+        document.getElementById('btnBoxHome').className = 'btn btn-outline';
+        document.getElementById('boxAway').style.display = 'block';
+        document.getElementById('boxHome').style.display = 'none';
     }
 }
 
@@ -285,26 +644,51 @@ function updatePlays(plays, s) {
     if (!plays) return;
     const el = document.getElementById('plays');
     const homeTid = s ? s.home_team_id : null;
+    const homeAbbr = s ? s.home_team : null;
+    const awayAbbr = s ? s.away_team : null;
+    
     // Show newest first
     const reversed = plays.slice().reverse();
     el.innerHTML = reversed.map(function(p) {
-        let borderColor = 'transparent';
-        let bg = '';
-        let logoHtml = '';
-        if (p.team_id) {
-            logoHtml = '<img src="/images/logos/' + p.team_id + '.png" style="width:18px;height:18px;border-radius:50%;" onerror="this.style.display=\'none\'">';
-            borderColor = p.team_id === homeTid ? 'var(--accent)' : 'var(--danger)';
-        }
-        if (p.scoring) bg = 'background:rgba(34,197,94,0.06);';
+        const isHome = p.team_id === homeTid;
+        const isAway = p.team_id && p.team_id !== homeTid;
+        
+        let playClass = 'play-item';
+        if (isHome) playClass += ' play-home';
+        else if (isAway) playClass += ' play-away';
+        
+        if (p.scoring) playClass += ' scoring';
+        if (p.text && p.text.toLowerCase().includes('foul')) playClass += ' foul-play';
+        
+        const badgeClass = 'play-team-badge' + (isHome ? ' badge-home' : (isAway ? ' badge-away' : ''));
+        const teamAbbr = isHome ? homeAbbr : (isAway ? awayAbbr : '');
+        
         const perLabel = p.period <= 4 ? 'Q' + p.period : 'OT' + (p.period - 4);
-        const scoreText = (p.away_score || p.home_score) ?
-            '<span class="font-mono text-xs" style="min-width:40px;text-align:right;">' + p.away_score + '-' + p.home_score + '</span>' : '';
-        return '<div class="play-item" style="border-left:3px solid ' + borderColor + ';' + bg + 'align-items:center;">' +
-            '<span style="min-width:18px;">' + logoHtml + '</span>' +
-            '<span class="time" style="min-width:60px;">' + perLabel + ' ' + (p.clock || '') + '</span>' +
-            '<span style="flex:1;' + (p.scoring ? 'font-weight:600;color:var(--success);' : '') + '">' + (p.text || '') + '</span>' +
-            scoreText +
-        '</div>';
+        
+        let foulTag = '';
+        if (p.text && p.text.toLowerCase().includes('foul')) {
+            const txt = p.text.toLowerCase();
+            if (txt.includes('shooting')) foulTag = '<span class="foul-tag foul-shooting">FTs</span>';
+            else if (txt.includes('flagrant')) foulTag = '<span class="foul-tag foul-flagrant">FLAGRANT</span>';
+            else if (txt.includes('technical')) foulTag = '<span class="foul-tag foul-technical">TECH</span>';
+            else if (txt.includes('offensive')) foulTag = '<span class="foul-tag foul-offensive">OFF</span>';
+            else foulTag = '<span class="foul-tag">FOUL</span>';
+        }
+        
+        return `
+            <div class="${playClass}">
+                <div class="play-meta">
+                    <span class="play-period">${perLabel}</span>
+                    <span class="play-clock">${p.clock || ''}</span>
+                    ${foulTag}
+                </div>
+                <div class="play-body">
+                    ${teamAbbr ? `<span class="${badgeClass}">${teamAbbr}</span>` : ''}
+                    <span class="play-text" style="${p.scoring ? 'font-weight:600;color:var(--text);' : ''}">${p.text || ''}</span>
+                </div>
+                ${(p.away_score || p.home_score) ? `<div class="play-score">${awayAbbr || 'AWAY'} ${p.away_score} - ${p.home_score} ${homeAbbr || 'HOME'}</div>` : ''}
+            </div>
+        `;
     }).join('');
 }
 
