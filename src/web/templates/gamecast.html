@@ -6,9 +6,14 @@
 <h1 class="page-title">Gamecast</h1>
 
 <!-- Game Selector -->
-<div class="card mb-4" id="game-selector">
-    <div class="card-header">Select Game</div>
-    <div id="gameList" class="btn-group" style="padding: 12px; display: flex; flex-wrap: wrap; gap: 8px;">Loading games...</div>
+<div class="card mb-4 game-selector" id="game-selector">
+    <h2 class="game-selector-toggle" onclick="toggleGameSelector()" style="margin:0; padding:16px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+        <span>Select Game</span>
+        <span class="toggle-icon" id="gameSelectorIcon">&#9660;</span>
+    </h2>
+    <div id="gameList" class="games-list" style="display:flex; flex-direction:column; padding:0 16px 16px 16px; gap:8px;">
+        <div style="padding:12px;text-align:center;color:var(--text-muted);">Loading games...</div>
+    </div>
 </div>
 
 <div id="gameDetail" class="hidden">
@@ -109,6 +114,60 @@
 
 {% block scripts %}
 <style>
+/* Game Selector Styles */
+.game-selector-toggle {
+    user-select: none;
+    font-size: 1rem;
+}
+.game-selector-toggle:hover {
+    background: rgba(255,255,255,0.03);
+}
+.toggle-icon {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.game-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    background: var(--bg-dark);
+    text-decoration: none;
+    color: var(--text);
+    transition: background 0.2s, transform 0.1s;
+    border: 1px solid transparent;
+}
+.game-row:hover {
+    background: rgba(255,255,255,0.05);
+}
+.game-row.active {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.1);
+}
+.game-teams {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+}
+.team-logo-small {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+}
+.at {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 0.8rem;
+}
+.game-status {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: right;
+}
+
 /* Score Display */
 .score-display {
   display: flex;
@@ -423,29 +482,86 @@
 let gameES = null;
 let currentSummary = null;
 
+function toggleGameSelector() {
+    const list = document.getElementById('gameList');
+    const icon = document.getElementById('gameSelectorIcon');
+    if (list.style.display === 'none') {
+        list.style.display = 'block';
+        icon.innerHTML = '&#9660;'; // down arrow
+    } else {
+        list.style.display = 'none';
+        icon.innerHTML = '&#9654;'; // right arrow
+    }
+}
+
 async function loadGames() {
     try {
         const r = await fetch('/api/gamecast/games');
         const games = await r.json();
         const el = document.getElementById('gameList');
         if (!games || games.error || !Array.isArray(games) || games.length === 0) {
-            el.innerHTML = '<span class="text-muted">No games today</span>';
+            el.innerHTML = '<div style="padding: 12px; text-align:center;" class="text-muted">No games today</div>';
             return;
         }
+        
         el.innerHTML = games.map(g => {
             const id = g.espn_id || g.id || g.game_id;
-            const label = (g.away_team || '???') + ' @ ' + (g.home_team || '???');
-            return `<button class="btn btn-outline btn-sm" onclick="selectGame('${id}')">${label}</button>`;
+            
+            let statusHtml = '';
+            if (g.status_state === 'in') {
+                statusHtml = `
+                    <span class="text-success" style="animation:pulse 2s infinite;">LIVE Q${g.period || '?'} ${g.clock || ''}</span>
+                    <span style="margin-left: 8px;">${g.away_score || 0} - ${g.home_score || 0}</span>
+                `;
+            } else if (g.status_state === 'post') {
+                statusHtml = `
+                    <span class="text-muted">FINAL</span>
+                    <span style="margin-left: 8px;">${g.away_score || 0} - ${g.home_score || 0}</span>
+                `;
+            } else {
+                statusHtml = `<span class="text-muted">${g.status || 'Upcoming'}</span>`;
+            }
+            
+            return `
+                <a href="#" class="game-row" onclick="event.preventDefault(); selectGame('${id}', this);">
+                    <div class="game-teams">
+                        <img src="/images/logos/${g.away_team_id || g.home_team_id}.png" class="team-logo-small" onerror="this.style.display='none'">
+                        <span>${g.away_team || 'AWAY'}</span>
+                        <span class="at">@</span>
+                        <img src="/images/logos/${g.home_team_id}.png" class="team-logo-small" onerror="this.style.display='none'">
+                        <span class="home">${g.home_team || 'HOME'}</span>
+                    </div>
+                    <div class="game-status">
+                        ${statusHtml}
+                    </div>
+                </a>
+            `;
         }).join('');
-        {% if game_id %}
-        selectGame('{{ game_id }}');
-        {% endif %}
+        
+        // Only run after elements are rendered
+        setTimeout(() => {
+            {% if game_id %}
+            // Pre-select if URL has ID
+            const preSelected = document.querySelector(`.game-row[onclick*="{{ game_id }}"]`);
+            if (preSelected) selectGame('{{ game_id }}', preSelected);
+            {% endif %}
+        }, 100);
     } catch(e) {
-        document.getElementById('gameList').innerHTML = '<span class="text-muted">Error loading games</span>';
+        document.getElementById('gameList').innerHTML = '<div style="padding: 12px; text-align:center;" class="text-muted">Error loading games</div>';
     }
 }
 
-function selectGame(gameId) {
+function selectGame(gameId, element = null) {
+    // UI state
+    if (element) {
+        document.querySelectorAll('.game-row').forEach(row => row.classList.remove('active'));
+        element.classList.add('active');
+        const list = document.getElementById('gameList');
+        const icon = document.getElementById('gameSelectorIcon');
+        list.style.display = 'none';
+        icon.innerHTML = '&#9654;'; // right arrow
+    }
+
     document.getElementById('gameDetail').classList.remove('hidden');
     if (gameES) gameES.close();
     gameES = new EventSource('/api/gamecast/stream/' + gameId);
