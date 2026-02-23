@@ -15,6 +15,7 @@
         <button class="btn btn-outline" onclick="runAction('/api/ml-train', 'Training...')">Train ML</button>
         <button class="btn btn-outline" onclick="runAction('/api/team-refinement', 'Refining...')">Team Refinement</button>
         <button class="btn btn-outline" onclick="runAction('/api/fft-analysis', 'FFT...')">FFT Analysis</button>
+        <button class="btn btn-outline" onclick="runAction('/api/odds/sync', 'Syncing Odds...')">Sync Odds</button>
     </div>
     {% if cache_age is not none %}
     <p class="text-sm text-muted">Cache age: {{ '%.1f'|format(cache_age) }} minutes</p>
@@ -27,6 +28,25 @@
 </div>
 
 <div id="resultsSection" class="hidden">
+    <div class="card mb-4" id="qualityCard" style="display: none;">
+        <div class="card-header">Prediction Quality & Value Add</div>
+        <div class="accuracy-grid" id="qualityCards"></div>
+    </div>
+    
+    <div class="card mb-4" id="vegasCard" style="display: none;">
+        <div class="card-header">Vegas Betting Comparison</div>
+        <div class="accuracy-grid" id="vegasCards"></div>
+        <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-color); border-radius: 4px;">
+            <h5>Edge Feature Attribution (Avg absolute points)</h5>
+            <div id="featureAttr" style="display:flex; gap: 2rem;"></div>
+        </div>
+    </div>
+
+    <div class="card mb-4" id="progressionCard" style="display: none;">
+        <div class="card-header">Season Progression (Monthly Accuracy %)</div>
+        <div id="progressionChart" style="display:flex; gap:15px; align-items:flex-end; height:150px; margin-top:1rem; border-bottom:1px solid var(--border-color); padding-bottom: 25px;"></div>
+    </div>
+
     <div class="card mb-4">
         <div class="card-header">Results Summary</div>
         <div class="accuracy-grid" id="summaryCards"></div>
@@ -85,6 +105,50 @@ function showResults(r) {
         <div class="accuracy-metric"><div class="value">${r.spread_within_5_pct}%</div><div class="label">Spread ≤5</div></div>
         <div class="accuracy-metric"><div class="value">${r.total_within_10_pct}%</div><div class="label">Total ≤10</div></div>
     `;
+
+    if (r.quality_metrics) {
+        document.getElementById('qualityCard').style.display = 'block';
+        const q = r.quality_metrics;
+        document.getElementById('qualityCards').innerHTML = `
+            <div class="accuracy-metric"><div class="value val-good">${q.skill_score}</div><div class="label">Skill Score (0-1)</div></div>
+            <div class="accuracy-metric"><div class="value">${q.naive_baseline_acc}%</div><div class="label">Naive Baseline</div></div>
+            <div class="accuracy-metric"><div class="value">${q.upset_detection_rate}%</div><div class="label">Upset Detect Rate</div></div>
+        `;
+        
+        if (q.vegas_comparison && !q.vegas_comparison.error) {
+            document.getElementById('vegasCard').style.display = 'block';
+            const v = q.vegas_comparison;
+            document.getElementById('vegasCards').innerHTML = `
+                <div class="accuracy-metric"><div class="value">${v.ats_rate}%</div><div class="label">ATS Hit Rate</div></div>
+                <div class="accuracy-metric"><div class="value">${v.clv_rate}%</div><div class="label">CLV Win Rate</div></div>
+                <div class="accuracy-metric"><div class="value">${v.edge_hit_rate}%</div><div class="label">Edge Hit Rate</div></div>
+                <div class="accuracy-metric"><div class="value">$${v.final_bankroll}</div><div class="label">Bankroll Sim</div></div>
+                <div class="accuracy-metric"><div class="value">${v.roi_pct}%</div><div class="label">Simulated ROI</div></div>
+            `;
+            if (v.feature_attribution) {
+                document.getElementById('featureAttr').innerHTML = `
+                    <div><strong>Fatigue/Rest:</strong> ${v.feature_attribution.avg_fatigue_adj || 0}</div>
+                    <div><strong>Rating Matchup:</strong> ${v.feature_attribution.avg_rating_adj || 0}</div>
+                    <div><strong>ML Blend:</strong> ${v.feature_attribution.avg_ml_adj || 0}</div>
+                `;
+            }
+        }
+        
+        if (q.progression && q.progression.monthly_breakdown) {
+            document.getElementById('progressionCard').style.display = 'block';
+            let chartHtml = '';
+            for (const m of q.progression.monthly_breakdown) {
+                // scale height so 100% = 120px
+                const height = Math.max(0, (m.accuracy / 100) * 120); 
+                chartHtml += `<div style="display:flex; flex-direction:column; align-items:center; width: 40px;">
+                    <div style="font-size:0.75rem; margin-bottom:2px;">${m.accuracy}%</div>
+                    <div style="background:var(--primary-color); width:100%; height:${height}px; border-radius:3px 3px 0 0;" title="${m.accuracy}%"></div>
+                    <div style="font-size:0.7rem; margin-top:6px; transform:rotate(-45deg); white-space:nowrap;">${m.month}</div>
+                </div>`;
+            }
+            document.getElementById('progressionChart').innerHTML = chartHtml;
+        }
+    }
 
     // Per-team table
     const tbody = document.getElementById('teamTable');

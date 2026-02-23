@@ -470,8 +470,28 @@ def sync_player_impact(callback: Optional[Callable] = None, force: bool = False)
         callback("Player impact sync complete")
 
 
+def sync_historical_odds(callback: Optional[Callable] = None, force: bool = False):
+    """Step 7: Sync Vegas odds for recent games."""
+    from src.data.odds_sync import backfill_odds
+    
+    meta = _get_sync_meta("odds_sync")
+    current_gc = _get_game_count()
+    if not force and _is_fresh("odds_sync", 24) and meta.get("game_count_at_sync", 0) == current_gc:
+        if callback:
+            callback("Odds sync is fresh, skipping...")
+        return
+
+    if callback:
+        callback("Syncing historical Vegas odds...")
+        
+    count = backfill_odds(callback=callback)
+    _set_sync_meta("odds_sync", current_gc, _get_last_game_date())
+    
+    if callback:
+        callback(f"Odds sync complete: {count} games updated.")
+
 def full_sync(callback: Optional[Callable] = None, force: bool = False):
-    """Full 6-step data sync.
+    """Full 7-step data sync.
 
     Args:
         force: If True, bypass all freshness checks and re-fetch everything.
@@ -482,12 +502,13 @@ def full_sync(callback: Optional[Callable] = None, force: bool = False):
         clear_sync_cache()
 
     steps = [
-        ("1/6 Reference data", sync_reference_data),
-        ("2/6 Player game logs", sync_player_game_logs),
-        ("3/6 Injuries", sync_injuries_step),
-        ("4/6 Injury history", sync_injury_history),
-        ("5/6 Team metrics", sync_team_metrics),
-        ("6/6 Player impact", sync_player_impact),
+        ("1/7 Reference data", sync_reference_data),
+        ("2/7 Player game logs", sync_player_game_logs),
+        ("3/7 Injuries", sync_injuries_step),
+        ("4/7 Injury history", sync_injury_history),
+        ("5/7 Team metrics", sync_team_metrics),
+        ("6/7 Player impact", sync_player_impact),
+        ("7/7 Vegas odds", sync_historical_odds),
     ]
     for label, func in steps:
         if callback:

@@ -99,28 +99,41 @@ class PrecomputedGame:
     away_roster_changed: bool = False
 
 
+from src.analytics.cache import team_cache
+
 def _get_team_metrics(team_id: int) -> Dict[str, float]:
-    """Fetch team metrics as a flat dict."""
+    """Fetch team metrics as a flat dict, using cache."""
+    cached = team_cache.get(team_id, "metrics")
+    if cached is not None:
+        return cached
+
     season = get_season()
     row = db.fetch_one(
         "SELECT * FROM team_metrics WHERE team_id = ? AND season = ?",
         (team_id, season)
     )
-    if row:
-        return dict(row)
-    return {}
+    result = dict(row) if row else {}
+    team_cache.set(team_id, "metrics", result)
+    return result
 
 
 def _get_tuning(team_id: int) -> Dict[str, float]:
-    """Get per-team autotune corrections."""
+    """Get per-team autotune corrections, using cache."""
+    cached = team_cache.get(team_id, "tuning")
+    if cached is not None:
+        return cached
+
     row = db.fetch_one(
         "SELECT home_pts_correction, away_pts_correction FROM team_tuning WHERE team_id = ?",
         (team_id,)
     )
     if row:
-        return {"home_pts_correction": row["home_pts_correction"],
-                "away_pts_correction": row["away_pts_correction"]}
-    return {"home_pts_correction": 0.0, "away_pts_correction": 0.0}
+        result = {"home_pts_correction": row["home_pts_correction"],
+                  "away_pts_correction": row["away_pts_correction"]}
+    else:
+        result = {"home_pts_correction": 0.0, "away_pts_correction": 0.0}
+    team_cache.set(team_id, "tuning", result)
+    return result
 
 
 def _clamp(low: float, val: float, high: float) -> float:

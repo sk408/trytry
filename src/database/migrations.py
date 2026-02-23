@@ -289,6 +289,23 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TEXT NOT NULL,
     read INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS game_odds (
+    game_date DATE NOT NULL,
+    home_team_id INTEGER NOT NULL,
+    away_team_id INTEGER NOT NULL,
+    spread REAL,           
+    over_under REAL,
+    home_moneyline INTEGER,
+    away_moneyline INTEGER,
+    provider TEXT DEFAULT 'espn',
+    fetched_at TEXT,
+    opening_spread REAL,
+    opening_moneyline INTEGER,
+    PRIMARY KEY (game_date, home_team_id, away_team_id),
+    FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
+    FOREIGN KEY (away_team_id) REFERENCES teams(team_id)
+);
 """
 
 INDEXES_SQL = """
@@ -503,7 +520,7 @@ def get_table_counts() -> dict:
     """Return row counts for key tables."""
     tables = ["teams", "players", "player_stats", "predictions",
               "team_metrics", "player_impact", "injuries", "injury_history",
-              "injury_status_log", "team_tuning", "notifications"]
+              "injury_status_log", "team_tuning", "notifications", "game_odds"]
     counts = {}
     for t in tables:
         try:

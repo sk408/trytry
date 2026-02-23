@@ -592,6 +592,27 @@ async def sse_sync_data(force: bool = False):
     )
 
 
+@app.get("/api/odds/sync")
+async def sse_odds_sync():
+    from src.data.odds_sync import backfill_odds
+    _sync_cancel.clear()
+    return StreamingResponse(
+        _sse_generator(backfill_odds, _sync_cancel),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/api/odds/status")
+async def odds_status():
+    from src.database import db
+    total_dates = db.fetch_one("SELECT COUNT(DISTINCT game_date) as c FROM player_stats")
+    odds_dates = db.fetch_one("SELECT COUNT(DISTINCT game_date) as c FROM game_odds")
+    return JSONResponse({
+        "dates_with_games": total_dates["c"] if total_dates else 0,
+        "dates_with_odds": odds_dates["c"] if odds_dates else 0
+    })
+
+
 @app.get("/api/sync/injuries")
 async def sse_sync_injuries():
     from src.data.injury_scraper import sync_injuries

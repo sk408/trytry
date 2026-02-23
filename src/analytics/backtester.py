@@ -15,6 +15,7 @@ from src.database import db
 from src.database.db import thread_local_db
 from src.analytics.cache import start_session_caches, stop_session_caches
 from src.analytics.prediction import predict_matchup
+from src.analytics.prediction_quality import compute_quality_metrics, compute_progression, compute_vegas_comparison
 from src.analytics.weight_config import get_weight_config
 from src.config import get_config
 
@@ -160,6 +161,15 @@ def run_backtest(team_id: Optional[int] = None,
     if use_cache and team_id is None:
         cached = _load_cache()
         if cached:
+            # Inject quality metrics if missing from old cache
+            if "quality_metrics" not in cached:
+                quality = compute_quality_metrics(cached.get("per_game", []), cached.get("per_team", {}))
+                progression = compute_progression(cached.get("per_game", []))
+                vegas_comparison = compute_vegas_comparison(cached.get("per_game", []))
+                quality["progression"] = progression
+                quality["vegas_comparison"] = vegas_comparison
+                cached["quality_metrics"] = quality
+                _save_cache(cached)
             if callback:
                 callback("Using cached backtest results")
             return cached
@@ -237,6 +247,12 @@ def run_backtest(team_id: Optional[int] = None,
                     "winner_correct": winner_correct,
                     "spread_within_5": spread_error <= 5,
                     "total_within_10": total_error <= 10,
+                    # Adjs for feature attribution
+                    "fatigue_adj": getattr(result, "fatigue_adj", 0),
+                    "rest_adv": getattr(result, "home_fatigue", 0) - getattr(result, "away_fatigue", 0),
+                    "rating_matchup_adj": getattr(result, "rating_matchup_adj", 0),
+                    "clutch_adj": getattr(result, "clutch_adj", 0),
+                    "ml_blend_adj": getattr(result, "ml_blend_adj", 0),
                 }
             except Exception as e:
                 error_msg = str(e)
@@ -419,6 +435,12 @@ def run_backtest(team_id: Optional[int] = None,
         "total_bias": round(avg_pred_total - avg_actual_total, 1),
     }
 
+    quality = compute_quality_metrics(per_game, per_team)
+    progression = compute_progression(per_game)
+    vegas_comparison = compute_vegas_comparison(per_game)
+    quality["progression"] = progression
+    quality["vegas_comparison"] = vegas_comparison
+
     summary = {
         "total_games": total,
         "overall_spread_accuracy": round(correct / total * 100, 1),
@@ -433,6 +455,7 @@ def run_backtest(team_id: Optional[int] = None,
         "spread_ranges": spread_range_analysis,
         "total_ranges": total_range_analysis,
         "bias": bias,
+        "quality_metrics": quality,
     }
 
     # Cache (global only)
