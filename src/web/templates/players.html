@@ -6,10 +6,9 @@
 <h1 class="section-header">Players</h1>
 
 <!-- Search Filter -->
-<div class="card mb-4" style="padding:0.75rem 1.25rem;">
+<div class="card search-card mb-4">
     <input type="text" id="playerSearch" placeholder="Search players by name or team..."
-           style="width:100%;padding:0.5rem 0.75rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;"
-           oninput="filterPlayers(this.value)">
+           class="search-input">
 </div>
 
 <!-- Injured Players -->
@@ -33,9 +32,9 @@
             <tbody>
                 {% for p in injured %}
                 <tr>
-                    <td style="width:36px;padding:4px;">
+                    <td class="player-thumb-cell">
                         <img src="/images/players/{{ p.player_id }}.png"
-                             style="width:28px;height:28px;border-radius:50%;object-fit:cover;"
+                             class="player-thumb" alt="{{ p.player_name }}"
                              onerror="this.style.display='none'">
                     </td>
                     <td class="font-bold">{{ p.player_name }}</td>
@@ -131,9 +130,9 @@
             <tbody>
                 {% for p in players %}
                 <tr>
-                    <td style="width:36px;padding:4px;">
+                    <td class="player-thumb-cell">
                         <img src="/images/players/{{ p.player_id }}.png"
-                             style="width:28px;height:28px;border-radius:50%;object-fit:cover;"
+                             class="player-thumb" alt="{{ p.player_name }}"
                              onerror="this.style.display='none'">
                     </td>
                     <td class="font-bold">{{ p.player_name }}</td>
@@ -187,12 +186,16 @@
 
 {% block scripts %}
 <script>
-function filterPlayers(query) {
-    const q = query.toLowerCase();
+var _filterPlayers = debounce(function(query) {
+    var q = query.toLowerCase();
     document.querySelectorAll('table tbody tr').forEach(function(row) {
-        const text = row.textContent.toLowerCase();
+        var text = row.textContent.toLowerCase();
         row.style.display = text.includes(q) ? '' : 'none';
     });
-}
+}, 250);
+
+document.getElementById('playerSearch').addEventListener('input', function() {
+    _filterPlayers(this.value);
+});
 </script>
 {% endblock %}

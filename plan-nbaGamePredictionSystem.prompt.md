@@ -65,6 +65,7 @@ src/
     backtester.py             # Historical game replay, caching, metrics
     autotune.py               # Per-team scoring corrections via grid search
     ml_model.py               # XGBoost train/predict, SHAP, model persistence
+    regression_test.py        # Prediction regression testing (baselines + comparison)
     pipeline.py               # 12-step orchestrator with smart caching
     live_prediction.py        # 3-signal blend for in-game predictions
     live_recommendations.py   # Live betting recommendations
@@ -129,6 +130,7 @@ data/
   pipeline_state.json         # Pipeline step timestamps + game snapshot
   app_settings.json           # User settings (auto-created)
   manual_injuries.json        # Manual injury overrides
+  regression_baselines/       # Saved prediction baselines for regression testing
   backtest_cache/             # Cached backtest results (bt_{hash}.json)
   cache/
     player_photos/            # Cached headshot images
@@ -1194,6 +1196,8 @@ Compares current `players` table vs players who appeared in last 5 game dates. R
 | `/api/optimize-all` | Combo optimization (global + per-team) |
 | `/api/full-pipeline` | Full 12-step pipeline |
 | `/api/gamecast/stream/{game_id}` | Live play-by-play + score + odds (10s poll) |
+| `/api/regression/save?name=X` | Save regression baseline |
+| `/api/regression/compare?name=X` | Compare against regression baseline |
 
 ### REST API Endpoints
 
@@ -1209,6 +1213,8 @@ Compares current `players` table vs players who appeared in last 5 game dates. R
 | GET | `/api/gamecast/games` | Today's games with scores/status |
 | GET | `/api/gamecast/odds/{game_id}` | Odds: spread, O/U, moneyline, win%, ATS |
 | GET | `/api/gamecast/boxscore/{game_id}` | Box score: players + totals |
+| GET | `/api/regression/list` | List all saved regression baselines |
+| GET | `/api/regression/test-features` | Run ML feature extraction sanity tests |
 
 ### Theme
 Mobile-first dark theme: CSS vars `--bg-dark: #0f172a`, `--accent: #3b82f6`. Responsive hamburger nav, card/table/form/badge styles. 968 lines.

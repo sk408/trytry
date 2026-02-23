@@ -94,28 +94,77 @@ function startStyledSSE(url, logEl, onResult) {
     return es;
 }
 
+var _syncRunning = false;
+var _pipelineRunning = false;
+
 function runSync(url) {
+    if (_syncRunning) {
+        showToast('Sync already in progress', 'warning');
+        return;
+    }
+    _syncRunning = true;
     if (currentES) currentES.close();
-    const log = document.getElementById('syncLog');
+    var log = document.getElementById('syncLog');
     log.innerHTML = '';
-    currentES = startStyledSSE(url, log);
+    currentES = startStyledSSE(url, log, function() {
+        _syncRunning = false;
+        showToast('Sync complete', 'success');
+    });
+    // Also handle completion via [DONE]
+    var origMsg = currentES.onmessage;
+    currentES.onmessage = function(e) {
+        origMsg.call(this, e);
+        if (e.data === '[DONE]' || e.data === '[CANCELLED]') {
+            _syncRunning = false;
+            if (e.data === '[DONE]') showToast('Sync complete', 'success');
+        }
+    };
+    var origErr = currentES.onerror;
+    currentES.onerror = function() {
+        _syncRunning = false;
+        origErr.call(this);
+        showToast('Sync connection lost', 'error');
+    };
 }
 
 function runPipeline() {
+    if (_pipelineRunning) {
+        showToast('Pipeline already running', 'warning');
+        return;
+    }
+    _pipelineRunning = true;
     if (pipelineES) pipelineES.close();
-    const log = document.getElementById('pipelineLog');
+    var log = document.getElementById('pipelineLog');
     log.style.display = 'block';
     log.innerHTML = '';
     pipelineES = startStyledSSE('/api/full-pipeline', log);
+    var origMsg = pipelineES.onmessage;
+    pipelineES.onmessage = function(e) {
+        origMsg.call(this, e);
+        if (e.data === '[DONE]' || e.data === '[CANCELLED]') {
+            _pipelineRunning = false;
+            if (e.data === '[DONE]') showToast('Pipeline complete', 'success');
+        }
+    };
+    var origErr = pipelineES.onerror;
+    pipelineES.onerror = function() {
+        _pipelineRunning = false;
+        origErr.call(this);
+        showToast('Pipeline connection lost', 'error');
+    };
 }
 
 function cancelSync() {
     fetch('/api/sync/cancel', {method: 'POST'});
     if (currentES) currentES.close();
+    _syncRunning = false;
+    showToast('Sync cancelled', 'warning');
 }
 function cancelPipeline() {
     fetch('/api/pipeline/cancel', {method: 'POST'});
     if (pipelineES) pipelineES.close();
+    _pipelineRunning = false;
+    showToast('Pipeline cancelled', 'warning');
 }
 </script>
 {% endblock %}

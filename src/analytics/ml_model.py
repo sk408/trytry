@@ -342,11 +342,11 @@ def _extract_features_from_precomputed(g) -> Optional[Dict[str, float]]:
         f["diff_fatigue"] = g.home_fatigue_penalty - g.away_fatigue_penalty
         f["combined_fatigue"] = g.home_fatigue_penalty + g.away_fatigue_penalty
 
-        # Four Factors
-        f["ff_efg_edge"] = g.home_ff.get("efg_edge", 0)
-        f["ff_tov_edge"] = g.home_ff.get("tov_edge", 0)
-        f["ff_oreb_edge"] = g.home_ff.get("oreb_edge", 0)
-        f["ff_fta_edge"] = g.home_ff.get("fta_edge", 0)
+        # Four Factors — compute edges from raw team values
+        f["ff_efg_edge"] = g.home_ff.get("efg", 0) - g.away_ff.get("efg", 0)
+        f["ff_tov_edge"] = g.away_ff.get("tov", 0) - g.home_ff.get("tov", 0)  # positive = home turns over less
+        f["ff_oreb_edge"] = g.home_ff.get("oreb", 0) - g.away_ff.get("oreb", 0)
+        f["ff_fta_edge"] = g.home_ff.get("fta", 0) - g.away_ff.get("fta", 0)
 
         # Clutch
         f["home_clutch_net"] = g.home_clutch.get("net_rating", 0)

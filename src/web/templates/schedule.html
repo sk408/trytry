@@ -6,24 +6,22 @@
 <h1 class="section-header">NBA Schedule</h1>
 
 <!-- Date Range Picker -->
-<div class="card mb-4" style="padding:0.75rem 1.25rem;">
-    <form method="get" action="/schedule" class="flex items-center gap-3" style="flex-wrap:wrap;">
-        <div class="form-group" style="margin:0;">
+<div class="card search-card mb-4">
+    <form method="get" action="/schedule" class="inline-form">
+        <div class="form-group">
             <label class="text-xs text-muted">From</label>
-            <input type="date" name="start_date" value="{{ start_date }}"
-                   style="padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;">
+            <input type="date" name="start_date" value="{{ start_date }}" class="date-input">
         </div>
-        <div class="form-group" style="margin:0;">
+        <div class="form-group">
             <label class="text-xs text-muted">Days</label>
-            <select name="days"
-                    style="padding:0.4rem 0.6rem;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-primary);font-size:0.875rem;">
+            <select name="days" class="date-input">
                 <option value="7" {% if days == 7 %}selected{% endif %}>7 days</option>
                 <option value="14" {% if days == 14 %}selected{% endif %}>14 days</option>
                 <option value="30" {% if days == 30 %}selected{% endif %}>30 days</option>
                 <option value="60" {% if days == 60 %}selected{% endif %}>60 days</option>
             </select>
         </div>
-        <button type="submit" class="btn btn-outline btn-sm" style="align-self:flex-end;">Apply</button>
+        <button type="submit" class="btn btn-outline btn-sm">Apply</button>
     </form>
 </div>
 
@@ -34,17 +32,17 @@
         {% set ns.current_date = g.get('game_date', '') %}
         <div class="schedule-date">{{ ns.current_date }}</div>
     {% endif %}
-    <div class="card" style="padding: 0.75rem 1.25rem; margin-bottom: 0.5rem;">
+    <div class="card schedule-card">
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
                 {% if g.get('away_team_id') %}
-                <img src="/images/logos/{{ g.away_team_id }}.png" style="width:20px;height:20px;" onerror="this.style.display='none'">
+                <img src="/images/logos/{{ g.away_team_id }}.png" class="team-logo-xs" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
                 {% endif %}
                 <span class="font-bold">{{ g.get('away_team', '???') }}</span>
                 <span class="text-muted">@</span>
                 <span class="font-bold">{{ g.get('home_team', '???') }}</span>
                 {% if g.get('home_team_id') %}
-                <img src="/images/logos/{{ g.home_team_id }}.png" style="width:20px;height:20px;" onerror="this.style.display='none'">
+                <img src="/images/logos/{{ g.home_team_id }}.png" class="team-logo-xs" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
                 {% endif %}
             </div>
             <div class="text-sm text-muted">

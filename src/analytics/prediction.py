@@ -147,14 +147,14 @@ def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]
     spread_corr = 0.0
     total_corr = 0.0
 
-    # Spread bins
+    # Spread bins (exclusive lower bound to prevent overlap, except first bin)
     spread_bins = [
         ("big_away", -30, -18), ("med_away", -18, -12), ("small_away", -12, -8),
         ("slight_away", -8, -4), ("toss_up", -4, 4), ("slight_home", 4, 8),
         ("small_home", 8, 12), ("med_home", 12, 18), ("big_home", 18, 30),
     ]
-    for label, lo, hi in spread_bins:
-        if lo <= spread < hi:
+    for idx, (label, lo, hi) in enumerate(spread_bins):
+        if (lo < spread <= hi) if idx > 0 else (lo <= spread <= hi):
             row = db.fetch_one(
                 "SELECT avg_residual FROM residual_calibration WHERE bin_label = ?",
                 (label,)
@@ -406,12 +406,15 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     if not skip_ml and w.ml_ensemble_weight > 0:
         try:
             from src.analytics.ml_model import predict_ml_with_uncertainty
+            # Build injury context for ML features
+            _injury_ctx = _build_injury_context(home_team_id, away_team_id)
             features = _build_ml_features(home_proj, away_proj, home_metrics, away_metrics,
                                           home_court, home_fatigue, away_fatigue,
                                           efg_edge, tov_edge, oreb_edge, fta_edge,
                                           home_off, away_off, home_def, away_def,
                                           home_pace, away_pace, home_defl, away_defl,
-                                          home_contested, away_contested)
+                                          home_contested, away_contested,
+                                          injury_context=_injury_ctx)
             ml_result = predict_ml_with_uncertainty(features)
             if ml_result and ml_result.get("confidence", 0) > 0.3:
                 ml_spread = ml_result["spread"]
@@ -600,6 +603,9 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
                         "contested": (am.get("contested_shots", 0) or 0) / a_gp,
                         "loose_balls": (am.get("loose_balls_recovered", 0) or 0) / a_gp}
 
+            # Injury context — query current injuries for each team
+            inj_ctx = _build_injury_context(htid, atid)
+
             return PrecomputedGame(
                 game_date=gdate,
                 home_team_id=htid,
@@ -629,6 +635,12 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
                 away_clutch=a_clutch,
                 home_hustle=h_hustle,
                 away_hustle=a_hustle,
+                home_injured_count=inj_ctx.get("home_injured_count", 0),
+                away_injured_count=inj_ctx.get("away_injured_count", 0),
+                home_injury_ppg_lost=inj_ctx.get("home_injury_ppg_lost", 0),
+                away_injury_ppg_lost=inj_ctx.get("away_injury_ppg_lost", 0),
+                home_injury_minutes_lost=inj_ctx.get("home_injury_minutes_lost", 0),
+                away_injury_minutes_lost=inj_ctx.get("away_injury_minutes_lost", 0),
                 home_games_played=hm.get("gp", 0) or 0,
                 away_games_played=am.get("gp", 0) or 0,
             )
@@ -775,13 +787,50 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     }
 
 
+def _build_injury_context(home_team_id: int, away_team_id: int) -> Dict[str, float]:
+    """Build injury impact context for ML features from current injury data."""
+    ctx = {}
+    for side, tid in [("home", home_team_id), ("away", away_team_id)]:
+        try:
+            injured = db.fetch_all("""
+                SELECT p.player_id, i.status,
+                       COALESCE(p.ppg, 0) as ppg,
+                       COALESCE(p.mpg, 0) as mpg
+                FROM injuries i
+                JOIN players p ON i.player_id = p.player_id
+                WHERE p.team_id = ?
+            """, (tid,))
+            count = 0
+            ppg_lost = 0.0
+            min_lost = 0.0
+            for inj in injured:
+                status = (inj["status"] or "").lower()
+                if status in ("out", "o", "doubtful"):
+                    count += 1
+                    ppg_lost += float(inj["ppg"] or 0)
+                    min_lost += float(inj["mpg"] or 0)
+                elif status in ("questionable", "gtd", "day-to-day"):
+                    count += 0.5
+                    ppg_lost += float(inj["ppg"] or 0) * 0.5
+                    min_lost += float(inj["mpg"] or 0) * 0.5
+            ctx[f"{side}_injured_count"] = count
+            ctx[f"{side}_injury_ppg_lost"] = ppg_lost
+            ctx[f"{side}_injury_minutes_lost"] = min_lost
+        except Exception:
+            ctx[f"{side}_injured_count"] = 0
+            ctx[f"{side}_injury_ppg_lost"] = 0
+            ctx[f"{side}_injury_minutes_lost"] = 0
+    return ctx
+
+
 def _build_ml_features(home_proj, away_proj, home_m, away_m,
                         home_court, home_fat, away_fat,
                         efg_edge, tov_edge, oreb_edge, fta_edge,
                         home_off, away_off, home_def, away_def,
                         home_pace, away_pace, home_defl, away_defl,
-                        home_contested, away_contested) -> Dict[str, float]:
-    """Build the ~73 feature dict for ML model."""
+                        home_contested, away_contested,
+                        injury_context=None) -> Dict[str, float]:
+    """Build the ~88 feature dict for ML model."""
     f = {}
 
     # Counting stats
@@ -865,16 +914,17 @@ def _build_ml_features(home_proj, away_proj, home_m, away_m,
     f["home_loose_balls"] = home_loose
     f["away_loose_balls"] = away_loose
 
-    # Injury context (zeros as placeholder — filled at precompute time)
-    f["home_injured_count"] = 0
-    f["away_injured_count"] = 0
-    f["diff_injured_count"] = 0
-    f["home_injury_ppg_lost"] = 0
-    f["away_injury_ppg_lost"] = 0
-    f["diff_injury_ppg_lost"] = 0
-    f["home_injury_minutes_lost"] = 0
-    f["away_injury_minutes_lost"] = 0
-    f["diff_injury_minutes_lost"] = 0
+    # Injury context — use provided data or zeros
+    ic = injury_context or {}
+    f["home_injured_count"] = ic.get("home_injured_count", 0)
+    f["away_injured_count"] = ic.get("away_injured_count", 0)
+    f["diff_injured_count"] = f["home_injured_count"] - f["away_injured_count"]
+    f["home_injury_ppg_lost"] = ic.get("home_injury_ppg_lost", 0)
+    f["away_injury_ppg_lost"] = ic.get("away_injury_ppg_lost", 0)
+    f["diff_injury_ppg_lost"] = f["home_injury_ppg_lost"] - f["away_injury_ppg_lost"]
+    f["home_injury_minutes_lost"] = ic.get("home_injury_minutes_lost", 0)
+    f["away_injury_minutes_lost"] = ic.get("away_injury_minutes_lost", 0)
+    f["diff_injury_minutes_lost"] = f["home_injury_minutes_lost"] - f["away_injury_minutes_lost"]
 
     # Season phase
     home_gp = home_m.get("gp", 0) or 0

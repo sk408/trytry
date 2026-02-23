@@ -157,6 +157,105 @@ Output includes interaction scores: **SYNERGY** (joint optimum better than indiv
 
 ---
 
+## Regression Testing
+
+Save prediction baselines and compare after pipeline changes to detect regressions. This ensures changes to the prediction engine (weight tuning, bug fixes, ML retraining) don't silently degrade accuracy.
+
+### Save a baseline before making changes
+
+```bash
+python -m src.analytics.regression_test save "before_ml_retrain"
+```
+
+This runs a full backtest and saves the results (metrics, per-team breakdowns, bias data) to `data/regression_baselines/before_ml_retrain.json`.
+
+### Compare current predictions against a baseline
+
+```bash
+python -m src.analytics.regression_test compare "before_ml_retrain"
+```
+
+Runs a fresh backtest and compares against the saved baseline. Reports:
+
+- **Metric deltas** — winner%, spread MAE, total MAE, spread-within-5, total-within-10
+- **Regressions** — flagged when >1% worse (percentages) or >0.5 worse (MAE)
+- **Improvements** — flagged when >0.5% better (percentages) or >0.2 better (MAE)
+- **Per-team regressions/improvements** — teams with >10% winner change or >2.0 MAE change
+- **Exit code** — 0 if passed (no regressions), 1 if failed
+
+### List all saved baselines
+
+```bash
+python -m src.analytics.regression_test list
+```
+
+Output:
+
+```
+Name                           Date                 Games Winner%  Spread MAE
+--------------------------------------------------------------------------------
+before_ml_retrain              2026-02-20 14:30:00     412   66.8%      11.95
+after_ff_fix                   2026-02-21 09:15:00     412   67.2%      11.82
+```
+
+### Run feature extraction sanity tests
+
+```bash
+python -m src.analytics.regression_test test-features
+```
+
+Fast check (no backtest needed) that verifies ML feature extraction produces non-zero values for:
+
+- Four Factors edges (efg, tov, oreb, fta)
+- Injury features (injured count, PPG lost, minutes lost)
+- Counting stats (points, rebounds, assists)
+- Ratings (offensive, defensive)
+
+### Web API
+
+The regression testing tools are also available via the web interface:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/regression/save?name=baseline` | SSE — save a baseline |
+| GET | `/api/regression/compare?name=baseline` | SSE — compare against baseline |
+| GET | `/api/regression/list` | JSON — list all baselines |
+| GET | `/api/regression/test-features` | JSON — run feature extraction tests |
+
+### Python API
+
+```python
+from src.analytics.regression_test import save_baseline, compare_to_baseline, list_baselines, test_feature_extraction
+
+# Save baseline (with optional progress callback)
+baseline = save_baseline("my_baseline", callback=print)
+
+# Compare (returns dict with 'passed' bool, 'regressions', 'improvements')
+result = compare_to_baseline("my_baseline", callback=print)
+if not result["passed"]:
+    print("Regressions detected!")
+
+# Quick feature extraction check
+result = test_feature_extraction()
+print(f"{sum(1 for t in result['tests'] if t['passed'])}/{len(result['tests'])} passed")
+```
+
+### Recommended workflow
+
+```bash
+# 1. Save baseline BEFORE changes
+python -m src.analytics.regression_test save "pre_change"
+
+# 2. Make your changes (retrain ML, tune weights, fix bugs, etc.)
+
+# 3. Compare
+python -m src.analytics.regression_test compare "pre_change"
+
+# 4. If regressions detected, revert and investigate
+```
+
+---
+
 ## Pipeline Snapshots
 
 Save and restore the full prediction pipeline state (weights + autotune corrections + optimizer ranges) for safe experimentation.
@@ -186,20 +285,37 @@ Snapshots are stored as JSON in `data/snapshots/`.
 ```
 src/
   analytics/
-    prediction.py         # Core prediction pipeline
+    prediction.py         # Core prediction pipeline (11-step)
+    ml_model.py           # XGBoost spread/total models, SHAP, 88 features
     weight_config.py      # WeightConfig dataclass, persistence, snapshots
-    weight_optimizer.py   # Vectorized optimizer with grid search
+    weight_optimizer.py   # Vectorized optimizer with Optuna TPE
     sensitivity.py        # Sensitivity sweep tool (CLI)
     autotune.py           # Team-level autotune corrections
+    backtester.py         # Historical game replay and metrics
+    regression_test.py    # Prediction regression testing (baselines + comparison)
+    live_prediction.py    # 3-signal in-game prediction blend
+    stats_engine.py       # Player projections, 50/25/25 blend, 240-min budget
+  data/
+    nba_fetcher.py        # NBA API data fetcher
+    injury_scraper.py     # ESPN/CBS/RotoWire scraping chain
+    sync_service.py       # Full sync orchestrator (12 steps)
+    gamecast.py           # ESPN live integration
+    image_cache.py        # Player photo and team logo caching
   database/
     db.py                 # SQLite connection, WAL mode, RWLock
     migrations.py         # Schema creation and column migrations
   ui/
-    views/                # PySide6 views (matchup, standings, etc.)
+    views/                # PySide6 views (10 tabs)
   web/
-    nba_fetcher.py        # NBA API data fetcher
+    app.py                # FastAPI — 30+ routes, 18+ SSE endpoints
     player_utils.py       # Player stat utilities
+    static/
+      style.css           # Mobile-first dark theme
+    templates/            # Jinja2 templates (10 pages)
 data/
+  regression_baselines/   # Saved prediction baselines (git-ignored)
   sensitivity/            # Sweep CSV output (git-ignored)
   snapshots/              # Pipeline snapshots (git-ignored)
+  ml_models/              # Trained XGBoost models (git-ignored)
+  cache/                  # Player photos and team logos
 ```

@@ -10,29 +10,32 @@
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar">
+    <nav class="navbar" role="navigation" aria-label="Main navigation">
         <div class="nav-brand">
             <a href="/dashboard">NBA Predictor</a>
-            <button class="hamburger" onclick="toggleNav()" aria-label="Menu">
+            <button class="hamburger" onclick="toggleNav()" aria-label="Toggle navigation menu" aria-expanded="false">
                 <span></span><span></span><span></span>
             </button>
         </div>
         <ul class="nav-links" id="navLinks">
-            <li><a href="/dashboard" {% if active == 'dashboard' %}class="active"{% endif %}>Dashboard</a></li>
-            <li><a href="/live" {% if active == 'live' %}class="active"{% endif %}>Live</a></li>
-            <li><a href="/gamecast" {% if active == 'gamecast' %}class="active"{% endif %}>Gamecast</a></li>
-            <li><a href="/players" {% if active == 'players' %}class="active"{% endif %}>Players</a></li>
-            <li><a href="/matchups" {% if active == 'matchups' %}class="active"{% endif %}>Matchups</a></li>
-            <li><a href="/schedule" {% if active == 'schedule' %}class="active"{% endif %}>Schedule</a></li>
-            <li><a href="/allstar" {% if active == 'allstar' %}class="active"{% endif %}>All-Star</a></li>
+            <li><a href="/dashboard" {% if active == 'dashboard' %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
+            <li><a href="/live" {% if active == 'live' %}class="active" aria-current="page"{% endif %}>Live</a></li>
+            <li><a href="/gamecast" {% if active == 'gamecast' %}class="active" aria-current="page"{% endif %}>Gamecast</a></li>
+            <li><a href="/players" {% if active == 'players' %}class="active" aria-current="page"{% endif %}>Players</a></li>
+            <li><a href="/matchups" {% if active == 'matchups' %}class="active" aria-current="page"{% endif %}>Matchups</a></li>
+            <li><a href="/schedule" {% if active == 'schedule' %}class="active" aria-current="page"{% endif %}>Schedule</a></li>
+            <li><a href="/allstar" {% if active == 'allstar' %}class="active" aria-current="page"{% endif %}>All-Star</a></li>
             <li style="position:relative;">
-                <a href="#" onclick="toggleNotifications(event)" style="position:relative;">
-                    🔔<span id="notifBadge" class="notif-badge" style="display:none;position:absolute;top:-4px;right:-8px;">0</span>
-                </a>
-                <div id="notifPanel" style="display:none;position:absolute;right:0;top:100%;width:320px;max-height:400px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px var(--shadow);z-index:1001;padding:0;">
+                <button onclick="toggleNotifications(event)" aria-label="Notifications" aria-expanded="false" id="notifToggle"
+                        style="background:none;border:none;cursor:pointer;padding:0.5rem 0.75rem;position:relative;font-size:1rem;">
+                    <span aria-hidden="true">&#x1F514;</span>
+                    <span class="sr-only">Notifications</span>
+                    <span id="notifBadge" class="notif-badge" style="display:none;position:absolute;top:0;right:-4px;" aria-live="polite">0</span>
+                </button>
+                <div id="notifPanel" style="display:none;position:absolute;right:0;top:100%;width:320px;max-height:400px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 4px 12px var(--shadow);z-index:1001;padding:0;" role="dialog" aria-label="Notifications panel">
                     <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
                         <span class="font-bold text-sm">Notifications</span>
-                        <button class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:0.7rem;" onclick="markAllRead()">Mark all read</button>
+                        <button class="btn btn-outline btn-sm" onclick="markAllRead()">Mark all read</button>
                     </div>
                     <div id="notifList" style="padding:0.5rem;"><div class="text-muted text-sm" style="padding:0.5rem;">Loading...</div></div>
                 </div>
@@ -40,41 +43,64 @@
         </ul>
     </nav>
 
+    <!-- Toast container -->
+    <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
     <main class="container">
         {% block content %}{% endblock %}
     </main>
 
     <script>
         function toggleNav() {
-            document.getElementById('navLinks').classList.toggle('show');
+            var links = document.getElementById('navLinks');
+            var btn = document.querySelector('.hamburger');
+            links.classList.toggle('show');
+            btn.setAttribute('aria-expanded', links.classList.contains('show'));
+        }
+
+        // ---- Toast System ----
+        function showToast(message, type) {
+            type = type || 'info';
+            var container = document.getElementById('toastContainer');
+            var toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = message;
+            toast.onclick = function() { toast.remove(); };
+            container.appendChild(toast);
+            setTimeout(function() {
+                if (toast.parentNode) toast.remove();
+            }, 5000);
         }
 
         // ---- Notifications ----
-        let notifOpen = false;
+        var notifOpen = false;
         function toggleNotifications(e) {
             e.preventDefault();
+            e.stopPropagation();
             notifOpen = !notifOpen;
-            const panel = document.getElementById('notifPanel');
+            var panel = document.getElementById('notifPanel');
+            var toggle = document.getElementById('notifToggle');
             panel.style.display = notifOpen ? 'block' : 'none';
+            toggle.setAttribute('aria-expanded', notifOpen);
             if (notifOpen) loadNotifications();
         }
 
         function loadNotifications() {
             fetch('/api/notifications?limit=20')
-                .then(r => r.json())
-                .then(notifs => {
-                    const list = document.getElementById('notifList');
+                .then(function(r) { return r.json(); })
+                .then(function(notifs) {
+                    var list = document.getElementById('notifList');
                     if (!notifs || notifs.length === 0) {
                         list.innerHTML = '<div class="text-muted text-sm" style="padding:0.75rem;">No notifications</div>';
                         return;
                     }
                     list.innerHTML = notifs.map(function(n) {
-                        const sevColor = n.severity === 'critical' ? 'var(--danger)' :
-                                         n.severity === 'warning' ? 'var(--warning)' : 'var(--accent)';
-                        const readStyle = n.read ? 'opacity:0.6;' : '';
+                        var sevColor = n.severity === 'critical' ? 'var(--danger)' :
+                                       n.severity === 'warning' ? '#fbbf24' : 'var(--accent)';
+                        var readStyle = n.read ? 'opacity:0.6;' : '';
                         return '<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);' + readStyle + '">' +
-                            '<div style="display:flex;align-items:center;gap:0.5rem;">' +
-                            '<span style="width:6px;height:6px;border-radius:50%;background:' + sevColor + ';flex-shrink:0;"></span>' +
+                            '<div class="flex items-center gap-2">' +
+                            '<span style="width:6px;height:6px;border-radius:50%;background:' + sevColor + ';flex-shrink:0;" aria-hidden="true"></span>' +
                             '<span class="font-bold text-sm" style="flex:1;">' + (n.title || '') + '</span>' +
                             '</div>' +
                             '<div class="text-xs text-muted" style="margin-top:2px;padding-left:14px;">' + (n.message || '') + '</div>' +
@@ -82,21 +108,24 @@
                         '</div>';
                     }).join('');
                 })
-                .catch(function() {});
+                .catch(function() {
+                    showToast('Failed to load notifications', 'error');
+                });
         }
 
         function markAllRead() {
             fetch('/api/notifications/read-all', {method:'POST'}).then(function() {
                 document.getElementById('notifBadge').style.display = 'none';
                 loadNotifications();
+                showToast('All notifications marked as read', 'success');
             });
         }
 
         function pollNotifCount() {
             fetch('/api/notifications/unread')
-                .then(r => r.json())
-                .then(d => {
-                    const badge = document.getElementById('notifBadge');
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    var badge = document.getElementById('notifBadge');
                     if (d.count > 0) {
                         badge.textContent = d.count > 99 ? '99+' : d.count;
                         badge.style.display = 'inline-flex';
@@ -109,10 +138,12 @@
 
         // Close notification panel when clicking outside
         document.addEventListener('click', function(e) {
-            const panel = document.getElementById('notifPanel');
-            if (notifOpen && panel && !panel.contains(e.target) && !e.target.closest('a[onclick*="toggleNotifications"]')) {
+            var panel = document.getElementById('notifPanel');
+            var toggle = document.getElementById('notifToggle');
+            if (notifOpen && panel && !panel.contains(e.target) && !toggle.contains(e.target)) {
                 notifOpen = false;
                 panel.style.display = 'none';
+                toggle.setAttribute('aria-expanded', 'false');
             }
         });
 
@@ -120,22 +151,26 @@
         pollNotifCount();
         setInterval(pollNotifCount, 60000);
 
-        // SSE helper
+        // ---- SSE helper with cleanup tracking ----
+        var _activeEventSources = [];
+
         function startSSE(url, logEl, onResult) {
-            const es = new EventSource(url);
+            var es = new EventSource(url);
+            _activeEventSources.push(es);
+
             es.onmessage = function(e) {
                 if (e.data === '[DONE]') {
-                    es.close();
+                    _cleanupES(es);
                     if (logEl) logEl.innerHTML += '<div class="log-done">Done</div>';
                     return;
                 }
                 if (e.data === '[CANCELLED]') {
-                    es.close();
+                    _cleanupES(es);
                     if (logEl) logEl.innerHTML += '<div class="log-warn">Cancelled</div>';
                     return;
                 }
                 if (e.data.startsWith('[RESULTS_JSON]')) {
-                    const json = JSON.parse(e.data.substring(14));
+                    var json = JSON.parse(e.data.substring(14));
                     if (onResult) onResult(json);
                     return;
                 }
@@ -145,16 +180,41 @@
                 }
             };
             es.onerror = function() {
-                es.close();
+                _cleanupES(es);
                 if (logEl) logEl.innerHTML += '<div class="log-error">Connection lost</div>';
             };
             return es;
+        }
+
+        function _cleanupES(es) {
+            es.close();
+            var idx = _activeEventSources.indexOf(es);
+            if (idx > -1) _activeEventSources.splice(idx, 1);
+        }
+
+        // Clean up all SSE connections on page unload
+        window.addEventListener('beforeunload', function() {
+            _activeEventSources.forEach(function(es) {
+                try { es.close(); } catch(e) {}
+            });
+            _activeEventSources = [];
+        });
+
+        // ---- Debounce utility ----
+        function debounce(fn, delay) {
+            var timer;
+            return function() {
+                var args = arguments;
+                var context = this;
+                clearTimeout(timer);
+                timer = setTimeout(function() { fn.apply(context, args); }, delay);
+            };
         }
     </script>
     {% block scripts %}{% endblock %}
     <script>
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+        navigator.serviceWorker.register('/static/sw.js').catch(function() {});
     }
     </script>
 </body>

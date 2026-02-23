@@ -429,32 +429,30 @@ async def matchups_page(request: Request,
         try:
             from datetime import datetime
             from src.analytics.prediction import predict_matchup
-            import math
             today = datetime.now().strftime("%Y-%m-%d")
             pred = predict_matchup(home_team, away_team, game_date=today)
             prediction = pred.__dict__
-            
-            # Alias keys for the web template
+            # Add formatted breakdown for display
+            prediction["breakdown"] = {
+                "Home Court Advantage": pred.home_court_advantage,
+                "Fatigue Adjustment": pred.fatigue_adj,
+                "Turnover Differential": pred.turnover_adj,
+                "Rebound Differential": pred.rebound_adj,
+                "Rating Matchup": pred.rating_matchup_adj,
+                "Four Factors": pred.four_factors_adj,
+                "Clutch Factor": pred.clutch_adj,
+                "Hustle Factor": pred.hustle_adj,
+                "ESPN Blend": pred.espn_blend_adj,
+                "ML Ensemble": pred.ml_blend_adj,
+            }
+            # Compute win probability from spread
+            import math
+            spread = pred.predicted_spread or 0
+            prediction["home_win_prob"] = 100.0 / (1.0 + math.exp(-0.15 * spread)) if spread else 50.0
             prediction["spread"] = pred.predicted_spread
             prediction["total"] = pred.predicted_total
             prediction["home_score"] = pred.predicted_home_score
             prediction["away_score"] = pred.predicted_away_score
-            
-            # Calculate win prob
-            prediction["home_win_prob"] = 100.0 / (1.0 + math.pow(10, -pred.predicted_spread / 15.0))
-            
-            # Populate breakdown
-            prediction["breakdown"] = {
-                "Home Court": pred.home_court_advantage,
-                "Fatigue Adj": pred.fatigue_adj,
-                "Turnover Adj": pred.turnover_adj,
-                "Rebound Adj": pred.rebound_adj,
-                "Four Factors": pred.four_factors_adj,
-                "Clutch Adj": pred.clutch_adj,
-                "ML Blend": pred.ml_blend_adj,
-            }
-            # Remove zero-value breakdown items
-            prediction["breakdown"] = {k: v for k, v in prediction["breakdown"].items() if v != 0}
         except Exception as e:
             prediction = {"error": str(e)}
 
@@ -1230,6 +1228,42 @@ async def allstar_page(request: Request):
 
 
 # ======== Team Colors API ========
+
+@app.get("/api/regression/save")
+async def sse_regression_save(name: str = Query("baseline")):
+    """Save a regression test baseline."""
+    def _run(callback):
+        from src.analytics.regression_test import save_baseline
+        return save_baseline(name, callback=callback)
+    return StreamingResponse(
+        _sse_generator(_run),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/api/regression/compare")
+async def sse_regression_compare(name: str = Query("baseline")):
+    """Compare current predictions against a baseline."""
+    def _run(callback):
+        from src.analytics.regression_test import compare_to_baseline
+        return compare_to_baseline(name, callback=callback)
+    return StreamingResponse(
+        _sse_generator(_run),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/api/regression/list")
+async def regression_list():
+    from src.analytics.regression_test import list_baselines
+    return JSONResponse(list_baselines())
+
+
+@app.get("/api/regression/test-features")
+async def regression_test_features():
+    from src.analytics.regression_test import test_feature_extraction
+    return JSONResponse(test_feature_extraction())
+
 
 @app.get("/api/team-colors")
 async def team_colors_api():

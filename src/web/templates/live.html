@@ -46,9 +46,9 @@
                         <span class="badge badge-info game-time" data-time="{{ g.get('start_time', '') }}">{{ g.status }}</span>
                     {% endif %}
                 </td>
-                <td style="width:24px;padding:4px;">
+                <td class="player-thumb-cell">
                     {% if g.get('away_team_id') %}
-                    <img src="/images/logos/{{ g.away_team_id }}.png" style="width:22px;height:22px;" onerror="this.style.display='none'">
+                    <img src="/images/logos/{{ g.away_team_id }}.png" class="team-logo-sm" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
                     {% endif %}
                 </td>
                 <td class="font-bold">{{ g.get('away_team', '???') }}</td>
@@ -56,9 +56,9 @@
                     {{ g.get('away_score', '-') }} — {{ g.get('home_score', '-') }}
                 </td>
                 <td class="font-bold">{{ g.get('home_team', '???') }}</td>
-                <td style="width:24px;padding:4px;">
+                <td class="player-thumb-cell">
                     {% if g.get('home_team_id') %}
-                    <img src="/images/logos/{{ g.home_team_id }}.png" style="width:22px;height:22px;" onerror="this.style.display='none'">
+                    <img src="/images/logos/{{ g.home_team_id }}.png" class="team-logo-sm" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
                     {% endif %}
                 </td>
                 <td class="font-mono text-muted">
