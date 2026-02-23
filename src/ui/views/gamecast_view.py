@@ -94,20 +94,38 @@ _cache = _GameCache()
 
 def _fetch_and_parse(game_id: str) -> dict:
     """Network call + parse — runs off main thread. Returns parsed dict."""
-    from src.data.gamecast import fetch_espn_game_summary
+    from src.data.gamecast import fetch_espn_game_summary, normalize_espn_abbr, get_actionnetwork_odds
     summary = fetch_espn_game_summary(game_id)
 
-    pickcenter = summary.get("pickcenter", [])
+    # Detect game state from header
+    header = summary.get("header", {})
+    comps = header.get("competitions", [{}])
+    comp = comps[0] if comps else {}
+    status_state = comp.get("status", {}).get("type", {}).get("state", "")
+
+    competitors = comp.get("competitors", [])
+    home_c = next((c for c in competitors if c.get("homeAway") == "home"), {})
+    away_c = next((c for c in competitors if c.get("homeAway") == "away"), {})
+    home_abbr = normalize_espn_abbr(home_c.get("team", {}).get("abbreviation", ""))
+    away_abbr = normalize_espn_abbr(away_c.get("team", {}).get("abbreviation", ""))
+
     odds = {}
-    if pickcenter:
-        od = pickcenter[0]
-        odds = {
-            "spread": od.get("details", ""),
-            "over_under": od.get("overUnder"),
-            "home_moneyline": od.get("homeTeamOdds", {}).get("moneyLine"),
-            "away_moneyline": od.get("awayTeamOdds", {}).get("moneyLine"),
-            "provider": od.get("provider", {}).get("name", ""),
-        }
+    try:
+        odds = get_actionnetwork_odds(home_abbr, away_abbr)
+    except Exception:
+        pass
+
+    if not odds or not odds.get("spread"):
+        pickcenter = summary.get("pickcenter", [])
+        if pickcenter:
+            od = pickcenter[0]
+            odds = {
+                "spread": od.get("details", ""),
+                "over_under": od.get("overUnder"),
+                "home_moneyline": od.get("homeTeamOdds", {}).get("moneyLine"),
+                "away_moneyline": od.get("awayTeamOdds", {}).get("moneyLine"),
+                "provider": od.get("provider", {}).get("name", ""),
+            }
 
     predictor = summary.get("predictor", {})
     home_win_pct = 50.0
@@ -115,12 +133,6 @@ def _fetch_and_parse(game_id: str) -> dict:
         home_win_pct = float(
             predictor.get("homeTeam", {}).get("gameProjection", 50.0)
         )
-
-    # Detect game state from header
-    header = summary.get("header", {})
-    comps = header.get("competitions", [{}])
-    comp = comps[0] if comps else {}
-    status_state = comp.get("status", {}).get("type", {}).get("state", "")
 
     return {
         "summary": summary,

@@ -894,7 +894,6 @@ async def sse_gamecast_stream(game_id: str):
         while True:
             try:
                 raw_summary = fetch_espn_game_summary(game_id)
-                odds = get_espn_odds(game_id)
                 plays = get_espn_plays(game_id)
                 boxscore = get_espn_boxscore(game_id)
 
@@ -908,6 +907,15 @@ async def sse_gamecast_stream(game_id: str):
 
                 home_abbr = normalize_espn_abbr(home_c.get("team", {}).get("abbreviation", "HOME"))
                 away_abbr = normalize_espn_abbr(away_c.get("team", {}).get("abbreviation", "AWAY"))
+                
+                # Fetch odds (try ActionNetwork for live, fallback to ESPN)
+                try:
+                    from src.data.gamecast import get_actionnetwork_odds
+                    odds = get_actionnetwork_odds(home_abbr, away_abbr)
+                    if not odds or not odds.get("spread"):
+                        odds = get_espn_odds(game_id)
+                except Exception:
+                    odds = get_espn_odds(game_id)
                 home_score = int(home_c.get("score", 0) or 0)
                 away_score = int(away_c.get("score", 0) or 0)
                 home_tid = _resolve_tid(home_abbr)

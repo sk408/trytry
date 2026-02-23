@@ -48,7 +48,7 @@
                 </td>
                 <td class="player-thumb-cell">
                     {% if g.get('away_team_id') %}
-                    <img src="/images/logos/{{ g.away_team_id }}.png" class="team-logo-sm" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
+                    <img src="/images/logos/{{ g.away_team_id }}.svg" class="team-logo-sm" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
                     {% endif %}
                 </td>
                 <td class="font-bold">{{ g.get('away_team', '???') }}</td>
@@ -58,7 +58,7 @@
                 <td class="font-bold">{{ g.get('home_team', '???') }}</td>
                 <td class="player-thumb-cell">
                     {% if g.get('home_team_id') %}
-                    <img src="/images/logos/{{ g.home_team_id }}.png" class="team-logo-sm" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
+                    <img src="/images/logos/{{ g.home_team_id }}.svg" class="team-logo-sm" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
                     {% endif %}
                 </td>
                 <td class="font-mono text-muted">

@@ -62,7 +62,7 @@
     <div class="prediction-card mb-4 fade-in">
         <div class="team-side">
             {% if away_team %}
-            <img src="/images/logos/{{ away_team }}.png" class="team-logo-pred" alt="{{ prediction.get('away_team', 'Away') }}" onerror="this.style.display='none'">
+            <img src="/images/logos/{{ away_team }}.svg" class="team-logo-pred" alt="{{ prediction.get('away_team', 'Away') }}" onerror="this.style.display='none'">
             {% endif %}
             <div class="team-name">{{ prediction.get('away_team', 'AWAY') }}</div>
             <div class="team-score">{{ '%.1f'|format(prediction.get('away_score', prediction.get('predicted_away_score', 0))) }}</div>
@@ -83,7 +83,7 @@
         </div>
         <div class="team-side">
             {% if home_team %}
-            <img src="/images/logos/{{ home_team }}.png" class="team-logo-pred" alt="{{ prediction.get('home_team', 'Home') }}" onerror="this.style.display='none'">
+            <img src="/images/logos/{{ home_team }}.svg" class="team-logo-pred" alt="{{ prediction.get('home_team', 'Home') }}" onerror="this.style.display='none'">
             {% endif %}
             <div class="team-name">{{ prediction.get('home_team', 'HOME') }}</div>
             <div class="team-score">{{ '%.1f'|format(prediction.get('home_score', prediction.get('predicted_home_score', 0))) }}</div>

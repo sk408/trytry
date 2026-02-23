@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-02-22 20:17:32",
-  "elapsed_seconds": 121.7,
+  "last_run": "2026-02-22 20:35:23",
+  "elapsed_seconds": 126.9,
   "results_summary": {
     "state": "loaded",
     "memory_loaded": true,
@@ -8,49 +8,49 @@
     "roster_changes": 29,
     "backtest": {
       "total_games": 844,
-      "overall_spread_accuracy": 61.4,
-      "overall_total_accuracy": 39.1,
-      "avg_spread_error": 13.74,
-      "avg_total_error": 15.5,
-      "spread_within_5_pct": 24.3,
-      "total_within_10_pct": 39.1,
+      "overall_spread_accuracy": 62.3,
+      "overall_total_accuracy": 39.2,
+      "avg_spread_error": 12.1,
+      "avg_total_error": 15.6,
+      "spread_within_5_pct": 28.7,
+      "total_within_10_pct": 39.2,
       "home_away": {
         "actual_home_wins": 454,
         "actual_away_wins": 390,
-        "pred_home_wins": 485,
-        "pred_away_wins": 358,
-        "home_pred_accuracy": 64.9,
-        "away_pred_accuracy": 61.2,
+        "pred_home_wins": 515,
+        "pred_away_wins": 328,
+        "home_pred_accuracy": 64.3,
+        "away_pred_accuracy": 62.2,
         "overall_home_win_rate": 53.8
       },
       "spread_ranges": [
         {
           "range": "0-3 (nail-biter)",
           "games": 85,
-          "winner_pct": 44.7,
-          "within_5_pct": 35.3,
-          "avg_error": 9.43
+          "winner_pct": 48.2,
+          "within_5_pct": 55.3,
+          "avg_error": 4.7
         },
         {
           "range": "3-7 (comfortable)",
           "games": 175,
-          "winner_pct": 52.6,
-          "within_5_pct": 31.4,
-          "avg_error": 10.13
+          "winner_pct": 54.3,
+          "within_5_pct": 56.0,
+          "avg_error": 5.29
         },
         {
           "range": "7-12 (blowout)",
           "games": 193,
-          "winner_pct": 60.1,
-          "within_5_pct": 28.5,
-          "avg_error": 11.53
+          "winner_pct": 58.0,
+          "within_5_pct": 44.6,
+          "avg_error": 7.71
         },
         {
           "range": "12+ (landslide)",
           "games": 391,
-          "winner_pct": 69.6,
-          "within_5_pct": 16.6,
-          "avg_error": 17.39
+          "winner_pct": 71.1,
+          "within_5_pct": 2.8,
+          "avg_error": 18.92
         }
       ],
       "total_ranges": [
@@ -58,40 +58,40 @@
           "range": "Under 200",
           "games": 49,
           "within_10_pct": 0.0,
-          "avg_error": 36.3
+          "avg_error": 35.3
         },
         {
           "range": "200-215",
           "games": 148,
-          "within_10_pct": 2.0,
-          "avg_error": 20.3
+          "within_10_pct": 2.7,
+          "avg_error": 19.6
         },
         {
           "range": "215-230",
           "games": 232,
-          "within_10_pct": 60.3,
-          "avg_error": 8.6
+          "within_10_pct": 64.2,
+          "avg_error": 8.0
         },
         {
           "range": "230-245",
           "games": 215,
-          "within_10_pct": 82.3,
-          "avg_error": 6.0
+          "within_10_pct": 78.6,
+          "avg_error": 6.5
         },
         {
           "range": "245+",
           "games": 200,
-          "within_10_pct": 5.0,
-          "avg_error": 25.3
+          "within_10_pct": 4.5,
+          "avg_error": 26.4
         }
       ],
       "bias": {
-        "avg_pred_spread": 1.88,
+        "avg_pred_spread": 1.41,
         "avg_actual_spread": 1.43,
-        "spread_bias": 0.45,
-        "avg_pred_total": 230.3,
+        "spread_bias": -0.02,
+        "avg_pred_total": 229.4,
         "avg_actual_total": 229.6,
-        "total_bias": 0.7
+        "total_bias": -0.2
       }
     }
   }

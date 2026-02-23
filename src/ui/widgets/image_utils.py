@@ -69,9 +69,13 @@ def _make_circle_pixmap(pixmap: QPixmap) -> QPixmap:
 def get_team_logo(team_id: int, size: int = 48) -> Optional[QPixmap]:
     """Get team logo as QPixmap. Cached in memory.
 
-    Handles both SVG (stored as .png) and actual PNG files.
+    Handles SVG files.
     """
-    path = TEAM_LOGOS_DIR / f"{team_id}.png"
+    path = TEAM_LOGOS_DIR / f"{team_id}.svg"
+    if not path.exists():
+        # Fallback to PNG if it exists
+        path = TEAM_LOGOS_DIR / f"{team_id}.png"
+        
     if not path.exists():
         # Try to download
         try:
@@ -79,6 +83,7 @@ def get_team_logo(team_id: int, size: int = 48) -> Optional[QPixmap]:
             result = get_team_logo_path(team_id)
             if not result:
                 return None
+            path = Path(result)
         except Exception:
             return None
 

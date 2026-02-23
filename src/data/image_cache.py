@@ -43,7 +43,7 @@ def get_player_photo_path(player_id: int) -> Optional[str]:
 def get_team_logo_path(team_id: int) -> Optional[str]:
     """Get cached team logo path, or download if missing."""
     _ensure_dirs()
-    path = TEAM_LOGOS_DIR / f"{team_id}.png"
+    path = TEAM_LOGOS_DIR / f"{team_id}.svg"
     if path.exists():
         return str(path)
     url = f"https://cdn.nba.com/logos/nba/{team_id}/global/L/logo.svg"

@@ -1,0 +1,146 @@
+Prediction Quality Metrics — Implementation Plan
+Context
+The current 66.8% winner accuracy is inflated by "obvious" picks (e.g., predicting Sacramento loses when they lose 70% of games). The user wants to measure whether the model adds value beyond naive baselines, identify edge opportunities vs. betting odds, and demonstrate the system improves as the season progresses. This is the core purpose of the program.
+
+P0: Value-Add Metrics (new file src/analytics/prediction_quality.py)
+Compute quality metrics from existing backtest per_game data — no new data sources needed.
+
+Metrics to add:
+Naive Baseline Accuracy — for each game, compute whether "always pick the team with the better win%" would be correct. Compare model accuracy vs. this baseline.
+
+Source for win%: team_metrics.w_pct (already in DB)
+Skill Score = (model_acc - baseline_acc) / (100 - baseline_acc) — 0 = no better than coin flip, 1 = perfect above baseline
+Tier Accuracy — group teams into 3 tiers by win%:
+
+Elite (top 10 by w_pct), Middle, Bottom (bottom 10)
+Report model accuracy for each matchup tier: Elite vs Bottom (easy), Elite vs Elite (hard), Middle vs Middle, etc.
+The interesting number is accuracy on competitive matchups (same-tier or adjacent-tier)
+Upset Detection Rate — how often the model correctly picks the team with the worse record to win
+User added: the upset detection plan should also include that we are using todays knowledge to determine if we could identify an upset historically. 
+
+Only counts games where records differ by >5 games
+This directly measures where the model adds value
+Confidence Calibration — bucket games by predicted spread magnitude:
+
+|spread| < 3: toss-ups
+|spread| 3-7: moderate edge
+|spread| 7+: strong pick
+Report accuracy for each bucket (strong picks should be more accurate)
+Implementation:
+
+# src/analytics/prediction_quality.py
+def compute_quality_metrics(per_game: list, per_team: dict) -> dict:
+    """Compute value-add metrics from backtest per_game results."""
+    # Returns: naive_baseline_acc, skill_score, tier_accuracy, upset_rate,
+    #          confidence_buckets, competitive_accuracy
+Reads team_metrics.w_pct from DB for the naive baseline
+Pure computation on existing backtest data — called at end of run_backtest() in backtester.py (line ~436, before cache save)
+Add quality_metrics key to the backtest summary dict
+Files to modify:
+Create: src/analytics/prediction_quality.py
+Edit: src/analytics/backtester.py — call compute_quality_metrics() and add to summary (line ~436)
+P1: Season Progression Tracking
+Show that the model improves as it gets more data through the season.
+
+Metrics:
+Monthly Accuracy — group per_game by month, report winner%, spread MAE, skill score per month
+Rolling Window — 30-game rolling accuracy/MAE to show trend
+Cumulative Curve — accuracy after N games (should trend upward)
+Implementation:
+
+# Added to prediction_quality.py
+def compute_progression(per_game: list) -> dict:
+    """Compute monthly, rolling, and cumulative accuracy progression."""
+    # Returns: monthly_breakdown[], rolling_30[], cumulative_curve[]
+Pure computation on existing per_game data (already sorted by date)
+Added to the quality_metrics dict in backtest results
+Files to modify:
+Edit: src/analytics/prediction_quality.py — add compute_progression()
+Edit: src/analytics/backtester.py — include progression in summary
+P2: Historical Odds Storage
+Currently ESPN odds are fetched live but never stored. We need historical odds to measure Against The Spread (ATS) performance.
+
+New table:
+
+CREATE TABLE IF NOT EXISTS game_odds (
+    game_date DATE NOT NULL,
+    home_team_id INTEGER NOT NULL,
+    away_team_id INTEGER NOT NULL,
+    spread REAL,           -- Vegas spread (home perspective, negative = home favored)
+    over_under REAL,
+    home_moneyline INTEGER,
+    away_moneyline INTEGER,
+    provider TEXT DEFAULT 'espn',
+    fetched_at TEXT,
+    PRIMARY KEY (game_date, home_team_id, away_team_id),
+    FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
+    FOREIGN KEY (away_team_id) REFERENCES teams(team_id)
+);
+Odds sync:
+
+# src/data/odds_sync.py
+def sync_odds_for_date(game_date: str, callback=None) -> int:
+    """Fetch and store odds for all games on a date via ESPN scoreboard API."""
+
+def backfill_odds(callback=None) -> int:
+    """Backfill odds for all historical games that have player_stats but no odds."""
+Uses ESPN scoreboard API (site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=YYYYMMDD) to get game list with odds
+Maps ESPN teams to our team_id using abbreviation matching
+Stores spread, over/under, moneylines
+Backfill runs through all game dates in player_stats that don't have odds yet
+Files to modify:
+Create: src/data/odds_sync.py
+Edit: src/database/migrations.py — add game_odds table to schema
+Edit: src/data/sync_service.py — add odds sync as optional step in daily sync
+P3: Edge Detection & ATS Metrics
+Once odds are stored, compare model predictions vs. Vegas lines.
+
+Metrics:
+ATS Record — model predicted spread vs. actual spread, relative to Vegas spread
+Model "covers" when: (pred_spread - vegas_spread) correctly predicts (actual_spread - vegas_spread) direction
+Closing Line Value (CLV) — when model disagrees with Vegas, was model closer to the actual result?
+Edge Games — flag games where |model_spread - vegas_spread| > threshold (e.g., 3 points)
+Track hit rate of these "edge" picks separately
+Expected Value (EV) — use odds_converter.expected_value() to compute EV of edge picks
+Implementation:
+
+# Added to prediction_quality.py
+def compute_vegas_comparison(per_game: list) -> dict:
+    """Compare model predictions vs stored Vegas lines."""
+    # Loads game_odds for each game in per_game
+    # Returns: ats_record, clv_score, edge_games[], edge_hit_rate, avg_ev
+Reuses existing odds_converter.py: american_to_probability(), expected_value(), spread_to_moneyline()
+Only computed when game_odds data exists (graceful skip otherwise)
+Files to modify:
+Edit: src/analytics/prediction_quality.py — add compute_vegas_comparison()
+P4: Web UI — Quality Dashboard
+Add quality metrics to the accuracy page.
+
+New sections in accuracy.html:
+Value-Add Summary — skill score gauge, naive baseline vs. model accuracy, competitive accuracy
+Tier Accuracy Grid — 3x3 grid showing accuracy for each matchup tier combo
+Season Progression Chart — monthly bars or line showing accuracy trend (simple HTML/CSS bars, no JS charting library)
+Vegas Comparison (when odds data available) — ATS record, edge hit rate, CLV score
+API additions:
+Quality metrics are returned as part of existing /api/backtest response — no new endpoints needed
+New endpoint: GET /api/odds/sync (SSE) — trigger odds backfill
+New endpoint: GET /api/odds/status — return count of games with/without odds
+Files to modify:
+Edit: src/web/templates/accuracy.html — add quality metric sections + JS rendering
+Edit: src/web/static/style.css — add quality dashboard styles
+Edit: src/web/app.py — add odds sync/status endpoints
+Edit: src/analytics/regression_test.py — include quality metrics in baselines
+Implementation Order
+P0 — Value-Add Metrics (standalone, immediate value, no dependencies)
+P1 — Season Progression (builds on P0, still no new data needed)
+P4 (partial) — UI for P0+P1 metrics
+P2 — Odds Storage (new table + sync)
+P3 — Edge Detection (depends on P2)
+P4 (rest) — UI for Vegas comparison section
+Verification
+Run backtest: python -m src.analytics.sensitivity --show or through web UI — verify quality_metrics appear in results
+Check skill score is between 0-1 and lower than raw winner%
+Verify tier accuracy shows lower accuracy for competitive matchups
+Run odds sync for a known date, verify game_odds table populated
+Run backtest with odds available, verify ATS record and edge games appear
+Load accuracy page in browser, confirm new sections render correctly

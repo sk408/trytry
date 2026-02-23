@@ -58,6 +58,11 @@
             </div>
         </div>
         <div class="quarter-scores" id="quarterScores" style="text-align:center;font-size:0.85rem;color:var(--text-muted);margin-bottom:8px;position:relative;z-index:1;"></div>
+        
+        <!-- Animated Score Banner -->
+        <div id="scoreBanner" style="position:absolute; top:-60px; left:50%; transform:translateX(-50%); background:var(--accent); color:white; padding:8px 24px; border-radius:0 0 12px 12px; font-weight:800; font-size:1.1rem; box-shadow:0 4px 12px rgba(0,0,0,0.5); z-index:10; transition:top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events:none;">
+            TEAM SCORE!
+        </div>
     </div>
 
     <!-- Live Odds & Prediction (Grid) -->
@@ -448,8 +453,15 @@
 }
 
 /* Box Score Table */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -16px;
+  padding: 0 16px;
+}
 .box-table {
   font-size: 0.85rem;
+  min-width: 600px;
 }
 
 .box-table th {
@@ -481,8 +493,24 @@
 </style>
 
 <script>
+// ---- Team Colors ----
+const TEAM_COLORS = {
+    1610612737:["#E03A3E","#C1D32F"],1610612738:["#007A33","#BA9653"],1610612739:["#860038","#041E42"],
+    1610612740:["#0C2340","#C8102E"],1610612741:["#CE1141","#000000"],1610612742:["#00538C","#002B5E"],
+    1610612743:["#0E2240","#FEC524"],1610612744:["#1D428A","#FFC72C"],1610612745:["#CE1141","#000000"],
+    1610612746:["#C8102E","#1D428A"],1610612747:["#552583","#FDB927"],1610612748:["#98002E","#F9A01B"],
+    1610612749:["#00471B","#EEE1C6"],1610612750:["#0C2340","#236192"],1610612751:["#000000","#FFFFFF"],
+    1610612752:["#006BB6","#F58426"],1610612753:["#0077C0","#000000"],1610612754:["#002D62","#FDBB30"],
+    1610612755:["#006BB6","#ED174C"],1610612756:["#1D1160","#E56020"],1610612757:["#E03A3E","#000000"],
+    1610612758:["#5A2D81","#63727A"],1610612759:["#C4CED4","#000000"],1610612760:["#007AC1","#EF6100"],
+    1610612761:["#CE1141","#000000"],1610612762:["#002B5C","#00471B"],1610612763:["#5D76A9","#12173F"],
+    1610612764:["#002B5C","#E31837"],1610612765:["#C8102E","#1D42BA"],1610612766:["#1D1160","#00788C"],
+};
+
 let gameES = null;
 let currentSummary = null;
+let previousHomeScore = null;
+let previousAwayScore = null;
 
 function toggleGameSelector() {
     const list = document.getElementById('gameList');
@@ -527,10 +555,10 @@ async function loadGames() {
             return `
                 <a href="#" class="game-row" onclick="event.preventDefault(); selectGame('${id}', this);">
                     <div class="game-teams">
-                        <img src="/images/logos/${g.away_team_id || ''}.png" class="team-logo-small" onerror="this.style.display='none'">
+                        <img src="/images/logos/${g.away_team_id || ''}.svg" class="team-logo-small" onerror="this.style.display='none'">
                         <span>${g.away_team || 'AWAY'}</span>
                         <span class="at">@</span>
-                        <img src="/images/logos/${g.home_team_id || ''}.png" class="team-logo-small" onerror="this.style.display='none'">
+                        <img src="/images/logos/${g.home_team_id || ''}.svg" class="team-logo-small" onerror="this.style.display='none'">
                         <span class="home">${g.home_team || 'HOME'}</span>
                     </div>
                     <div class="game-status">
@@ -587,8 +615,30 @@ function selectGame(gameId, element = null) {
     };
 }
 
+function showScoreBanner(teamName, points, teamId) {
+    const banner = document.getElementById('scoreBanner');
+    if (!banner) return;
+    const color = TEAM_COLORS[teamId] ? TEAM_COLORS[teamId][0] : 'var(--accent)';
+    banner.style.background = color;
+    banner.innerHTML = `${teamName} SCORE! +${points}`;
+    banner.style.top = '0';
+    setTimeout(() => {
+        banner.style.top = '-60px';
+    }, 4000);
+}
+
 function updateScoreboard(s) {
     if (!s) return;
+    
+    // Check for score updates to trigger banner
+    if (previousHomeScore !== null && s.home_score > previousHomeScore) {
+        showScoreBanner(s.home_team, s.home_score - previousHomeScore, s.home_team_id);
+    } else if (previousAwayScore !== null && s.away_score > previousAwayScore) {
+        showScoreBanner(s.away_team, s.away_score - previousAwayScore, s.away_team_id);
+    }
+    previousHomeScore = s.home_score;
+    previousAwayScore = s.away_score;
+    
     document.getElementById('homeTeam').textContent = s.home_team || 'HOME';
     document.getElementById('awayTeam').textContent = s.away_team || 'AWAY';
     document.getElementById('homeTeamName').textContent = s.home_team || '';
@@ -621,12 +671,12 @@ function updateScoreboard(s) {
     // Logos
     if (s.home_team_id) {
         const hl = document.getElementById('homeLogo');
-        hl.src = '/images/logos/' + s.home_team_id + '.png';
+        hl.src = '/images/logos/' + s.home_team_id + '.svg';
         hl.style.display = 'block';
     }
     if (s.away_team_id) {
         const al = document.getElementById('awayLogo');
-        al.src = '/images/logos/' + s.away_team_id + '.png';
+        al.src = '/images/logos/' + s.away_team_id + '.svg';
         al.style.display = 'block';
     }
 
@@ -649,19 +699,6 @@ function updateScoreboard(s) {
 }
 
 // ---- Team Colors ----
-const TEAM_COLORS = {
-    1610612737:["#E03A3E","#C1D32F"],1610612738:["#007A33","#BA9653"],1610612739:["#860038","#041E42"],
-    1610612740:["#0C2340","#C8102E"],1610612741:["#CE1141","#000000"],1610612742:["#00538C","#002B5E"],
-    1610612743:["#0E2240","#FEC524"],1610612744:["#1D428A","#FFC72C"],1610612745:["#CE1141","#000000"],
-    1610612746:["#C8102E","#1D428A"],1610612747:["#552583","#FDB927"],1610612748:["#98002E","#F9A01B"],
-    1610612749:["#00471B","#EEE1C6"],1610612750:["#0C2340","#236192"],1610612751:["#000000","#FFFFFF"],
-    1610612752:["#006BB6","#F58426"],1610612753:["#0077C0","#000000"],1610612754:["#002D62","#FDBB30"],
-    1610612755:["#006BB6","#ED174C"],1610612756:["#1D1160","#E56020"],1610612757:["#E03A3E","#000000"],
-    1610612758:["#5A2D81","#63727A"],1610612759:["#C4CED4","#000000"],1610612760:["#007AC1","#EF6100"],
-    1610612761:["#CE1141","#000000"],1610612762:["#002B5C","#00471B"],1610612763:["#5D76A9","#12173F"],
-    1610612764:["#002B5C","#E31837"],1610612765:["#C8102E","#1D42BA"],1610612766:["#1D1160","#00788C"],
-};
-
 function applyTeamColors(s) {
     if (!s) return;
     const hc = TEAM_COLORS[s.home_team_id] || ["#3b82f6","#1e293b"];
@@ -728,7 +765,7 @@ function updatePrediction(pred, s) {
 function updateOdds(odds) {
     const el = document.getElementById('oddsInfo');
     if (!odds || (!odds.spread && !odds.away_moneyline && !odds.home_moneyline)) {
-        el.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1;">No odds available</div>';
+        el.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1;">No live odds available right now.</div>';
         return;
     }
     el.innerHTML = `
@@ -839,7 +876,7 @@ function updatePlays(plays, s) {
                     ${foulTag}
                 </div>
                 <div class="play-body">
-                    ${teamAbbr ? `<span class="play-team-badge" style="${badgeStyle}">${teamAbbr}</span>` : ''}
+                    ${p.team_id ? `<img src="/images/logos/${p.team_id}.svg" style="width:24px;height:24px;object-fit:contain;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.3));" onerror="this.style.display='none'">` : ''}
                     <span class="play-text" style="${p.scoring ? 'font-weight:600;color:var(--text);' : ''}">${p.text || ''}</span>
                 </div>
                 ${(p.away_score || p.home_score) ? `<div class="play-score">${awayAbbr || 'AWAY'} ${p.away_score} - ${p.home_score} ${homeAbbr || 'HOME'}</div>` : ''}

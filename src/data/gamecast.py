@@ -186,3 +186,77 @@ class ESPNWebSocket:
                 self.ws.close()
             except Exception:
                 pass
+
+_an_odds_cache = {}
+_an_last_fetch = 0.0
+
+def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
+    """Fetch live odds from Action Network API. 
+    Matches based on team abbreviations.
+    Caches the full scoreboard request for 15 seconds to prevent spam.
+    """
+    import time
+    global _an_odds_cache, _an_last_fetch
+    
+    # Simple mapping for Action Network abbreviations just in case
+    # (Usually they match standard NBA abbreviations perfectly)
+    an_mapper = {"NO": "NOP", "NY": "NYK", "SA": "SAS", "GS": "GSW"}
+    
+    home_query = an_mapper.get(home_abbr, home_abbr)
+    away_query = an_mapper.get(away_abbr, away_abbr)
+    
+    now = time.time()
+    if not _an_odds_cache or (now - _an_last_fetch) > 15.0:
+        try:
+            resp = requests.get(
+                "https://api.actionnetwork.com/web/v1/scoreboard/nba", 
+                headers=_HEADERS, 
+                timeout=10
+            )
+            if resp.status_code == 200:
+                _an_odds_cache = resp.json()
+                _an_last_fetch = now
+        except Exception as e:
+            logger.warning(f"ActionNetwork fetch failed: {e}")
+            
+    if not _an_odds_cache:
+        return {}
+        
+    games = _an_odds_cache.get("games", [])
+    
+    for g in games:
+        teams = g.get("teams", [])
+        if len(teams) < 2:
+            continue
+            
+        t1_abbr = teams[0].get("abbr", "")
+        t2_abbr = teams[1].get("abbr", "")
+        
+        # Check if this game matches our teams
+        match = (t1_abbr == home_query and t2_abbr == away_query) or \
+                (t1_abbr == away_query and t2_abbr == home_query)
+                
+        if match:
+            odds_list = g.get("odds", [])
+            if odds_list:
+                # Typically index 0 is the consensus or primary book (like DraftKings)
+                o = odds_list[0]
+                
+                # Figure out which spread goes to which team based on IDs
+                home_team_id = g.get("home_team_id")
+                away_team_id = g.get("away_team_id")
+                
+                # Make sure we map the home spread correctly
+                # Action Network provides "spread_home" directly!
+                spread_val = o.get("spread_home")
+                spread_str = f"{spread_val:+.1f}" if spread_val is not None else ""
+                
+                return {
+                    "spread": spread_str,
+                    "over_under": o.get("total"),
+                    "home_moneyline": o.get("ml_home"),
+                    "away_moneyline": o.get("ml_away"),
+                    "provider": "Action Network",
+                }
+            
+    return {}

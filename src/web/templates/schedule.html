@@ -36,13 +36,13 @@
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
                 {% if g.get('away_team_id') %}
-                <img src="/images/logos/{{ g.away_team_id }}.png" class="team-logo-xs" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
+                <img src="/images/logos/{{ g.away_team_id }}.svg" class="team-logo-xs" alt="{{ g.get('away_team', '') }}" onerror="this.style.display='none'">
                 {% endif %}
                 <span class="font-bold">{{ g.get('away_team', '???') }}</span>
                 <span class="text-muted">@</span>
                 <span class="font-bold">{{ g.get('home_team', '???') }}</span>
                 {% if g.get('home_team_id') %}
-                <img src="/images/logos/{{ g.home_team_id }}.png" class="team-logo-xs" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
+                <img src="/images/logos/{{ g.home_team_id }}.svg" class="team-logo-xs" alt="{{ g.get('home_team', '') }}" onerror="this.style.display='none'">
                 {% endif %}
             </div>
             <div class="text-sm text-muted">
