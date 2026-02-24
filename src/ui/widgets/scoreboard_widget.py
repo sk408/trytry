@@ -150,6 +150,19 @@ class ScoreboardWidget(QWidget):
         if updated:
             self.update()
 
+    def _match_name(self, play_name: str, box_name: str) -> bool:
+        pn = play_name.lower().replace("'", "").replace(".", "")
+        bn = box_name.lower().replace("'", "").replace(".", "")
+        if pn in bn or bn in pn:
+            return True
+        p_parts = pn.split()
+        b_parts = bn.split()
+        if p_parts and b_parts and p_parts[-1] == b_parts[-1]:
+            if len(p_parts) > 1 and len(b_parts) > 1:
+                return p_parts[0][0] == b_parts[0][0]
+            return True
+        return False
+
     def show_substitution(self, text: str, boxscore: dict):
         import re
         match = re.search(r"(.+?)\s+enters the game for\s+(.+)", text, re.IGNORECASE)
@@ -185,9 +198,9 @@ class ScoreboardWidget(QWidget):
                     "headshot": ainfo.get("headshot", {}).get("href", "")
                 }
                 
-                if p_in_name in p_name or p_name in p_in_name:
+                if self._match_name(p_in_name, p_name):
                     p_in = p_dict
-                if p_out_name in p_name or p_name in p_out_name:
+                if self._match_name(p_out_name, p_name):
                     p_out = p_dict
                     
         in_url = p_in.get("headshot", "") if p_in else ""

@@ -53,7 +53,7 @@
         <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(293deg, var(--team-home) 0%, #000000 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 30px 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
         
         <!-- Center slanted separator -->
-        <div style="position:absolute; top:0; left:50%; width:2px; height:100%; background:rgba(255,255,255,0.15); transform: translateX(-50%) skewX(-15deg); z-index:0;"></div>
+        <!-- <div style="position:absolute; top:0; left:50%; width:2px; height:100%; background:rgba(255,255,255,0.15); transform: translateX(-50%) skewX(15deg); z-index:0;"></div> -->
 
         <!-- Top Status Banner -->
         <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); background:rgba(10, 15, 25, 0.95); padding: 4px 20px; border-radius: 0 0 8px 8px; z-index:2; text-align:center; min-width: 140px; border: 1px solid rgba(255,255,255,0.1); border-top: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
@@ -960,6 +960,23 @@ function startTimeoutTimer(seconds) {
             secondsSpan.textContent = remaining;
         }
     }, 1000);
+}
+
+function matchPlayerName(playName, boxName) {
+    if (!playName || !boxName) return false;
+    let pn = playName.toLowerCase().replace(/[^a-z \-]/g, '');
+    let bn = boxName.toLowerCase().replace(/[^a-z \-]/g, '');
+    if (pn === bn) return true;
+    if (bn.includes(pn) || pn.includes(bn)) return true;
+    let pParts = pn.split(' ');
+    let bParts = bn.split(' ');
+    if (pParts.length > 0 && bParts.length > 0 && pParts[pParts.length-1] === bParts[bParts.length-1]) {
+        if (pParts.length > 1 && bParts.length > 1) {
+            return pParts[0][0] === bParts[0][0];
+        }
+        return true;
+    }
+    return false;
 }
 
 function showSubstitution(text, boxscore) {
