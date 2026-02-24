@@ -104,11 +104,12 @@
                     list.innerHTML = notifs.map(function(n) {
                         var sevColor = n.severity === 'critical' ? 'var(--danger)' :
                                        n.severity === 'warning' ? '#fbbf24' : 'var(--accent)';
-                        var readStyle = n.read ? 'opacity:0.6;' : '';
-                        return '<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border);' + readStyle + '">' +
+                        var readStyle = n.read ? 'opacity:0.5; background:var(--bg-dark);' : 'background:var(--bg-card);';
+                        return '<div style="padding:0.75rem;border-bottom:1px solid var(--border);' + readStyle + '">' +
                             '<div class="flex items-center gap-2">' +
                             '<span style="width:6px;height:6px;border-radius:50%;background:' + sevColor + ';flex-shrink:0;" aria-hidden="true"></span>' +
                             '<span class="font-bold text-sm" style="flex:1;">' + (n.title || '') + '</span>' +
+                            (n.read ? '<span style="font-size:0.65rem;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:1px 4px;">READ</span>' : '') +
                             '</div>' +
                             '<div class="text-xs text-muted" style="margin-top:2px;padding-left:14px;">' + (n.message || '') + '</div>' +
                             '<div class="text-xs text-muted" style="padding-left:14px;">' + (n.created_at || '') + '</div>' +

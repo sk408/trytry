@@ -1099,7 +1099,27 @@ async def sse_gamecast_stream(game_id: str):
                             "fg": smap.get("FG", ""),
                             "threept": smap.get("3PT", ""),
                             "plusminus": smap.get("+/-", ""),
+                            "pf": smap.get("PF", ""),
                         })
+
+                # Calculate total team fouls from player box scores
+                home_fouls = 0
+                away_fouls = 0
+                for side, p_list in [("home", box_parsed["home"]), ("away", box_parsed["away"])]:
+                    for p in p_list:
+                        try:
+                            f = int(p["pf"]) if p["pf"] else 0
+                            if side == "home":
+                                home_fouls += f
+                            else:
+                                away_fouls += f
+                        except ValueError:
+                            pass
+
+                summary.update({
+                    "home_fouls": home_fouls,
+                    "away_fouls": away_fouls,
+                })
 
                 data = {
                     "summary": summary,

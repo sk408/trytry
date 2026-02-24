@@ -17,6 +17,11 @@
 </div>
 
     <div id="gameDetail" class="hidden">
+    <!-- Timeout Overlay -->
+    <div id="timeoutOverlay" style="display:none; position:fixed; top:20px; left:50%; transform:translateX(-50%); background:rgba(239, 68, 68, 0.9); color:white; padding:10px 20px; border-radius:30px; font-family:var(--font-heading); font-size:1.5rem; z-index:9999; box-shadow:0 4px 15px rgba(0,0,0,0.5); border: 2px solid #fca5a5; font-weight:700; align-items:center; gap:10px; justify-content:center;">
+        <span>TIMEOUT:</span><span id="timeoutSeconds">75</span><span>s</span>
+    </div>
+
     <!-- Live Score -->
     <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); padding:0; min-height: 220px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); display: flex; flex-direction: column;">
         
@@ -49,8 +54,9 @@
             <div class="score-team" style="display:flex; flex-direction:column; align-items:center; flex: 1; gap: 10px;">
                 <div style="display:flex; flex-direction:column; align-items:center;">
                     <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                    <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">AWY</div>
-                    <!-- Timeouts and Bonus -->
+                            <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">AWY</div>
+                            <div id="awayTeamFouls" style="font-size:0.7rem; color:var(--text-muted); font-weight:600; margin-top:2px;">FOULS: 0</div>
+                            <!-- Timeouts and Bonus -->
                     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
                         <div id="awayBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
                         <div id="awayTimeouts" style="display:flex; gap:3px;"></div>
@@ -69,8 +75,9 @@
             <div class="score-team" style="display:flex; flex-direction:column; align-items:center; flex: 1; gap: 10px;">
                 <div style="display:flex; flex-direction:column; align-items:center;">
                     <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                    <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">HOM</div>
-                    <!-- Timeouts and Bonus -->
+                            <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">HOM</div>
+                            <div id="homeTeamFouls" style="font-size:0.7rem; color:var(--text-muted); font-weight:600; margin-top:2px;">FOULS: 0</div>
+                            <!-- Timeouts and Bonus -->
                     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
                         <div id="homeBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
                         <div id="homeTimeouts" style="display:flex; gap:3px;"></div>
@@ -154,7 +161,7 @@
         <div id="boxAway" class="tab-content active">
             <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
                 <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
-                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -162,7 +169,7 @@
         <div id="boxHome" class="tab-content" style="display:none;">
             <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
                 <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
-                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
                     <tbody></tbody>
                 </table>
             </div>
@@ -740,6 +747,12 @@ function updateScoreboard(s) {
     document.getElementById('homeBonus').style.visibility = s.home_bonus ? 'visible' : 'hidden';
     document.getElementById('awayBonus').style.visibility = s.away_bonus ? 'visible' : 'hidden';
 
+    // Team Fouls
+    let homeFouls = s.home_fouls || 0;
+    let awayFouls = s.away_fouls || 0;
+    document.getElementById('homeTeamFouls').textContent = 'FOULS: ' + homeFouls;
+    document.getElementById('awayTeamFouls').textContent = 'FOULS: ' + awayFouls;
+
     // Timeouts
     const renderTimeouts = (containerId, count) => {
         const container = document.getElementById(containerId);
@@ -902,13 +915,50 @@ function fillBoxTable(tableId, players) {
             '<td class="font-mono text-center">' + (p.blk || '') + '</td>' +
             '<td class="font-mono text-center">' + (p.fg || '') + '</td>' +
             '<td class="font-mono text-center">' + (p.threept || '') + '</td>' +
+            '<td class="font-mono text-center" style="color:var(--danger);">' + (p.pf || '') + '</td>' +
             '<td class="font-mono text-center font-bold ' + (parseInt(p.plusminus)>0?'text-success':(parseInt(p.plusminus)<0?'text-danger':'')) + '">' + (p.plusminus || '') + '</td>' +
         '</tr>';
     }).join('');
 }
 
+let lastPlayText = "";
+let timeoutInterval = null;
+
+function startTimeoutTimer(seconds) {
+    const overlay = document.getElementById('timeoutOverlay');
+    const secondsSpan = document.getElementById('timeoutSeconds');
+    
+    if (timeoutInterval) clearInterval(timeoutInterval);
+    
+    let remaining = seconds;
+    overlay.style.display = 'flex';
+    secondsSpan.textContent = remaining;
+    
+    timeoutInterval = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) {
+            clearInterval(timeoutInterval);
+            overlay.style.display = 'none';
+        } else {
+            secondsSpan.textContent = remaining;
+        }
+    }, 1000);
+}
+
 function updatePlays(plays, s) {
     if (!plays) return;
+    
+    // Check for timeout
+    if (plays.length > 0) {
+        const latestPlay = plays[plays.length - 1].text;
+        if (latestPlay !== lastPlayText) {
+            if (latestPlay.toLowerCase().includes("timeout") && s.status_state === 'in') {
+                startTimeoutTimer(75);
+            }
+            lastPlayText = latestPlay;
+        }
+    }
+
     const el = document.getElementById('plays');
     const homeTid = s ? s.home_team_id : null;
     const homeAbbr = s ? s.home_team : null;

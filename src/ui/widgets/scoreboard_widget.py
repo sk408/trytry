@@ -38,6 +38,12 @@ class ScoreboardWidget(QWidget):
         self._home_timeouts = -1
         self._away_bonus = False
         self._home_bonus = False
+        self._away_fouls = 0
+        self._home_fouls = 0
+
+        self._timeout_seconds = 0
+        self._timeout_timer = QTimer(self)
+        self._timeout_timer.timeout.connect(self._on_timeout_tick)
 
         # Animation state
         self._away_flash_alpha = 0.0
@@ -58,6 +64,18 @@ class ScoreboardWidget(QWidget):
         self._anim_home.setEasingCurve(QEasingCurve.Type.OutQuad)
         self._anim_home.valueChanged.connect(self._set_home_flash_alpha)
 
+    def start_timeout(self, seconds: int = 75):
+        self._timeout_seconds = seconds
+        self._timeout_timer.start(1000)
+        self.update()
+
+    def _on_timeout_tick(self):
+        if self._timeout_seconds > 0:
+            self._timeout_seconds -= 1
+            self.update()
+            if self._timeout_seconds <= 0:
+                self._timeout_timer.stop()
+
     def _set_away_flash_alpha(self, val):
         self._away_flash_alpha = val
         self.update()
@@ -73,7 +91,8 @@ class ScoreboardWidget(QWidget):
                     status_text: str = "", status_state: str = "",
                     clock: str = "", period: int = 0,
                     away_timeouts: int = -1, home_timeouts: int = -1,
-                    away_bonus: bool = False, home_bonus: bool = False):
+                    away_bonus: bool = False, home_bonus: bool = False,
+                    away_fouls: int = 0, home_fouls: int = 0):
         """Set scoreboard data and trigger repaint. Triggers animations on score change."""
         if self._away_score > 0 and away_score > self._away_score:
             self._anim_away.start()
@@ -96,6 +115,8 @@ class ScoreboardWidget(QWidget):
         self._home_timeouts = home_timeouts
         self._away_bonus = away_bonus
         self._home_bonus = home_bonus
+        self._away_fouls = away_fouls
+        self._home_fouls = home_fouls
         self.update()
 
     def paintEvent(self, event):
@@ -203,10 +224,12 @@ class ScoreboardWidget(QWidget):
         away_name_x = (mid_x - 300 - logo_size / 2) - away_name_w / 2
         draw_text_with_shadow(p, away_name_x, h - 30, self._away_abbr, name_font, QColor("#e2e8f0"))
 
-        # Away Bonus and Timeouts
+        # Away Bonus, Timeouts, and Fouls
         if self._away_bonus:
             draw_text_with_shadow(p, (mid_x - 300 - logo_size / 2) - 15, h - 10, "BONUS", tiny_font, QColor("#fbbf24"))
         
+        draw_text_with_shadow(p, (mid_x - 300 - logo_size / 2) - 20, h - 45, f"FOULS: {self._away_fouls}", tiny_font, QColor("#94a3b8"))
+
         if self._away_timeouts >= 0:
             to_start_x = (mid_x - 300 - logo_size / 2) - (7 * 8) / 2
             for t in range(7):
@@ -240,10 +263,12 @@ class ScoreboardWidget(QWidget):
         home_name_x = (mid_x + 300 + logo_size / 2) - home_name_w / 2
         draw_text_with_shadow(p, home_name_x, h - 30, self._home_abbr, name_font, QColor("#e2e8f0"))
 
-        # Home Bonus and Timeouts
+        # Home Bonus, Timeouts, and Fouls
         if self._home_bonus:
             draw_text_with_shadow(p, (mid_x + 300 + logo_size / 2) - 15, h - 10, "BONUS", tiny_font, QColor("#fbbf24"))
         
+        draw_text_with_shadow(p, (mid_x + 300 + logo_size / 2) - 20, h - 45, f"FOULS: {self._home_fouls}", tiny_font, QColor("#94a3b8"))
+
         if self._home_timeouts >= 0:
             to_start_x = (mid_x + 300 + logo_size / 2) - (7 * 8) / 2
             for t in range(7):
@@ -306,6 +331,16 @@ class ScoreboardWidget(QWidget):
             draw_text_with_shadow(p, mid_x - 20, 22, "FINAL", small_font, QColor("#94a3b8"))
         else:
             draw_text_with_shadow(p, mid_x - 40, 22, self._status_text[:20], small_font, QColor("#64748b"))
+
+        # Timeout Timer Overlay
+        if self._timeout_seconds > 0:
+            to_w = 120
+            to_h = 36
+            to_rect = QRectF(mid_x - to_w/2, h / 2 - to_h/2 + 30, to_w, to_h)
+            p.fillRect(to_rect, QColor(239, 68, 68, 230))
+            p.setPen(QPen(QColor(252, 165, 165), 2))
+            p.drawRect(to_rect)
+            draw_text_with_shadow(p, mid_x - to_w/2 + 10, h / 2 - to_h/2 + 54, f"TIMEOUT: {self._timeout_seconds}s", name_font, QColor("#ffffff"))
 
         p.end()
 

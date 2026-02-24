@@ -336,9 +336,9 @@ class GamecastView(QWidget):
     def _make_box_table(self) -> QTableWidget:
         """Create a box score table with player photo column."""
         table = QTableWidget()
-        table.setColumnCount(11)
+        table.setColumnCount(12)
         table.setHorizontalHeaderLabels([
-            "", "Player", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "+/-",
+            "", "Player", "MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "PF", "+/-",
         ])
         # Interactive resize so users can drag column widths
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -347,7 +347,7 @@ class GamecastView(QWidget):
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(0, 32)
         table.setColumnWidth(1, 120)  # Player name
-        for col in range(2, 11):
+        for col in range(2, 12):
             table.setColumnWidth(col, 50)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
@@ -579,8 +579,32 @@ class GamecastView(QWidget):
         # Bonus indicator
         home_bonus = home_comp.get("linescores", [{}])[-1].get("isBonus", False) if home_comp.get("linescores") else False
         away_bonus = away_comp.get("linescores", [{}])[-1].get("isBonus", False) if away_comp.get("linescores") else False
-        # actually, ESPN often puts bonus flag on the competition or competitors directly?
-        # let's try to extract if available. We will pass to update_data
+
+        # Calculate team fouls from box score
+        home_fouls = 0
+        away_fouls = 0
+        box_players = boxscore.get("players", []) if isinstance(boxscore, dict) else []
+        for tb in box_players:
+            tb_tid = str(tb.get("team", {}).get("id", ""))
+            side = "home" if tb_tid == home_comp.get("team", {}).get("id", "") else "away"
+            stats_blocks = tb.get("statistics", [])
+            if not stats_blocks:
+                continue
+            labels = stats_blocks[0].get("labels", [])
+            pf_index = labels.index("PF") if "PF" in labels else -1
+            if pf_index >= 0:
+                for ath in stats_blocks[0].get("athletes", []):
+                    stats = ath.get("stats", [])
+                    if len(stats) > pf_index:
+                        pf_str = stats[pf_index]
+                        try:
+                            f = int(pf_str)
+                            if side == "home":
+                                home_fouls += f
+                            else:
+                                away_fouls += f
+                        except ValueError:
+                            pass
 
         status_detail = comp.get("status", {})
         status_text = status_detail.get("type", {}).get("description", "")
@@ -623,7 +647,8 @@ class GamecastView(QWidget):
             status_text=status_text, status_state=status_state,
             clock=clock_str, period=period,
             away_timeouts=away_timeouts, home_timeouts=home_timeouts,
-            away_bonus=away_bonus, home_bonus=home_bonus
+            away_bonus=away_bonus, home_bonus=home_bonus,
+            away_fouls=away_fouls, home_fouls=home_fouls
         )
 
         # ── Court ──
@@ -635,6 +660,8 @@ class GamecastView(QWidget):
         new_plays = flat_plays[self._known_play_count:]
         for play in new_plays:
             self.court.add_play(play)
+            if "timeout" in play.get("text", "").lower() and status_state == "in":
+                self.scoreboard.start_timeout(75)
         self._known_play_count = len(flat_plays)
 
         # ── Info panel (prediction + odds) ──
@@ -951,10 +978,12 @@ class GamecastView(QWidget):
             # Column 1: Name
             table.setItem(r, 1, QTableWidgetItem(name_display))
 
-            # Columns 2-10: Stats
-            stat_keys = ["MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "+/-"]
+            # Columns 2-11: Stats
+            stat_keys = ["MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "PF", "+/-"]
             for c, key in enumerate(stat_keys):
                 val = stat_map.get(key, "")
                 item = QTableWidgetItem(str(val))
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if key == "PF" and val and str(val).isdigit() and int(val) > 0:
+                    item.setForeground(QColor("#ef4444"))
                 table.setItem(r, c + 2, item)

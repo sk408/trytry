@@ -151,9 +151,13 @@ class NotificationPanel(QFrame):
     def _make_card(self, notification) -> QFrame:
         """Create a notification card."""
         frame = QFrame()
+        is_read = bool(notification.get("read", 0))
+        bg_color = "#0f172a" if not is_read else "#0b0f19"
+        border_color = "#334155" if not is_read else "#1e293b"
+        
         frame.setStyleSheet(
-            "QFrame { background: #0f172a; border: 1px solid #334155; "
-            "border-radius: 4px; padding: 6px; }"
+            f"QFrame {{ background: {bg_color}; border: 1px solid {border_color}; "
+            f"border-radius: 4px; padding: 6px; }}"
         )
         fl = QVBoxLayout(frame)
         fl.setContentsMargins(6, 4, 6, 4)
@@ -167,16 +171,22 @@ class NotificationPanel(QFrame):
             sev_name = severity.value if hasattr(severity, "value") else str(severity)
 
         color = _SEVERITY_COLORS.get(sev_name, _SEVERITY_COLORS["info"])
+        # Dim the color if read
+        if is_read:
+            color = QColor(color)
+            color.setAlpha(100)
+
         title = notification.get("title", "")
         title_label = QLabel(f"● {title}")
-        title_label.setStyleSheet(f"color: {color.name()}; font-weight: 600; font-size: 12px;")
+        title_label.setStyleSheet(f"color: {color.name(QColor.NameFormat.HexArgb)}; font-weight: 600; font-size: 12px;")
         fl.addWidget(title_label)
 
         # Message
         message = notification.get("message", "")
         if message:
             msg_label = QLabel(message)
-            msg_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            msg_color = "#94a3b8" if not is_read else "#475569"
+            msg_label.setStyleSheet(f"color: {msg_color}; font-size: 11px;")
             msg_label.setWordWrap(True)
             fl.addWidget(msg_label)
 
@@ -194,5 +204,7 @@ class NotificationPanel(QFrame):
             from src.notifications.service import mark_all_read
             mark_all_read()
             self.refresh()
+            if hasattr(self.parent(), "_poll"):
+                self.parent()._poll()
         except Exception as e:
             logger.error(f"Mark all read error: {e}")
