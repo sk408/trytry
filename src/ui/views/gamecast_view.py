@@ -998,8 +998,19 @@ class GamecastView(QWidget):
                     pixmap = None
                     headshot_url = athlete_info.get("headshot", {}).get("href", "")
 
+                    # Try to load from local NBA cache first
+                    try:
+                        from src.database import db
+                        row = db.fetch_one("SELECT player_id FROM players WHERE name = ?", (name,))
+                        local_pid = row["player_id"] if row else None
+                        if local_pid:
+                            from src.ui.widgets.image_utils import get_player_photo
+                            pixmap = get_player_photo(local_pid, 28, circle=True)
+                    except Exception:
+                        pass
+
                     # Tier 1: main-thread pixmap cache (already converted)
-                    if headshot_url and (headshot_url, 28) in _espn_headshot_cache:
+                    if not pixmap and headshot_url and (headshot_url, 28) in _espn_headshot_cache:
                         pixmap = _espn_headshot_cache[(headshot_url, 28)]
 
                     # Tier 2: raw bytes downloaded in background → convert on main thread
@@ -1018,7 +1029,11 @@ class GamecastView(QWidget):
 
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
-                    elif headshot_url:
+                    else:
+                        from src.ui.widgets.image_utils import get_player_photo
+                        # Try to load a generic fallback, say a transparent pixel, or ignore
+                        pass
+                    if not pixmap and headshot_url:
                         # Queue background download; appears on next refresh
                         self._queue_headshot_fetch(headshot_url, 28)
                         self._needs_headshot_refresh = True

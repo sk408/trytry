@@ -116,36 +116,53 @@ class ScoreboardWidget(QWidget):
                 except:
                     pass
 
-        for key, url_key in [("in_pixmap", "in_url"), ("out_pixmap", "out_url")]:
-            if not self._sub_data.get(key) and self._sub_data.get(url_key):
-                url = self._sub_data[url_key]
+        for key, url_key, name_key in [("in_pixmap", "in_url", "in_name"), ("out_pixmap", "out_url", "out_name")]:
+            if not self._sub_data.get(key):
+                url = self._sub_data.get(url_key)
+                name = self._sub_data.get(name_key)
+                pix = None
+                
                 try:
-                    # Check cache first
-                    pix = _espn_headshot_cache.get((url, 64))
-                    if not pix and url in _espn_headshot_data:
-                        from PySide6.QtGui import QImage, QPixmap
-                        from PySide6.QtCore import Qt
-                        from src.ui.widgets.image_utils import _make_circle_pixmap
-                        img = QImage()
-                        img.loadFromData(_espn_headshot_data[url])
-                        if not img.isNull():
-                            pix = QPixmap.fromImage(img).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            pix = _make_circle_pixmap(pix)
-                            _espn_headshot_cache[(url, 64)] = pix
-                    
-                    if not pix:
-                        pix = _espn_headshot_cache.get((url, 28))
-                        if pix:
-                            pix = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                    
-                    if pix:
-                        self._sub_data[key] = pix
-                        updated = True
-                    elif url not in _espn_headshot_data:
-                        # Not in data, not in cache, queue fetch
-                        QThreadPool.globalInstance().start(_FetchRunnable(url))
-                except Exception as e:
-                    logger.debug(f"Sub pixmap load failed for {url}: {e}")
+                    # Check local DB first
+                    if name:
+                        from src.database import db
+                        row = db.fetch_one("SELECT player_id FROM players WHERE name = ?", (name,))
+                        local_pid = row["player_id"] if row else None
+                        if local_pid:
+                            from src.ui.widgets.image_utils import get_player_photo
+                            pix = get_player_photo(local_pid, 64, circle=True)
+                except Exception:
+                    pass
+                
+                if not pix and url:
+                    try:
+                        # Check cache
+                        pix = _espn_headshot_cache.get((url, 64))
+                        if not pix and url in _espn_headshot_data:
+                            from PySide6.QtGui import QImage, QPixmap
+                            from PySide6.QtCore import Qt
+                            from src.ui.widgets.image_utils import _make_circle_pixmap
+                            img = QImage()
+                            img.loadFromData(_espn_headshot_data[url])
+                            if not img.isNull():
+                                pix = QPixmap.fromImage(img).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                                pix = _make_circle_pixmap(pix)
+                                _espn_headshot_cache[(url, 64)] = pix
+                        
+                        if not pix:
+                            pix = _espn_headshot_cache.get((url, 28))
+                            if pix:
+                                pix = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        
+                        if not pix and url not in _espn_headshot_data:
+                            # Not in data, not in cache, queue fetch
+                            QThreadPool.globalInstance().start(_FetchRunnable(url))
+                    except Exception as e:
+                        logger.debug(f"Sub pixmap load failed for {url}: {e}")
+
+                if pix:
+                    self._sub_data[key] = pix
+                    updated = True
                     
         if updated:
             self.update()
@@ -200,15 +217,17 @@ class ScoreboardWidget(QWidget):
                 
                 if self._match_name(p_in_name, p_name):
                     p_in = p_dict
+                    p_in["name"] = p_name # Use full display name for DB match
                 if self._match_name(p_out_name, p_name):
                     p_out = p_dict
+                    p_out["name"] = p_name # Use full display name for DB match
                     
         in_url = p_in.get("headshot", "") if p_in else ""
         out_url = p_out.get("headshot", "") if p_out else ""
                     
         self._sub_data = {
-            "in_name": p_in_name,
-            "out_name": p_out_name,
+            "in_name": p_in.get("name", p_in_name) if p_in else p_in_name,
+            "out_name": p_out.get("name", p_out_name) if p_out else p_out_name,
             "in_stats": f"{p_in.get('pts', 0)} PTS | {p_in.get('reb', 0)} REB | {p_in.get('ast', 0)} AST" if p_in else "",
             "out_stats": f"{p_out.get('pts', 0)} PTS | {p_out.get('reb', 0)} REB | {p_out.get('ast', 0)} AST" if p_out else "",
             "in_url": in_url,

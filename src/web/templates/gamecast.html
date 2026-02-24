@@ -27,7 +27,7 @@
         <!-- Entering Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#22c55e; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">IN</span>
-            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.style.display='none'">
+            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'block', 100);">
             <span id="subInName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subInStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -39,7 +39,7 @@
         <!-- Leaving Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#ef4444; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">OUT</span>
-            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.style.display='none'">
+            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'block', 100);">
             <span id="subOutName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subOutStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -658,6 +658,10 @@ function selectGame(gameId, element = null) {
     }
 
     document.getElementById('gameDetail').classList.remove('hidden');
+    
+    // Background preload images just to be safe
+    fetch('/api/sync/images').catch(() => {});
+    
     if (gameES) { gameES.close(); }
     gameES = new EventSource('/api/gamecast/stream/' + gameId);
     // Track active event sources if the global array exists
@@ -917,12 +921,12 @@ function fillBoxTable(tableId, players) {
     if (!tbody) return;
     tbody.innerHTML = players.map(function(p) {
         const photo = p.headshot ?
-            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.style.display=\'none\'">' :
-            '';
+            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.onerror=null; this.src=\'/images/players/fallback.png\'; this.style.display=this.src.includes(\'fallback\') ? \'none\' : \'inline-block\';">' :
+            '<div style="width:30px;height:30px;border-radius:50%;background-color:#1e293b;box-shadow:0 2px 4px rgba(0,0,0,0.3); display:inline-block; vertical-align:middle;"></div>';
         const activeDot = p.active ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:#22c55e;box-shadow:0 0 6px #22c55e;margin-right:6px;vertical-align:middle;"></span>' : '';
         return '<tr>' +
             '<td style="width:32px;">' + photo + '</td>' +
-            '<td class="font-bold">' + activeDot + (p.name || '') + ' <span class="text-muted text-xs" style="margin-left:4px;">' + (p.position || '') + '</span></td>' +
+            '<td class="font-bold">' + activeDot + (p.name || '') + '</td>' +
             '<td class="font-mono text-center">' + (p.min || '') + '</td>' +
             '<td class="font-mono text-center font-bold" style="color:var(--text);">' + (p.pts || '') + '</td>' +
             '<td class="font-mono text-center">' + (p.reb || '') + '</td>' +
@@ -1004,7 +1008,7 @@ function showSubstitution(text, boxscore) {
     const overlay = document.getElementById('subOverlay');
     
     // In
-    document.getElementById('subInName').textContent = pInName;
+    document.getElementById('subInName').textContent = pIn ? pIn.name : pInName;
     const inImg = document.getElementById('subInImg');
     if (pIn && pIn.headshot) {
         inImg.src = pIn.headshot;
@@ -1016,7 +1020,7 @@ function showSubstitution(text, boxscore) {
     }
     
     // Out
-    document.getElementById('subOutName').textContent = pOutName;
+    document.getElementById('subOutName').textContent = pOut ? pOut.name : pOutName;
     const outImg = document.getElementById('subOutImg');
     if (pOut && pOut.headshot) {
         outImg.src = pOut.headshot;

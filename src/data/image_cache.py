@@ -73,7 +73,7 @@ def preload_images(player_ids=None, team_ids=None, callback=None):
                 rows = db.fetch_all("SELECT team_id FROM teams")
                 team_ids = [r["team_id"] for r in rows] if rows else []
             if player_ids is None:
-                rows = db.fetch_all("SELECT player_id FROM players LIMIT 500")
+                rows = db.fetch_all("SELECT player_id FROM players")
                 player_ids = [r["player_id"] for r in rows] if rows else []
         except Exception as e:
             logger.warning(f"Failed to auto-fetch IDs: {e}")
@@ -94,3 +94,7 @@ def preload_images(player_ids=None, team_ids=None, callback=None):
         done += 1
         if callback and done % 10 == 0:
             callback(f"Images: {done}/{total}")
+            
+    if callback:
+        callback(f"Images: {total}/{total}")
+        callback("Done")

@@ -898,6 +898,7 @@ async def sse_gamecast_stream(game_id: str):
         )
         # Resolve NBA team IDs once
         _team_cache = {}
+        _player_cache = {}
 
         def _resolve_tid(abbr):
             nba = normalize_espn_abbr(abbr)
@@ -911,6 +912,19 @@ async def sse_gamecast_stream(game_id: str):
                 tid = None
             _team_cache[nba] = tid
             return tid
+
+        def _resolve_pid(name):
+            if not name:
+                return None
+            if name in _player_cache:
+                return _player_cache[name]
+            try:
+                row = db.fetch_one("SELECT player_id FROM players WHERE name = ?", (name,))
+                pid = row["player_id"] if row else None
+            except Exception:
+                pid = None
+            _player_cache[name] = pid
+            return pid
 
         while True:
             try:
@@ -1084,9 +1098,13 @@ async def sse_gamecast_stream(game_id: str):
                         ainfo = ath.get("athlete", {})
                         stats = ath.get("stats", [])
                         smap = dict(zip(labels, stats)) if len(labels) == len(stats) else {}
-                        headshot = ainfo.get("headshot", {}).get("href", "")
+                        
+                        name = ainfo.get("displayName", "")
+                        pid = _resolve_pid(name)
+                        headshot = f"/images/players/{pid}.png" if pid else ainfo.get("headshot", {}).get("href", "")
+                        
                         box_parsed[side].append({
-                            "name": ainfo.get("displayName", ""),
+                            "name": name,
                             "id": ainfo.get("id", ""),
                             "headshot": headshot,
                             "active": ath.get("active", False),
