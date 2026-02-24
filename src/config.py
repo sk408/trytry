@@ -18,6 +18,7 @@ _DEFAULTS: Dict[str, Any] = {
     "enable_toast_notifications": True,
     "log_level": "INFO",
     "worker_threads": max(1, (os.cpu_count() or 4) - 2),
+    "oled_mode": False,
 }
 
 _cache: Dict[str, Any] | None = None

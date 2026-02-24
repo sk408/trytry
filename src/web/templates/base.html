@@ -13,12 +13,17 @@
     {% block head %}{% endblock %}
 </head>
 <body>
+    <script>
+        if (localStorage.getItem('oledMode') === 'true') {
+            document.body.classList.add('oled-mode');
+        }
+    </script>
     <nav class="navbar" role="navigation" aria-label="Main navigation">
-        <div class="nav-brand">
-            <a href="/dashboard">NBA Predictor</a>
-            <button class="hamburger" onclick="toggleNav()" aria-label="Toggle navigation menu" aria-expanded="false">
+        <div class="nav-brand" style="display: flex; align-items: center; gap: 8px;">
+            <button class="hamburger" onclick="toggleNav()" aria-label="Toggle navigation menu" aria-expanded="false" style="margin-right: 4px; padding: 4px;">
                 <span></span><span></span><span></span>
             </button>
+            <a href="/dashboard">NBA Predictor</a>
         </div>
         <ul class="nav-links" id="navLinks">
             <li><a href="/dashboard" {% if active == 'dashboard' %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
@@ -27,7 +32,6 @@
             <li><a href="/players" {% if active == 'players' %}class="active" aria-current="page"{% endif %}>Players</a></li>
             <li><a href="/matchups" {% if active == 'matchups' %}class="active" aria-current="page"{% endif %}>Matchups</a></li>
             <li><a href="/schedule" {% if active == 'schedule' %}class="active" aria-current="page"{% endif %}>Schedule</a></li>
-            <li><a href="/allstar" {% if active == 'allstar' %}class="active" aria-current="page"{% endif %}>All-Star</a></li>
             <li style="position:relative;">
                 <button onclick="toggleNotifications(event)" aria-label="Notifications" aria-expanded="false" id="notifToggle"
                         style="background:none;border:none;cursor:pointer;padding:0.5rem 0.75rem;position:relative;font-size:1rem;">

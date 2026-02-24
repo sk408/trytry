@@ -32,7 +32,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("NBA Game Prediction System")
         self.setMinimumSize(1200, 800)
-        self.setStyleSheet(GLOBAL_STYLESHEET)
+        from src.ui.theme import setup_theme
+        setup_theme(self)
 
         # Central widget with tabs
         self.tabs = QTabWidget()

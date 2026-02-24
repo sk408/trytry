@@ -336,3 +336,27 @@ QCheckBox::indicator:checked {
     border-color: #00e5ff;
 }
 """
+
+def setup_theme(widget):
+    """Apply the theme to a given widget or QApplication, adjusting for OLED mode."""
+    from src.config import get as get_setting
+    oled_mode = get_setting("oled_mode", False)
+    
+    stylesheet = GLOBAL_STYLESHEET
+    if oled_mode:
+        # Replace main dark backgrounds with pure black for OLED
+        stylesheet = stylesheet.replace("#0b0f19", "#000000")
+        stylesheet = stylesheet.replace("rgba(20, 30, 45, 0.8)", "#000000")
+        stylesheet = stylesheet.replace("rgba(20, 30, 45, 0.95)", "#000000")
+        stylesheet = stylesheet.replace("rgba(20, 30, 45, 0.6)", "#000000")
+        stylesheet = stylesheet.replace("rgba(20, 30, 45, 0.4)", "#000000")
+        stylesheet = stylesheet.replace("rgba(11, 15, 25, 0.6)", "#000000")
+        stylesheet = stylesheet.replace("rgba(11, 15, 25, 0.8)", "#000000")
+        stylesheet = stylesheet.replace("rgba(15, 25, 35, 0.5)", "#000000")
+        stylesheet = stylesheet.replace("rgba(30, 45, 65, 0.8)", "#000000")
+        stylesheet = stylesheet.replace("rgba(30, 45, 65, 0.9)", "#000000")
+        # Replace hardcoded dark gray colors
+        stylesheet = stylesheet.replace("#1e293b", "#000000")
+        stylesheet = stylesheet.replace("#0f172a", "#000000")
+
+    widget.setStyleSheet(stylesheet)

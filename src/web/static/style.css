@@ -44,6 +44,12 @@ body {
     min-height: 100vh;
 }
 
+body.oled-mode {
+    --bg-dark: #000000;
+    --bg-card: #000000;
+    --bg-input: #000000;
+}
+
 /* ---- Navbar ---- */
 .navbar {
     background: rgba(11, 15, 25, 0.9);

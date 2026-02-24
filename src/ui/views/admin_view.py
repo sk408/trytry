@@ -4,6 +4,7 @@ import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QMessageBox, QTextEdit, QSpinBox, QComboBox,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt
 
@@ -123,6 +124,14 @@ class AdminView(QWidget):
         log_row.addStretch()
         perf_layout.addLayout(log_row)
 
+        self.oled_checkbox = QCheckBox("OLED Dark Mode (Pure Black Backgrounds)")
+        self.oled_checkbox.setStyleSheet(
+            "QCheckBox { color: #e2e8f0; font-size: 13px; spacing: 8px; }"
+            "QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #475569; border-radius: 3px; background: #0f172a; }"
+            "QCheckBox::indicator:checked { background: #2563eb; border-color: #2563eb; }"
+        )
+        perf_layout.addWidget(self.oled_checkbox)
+
         save_perf_btn = QPushButton("Save Settings")
         save_perf_btn.setStyleSheet(
             "QPushButton { background: #2563eb; color: white; border-radius: 6px; "
@@ -218,6 +227,8 @@ class AdminView(QWidget):
             idx = self.log_combo.findText(str(log_level).upper())
             if idx >= 0:
                 self.log_combo.setCurrentIndex(idx)
+            oled_mode = get_setting("oled_mode", False)
+            self.oled_checkbox.setChecked(bool(oled_mode))
         except Exception:
             pass
 
@@ -229,14 +240,26 @@ class AdminView(QWidget):
             set_value("worker_threads", threads)
             log_level = self.log_combo.currentText()
             set_value("log_level", log_level)
+            
+            oled_mode = self.oled_checkbox.isChecked()
+            set_value("oled_mode", oled_mode)
 
             # Apply log level immediately
             import logging as _logging
             level = getattr(_logging, log_level, _logging.INFO)
             _logging.getLogger().setLevel(level)
-
+            
+            # Apply theme immediately
+            from src.ui.theme import setup_theme
             if self.main_window:
-                self.main_window.set_status(f"Settings saved: {threads} threads, log level {log_level}")
+                setup_theme(self.main_window)
+                self.main_window.set_status(f"Settings saved: {threads} threads, log level {log_level}, OLED {'On' if oled_mode else 'Off'}")
+                
+                # Iterate through all widgets and force style update
+                for widget in self.main_window.findChildren(QWidget):
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+                    widget.update()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save failed: {e}")
 
