@@ -279,7 +279,7 @@ class ScoreboardWidget(QWidget):
         away_name_x = (mid_x - 300 - logo_size / 2) - away_name_w / 2
         draw_text_with_shadow(p, away_name_x, h - 30, self._away_abbr, name_font, QColor("#e2e8f0"))
 
-        # Away Bonus and Timeouts
+        # Away Bonus, Timeouts, and Fouls
         if self._away_bonus:
             draw_text_with_shadow(p, (mid_x - 300 - logo_size / 2) - 15, h - 10, "BONUS", tiny_font, QColor("#fbbf24"))
 

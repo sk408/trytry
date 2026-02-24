@@ -78,7 +78,6 @@
                 <div style="display:flex; flex-direction:column; align-items:center;">
                     <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
                             <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">AWY</div>
-                            <div id="awayTeamFouls" style="font-size:0.7rem; color:var(--text-muted); font-weight:600; margin-top:2px;">FOULS: 0</div>
                             <!-- Timeouts and Bonus -->
                     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
                         <div id="awayBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
@@ -99,7 +98,6 @@
                 <div style="display:flex; flex-direction:column; align-items:center;">
                     <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
                             <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">HOM</div>
-                            <div id="homeTeamFouls" style="font-size:0.7rem; color:var(--text-muted); font-weight:600; margin-top:2px;">FOULS: 0</div>
                             <!-- Timeouts and Bonus -->
                     <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
                         <div id="homeBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
@@ -771,12 +769,6 @@ function updateScoreboard(s) {
     document.getElementById('homeBonus').style.visibility = s.home_bonus ? 'visible' : 'hidden';
     document.getElementById('awayBonus').style.visibility = s.away_bonus ? 'visible' : 'hidden';
 
-    // Team Fouls
-    let homeFouls = s.home_fouls || 0;
-    let awayFouls = s.away_fouls || 0;
-    document.getElementById('homeTeamFouls').textContent = 'FOULS: ' + homeFouls;
-    document.getElementById('awayTeamFouls').textContent = 'FOULS: ' + awayFouls;
-
     // Timeouts
     const renderTimeouts = (containerId, count) => {
         const container = document.getElementById(containerId);
@@ -802,10 +794,10 @@ function updateScoreboard(s) {
         let headers = hq.map(function(_, i) { return i < 4 ? 'Q' + (i+1) : 'OT' + (i-3); }).join('</th><th style="padding:4px 6px;text-align:center;">');
         let html = '<table style="width:auto;margin:0 auto;font-size:0.8rem;border-collapse:collapse;white-space:nowrap;">' +
             '<tr><th></th><th style="padding:4px 6px;text-align:center;">' + headers + '</th><th style="padding:4px 6px;text-align:center;">T</th></tr>' +
-            '<tr style="border-bottom:1px solid var(--border);"><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.away_team + '</td>' +
+            '<tr style="border-bottom:1px solid var(--border);"><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.away_team + '<span style="margin-left:6px;font-size:0.65rem;color:var(--text-muted);font-weight:600;">F:' + (s.away_fouls||0) + '</span></td>' +
             aq.map(function(q) { return '<td style="padding:4px 6px;text-align:center;">' + q + '</td>'; }).join('') +
             '<td class="font-bold" style="padding:4px 6px;text-align:center;color:var(--team-away);">' + s.away_score + '</td></tr>' +
-            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.home_team + '</td>' +
+            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.home_team + '<span style="margin-left:6px;font-size:0.65rem;color:var(--text-muted);font-weight:600;">F:' + (s.home_fouls||0) + '</span></td>' +
             hq.map(function(q) { return '<td style="padding:4px 6px;text-align:center;">' + q + '</td>'; }).join('') +
             '<td class="font-bold" style="padding:4px 6px;text-align:center;color:var(--team-home);">' + s.home_score + '</td></tr>' +
             '</table>';
