@@ -49,6 +49,9 @@ class ScoreboardWidget(QWidget):
         self._sub_timer = QTimer(self)
         self._sub_timer.timeout.connect(self._clear_substitution)
 
+        self._sub_refresh_timer = QTimer(self)
+        self._sub_refresh_timer.timeout.connect(self._refresh_sub_pixmaps)
+
         # Animation state
         self._away_flash_alpha = 0.0
         self._home_flash_alpha = 0.0
@@ -73,6 +76,11 @@ class ScoreboardWidget(QWidget):
         self._timeout_timer.start(1000)
         self.update()
 
+    def stop_timeout(self):
+        self._timeout_seconds = 0
+        self._timeout_timer.stop()
+        self.update()
+
     def _on_timeout_tick(self):
         if self._timeout_seconds > 0:
             self._timeout_seconds -= 1
@@ -83,7 +91,43 @@ class ScoreboardWidget(QWidget):
     def _clear_substitution(self):
         self._sub_data = None
         self._sub_timer.stop()
+        self._sub_refresh_timer.stop()
         self.update()
+
+    def _refresh_sub_pixmaps(self):
+        if not self._sub_data:
+            return
+            
+        updated = False
+        from src.ui.views.gamecast_view import _espn_headshot_cache, _espn_headshot_data
+        
+        for key, url_key in [("in_pixmap", "in_url"), ("out_pixmap", "out_url")]:
+            if not self._sub_data.get(key) and self._sub_data.get(url_key):
+                url = self._sub_data[url_key]
+                # Check cache first
+                pix = _espn_headshot_cache.get((url, 64))
+                if not pix and url in _espn_headshot_data:
+                    from PySide6.QtGui import QImage, QPixmap
+                    from PySide6.QtCore import Qt
+                    from src.ui.widgets.image_utils import _make_circle_pixmap
+                    img = QImage()
+                    img.loadFromData(_espn_headshot_data[url])
+                    if not img.isNull():
+                        pix = QPixmap.fromImage(img).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        pix = _make_circle_pixmap(pix)
+                        _espn_headshot_cache[(url, 64)] = pix
+                
+                if not pix:
+                    pix = _espn_headshot_cache.get((url, 28))
+                    if pix:
+                        pix = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                
+                if pix:
+                    self._sub_data[key] = pix
+                    updated = True
+                    
+        if updated:
+            self.update()
 
     def show_substitution(self, text: str, boxscore: dict):
         import re
@@ -105,30 +149,25 @@ class ScoreboardWidget(QWidget):
                 if p_out_name in p_name or p_name in p_out_name:
                     p_out = p
                     
+        in_url = p_in.get("headshot", "") if p_in else ""
+        out_url = p_out.get("headshot", "") if p_out else ""
+                    
         self._sub_data = {
             "in_name": p_in_name,
             "out_name": p_out_name,
             "in_stats": f"{p_in.get('pts', 0)} PTS | {p_in.get('reb', 0)} REB | {p_in.get('ast', 0)} AST" if p_in else "",
             "out_stats": f"{p_out.get('pts', 0)} PTS | {p_out.get('reb', 0)} REB | {p_out.get('ast', 0)} AST" if p_out else "",
+            "in_url": in_url,
+            "out_url": out_url,
             "in_pixmap": None,
             "out_pixmap": None
         }
         
-        # Try to resolve pixmaps if they are in cache
-        from src.ui.views.gamecast_view import _espn_headshot_cache
-        in_url = p_in.get("headshot", "") if p_in else ""
-        out_url = p_out.get("headshot", "") if p_out else ""
-        
-        if in_url:
-            pix = _espn_headshot_cache.get((in_url, 28))
-            if pix:
-                self._sub_data["in_pixmap"] = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        if out_url:
-            pix = _espn_headshot_cache.get((out_url, 28))
-            if pix:
-                self._sub_data["out_pixmap"] = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        # Trigger an initial check
+        self._refresh_sub_pixmaps()
             
         self._sub_timer.start(6000)
+        self._sub_refresh_timer.start(500)
         self.update()
 
     def _set_away_flash_alpha(self, val):

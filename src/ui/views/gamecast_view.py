@@ -657,14 +657,62 @@ class GamecastView(QWidget):
 
         # Feed new plays to court animation (only new ones)
         flat_plays = self._flatten_plays(plays)
+        is_initial_load = (self._known_play_count == 0)
         new_plays = flat_plays[self._known_play_count:]
+        
         for play in new_plays:
             self.court.add_play(play)
-            text = play.get("text", "")
+
+        if new_plays and not is_initial_load:
+            last_play = new_plays[-1]
+            text = last_play.get("text", "")
+            
+            # Find the last substitution in the new batch, if any
+            last_sub_text = None
+            for p in new_plays:
+                if "enters the game" in p.get("text", "").lower():
+                    last_sub_text = p.get("text", "")
+
             if "timeout" in text.lower() and status_state == "in":
                 self.scoreboard.start_timeout(75)
-            elif "enters the game" in text.lower():
-                self.scoreboard.show_substitution(text, boxscore)
+            elif last_sub_text:
+                self.scoreboard.show_substitution(last_sub_text, boxscore)
+                if hasattr(self.scoreboard, 'stop_timeout'):
+                    self.scoreboard.stop_timeout()
+            else:
+                if hasattr(self.scoreboard, 'stop_timeout'):
+                    self.scoreboard.stop_timeout()
+        elif is_initial_load and flat_plays:
+            # Check if we should show a timeout that is currently active
+            last_play = flat_plays[-1]
+            text = last_play.get("text", "")
+            if "timeout" in text.lower() and status_state == "in":
+                p_clock = last_play.get("clock", "")
+                p_period = last_play.get("period", 0)
+                is_recent = True
+                if p_period == period and p_clock and clock_str:
+                    try:
+                        def parse_sec(c):
+                            if ":" in c:
+                                parts = c.split(":")
+                                return int(parts[0])*60 + int(parts[1])
+                            return float(c)
+                        if abs(parse_sec(p_clock) - parse_sec(clock_str)) > 15:
+                            is_recent = False
+                    except:
+                        pass
+                elif p_period != period:
+                    is_recent = False
+                
+                if is_recent:
+                    self.scoreboard.start_timeout(75)
+                else:
+                    if hasattr(self.scoreboard, 'stop_timeout'):
+                        self.scoreboard.stop_timeout()
+            else:
+                if hasattr(self.scoreboard, 'stop_timeout'):
+                    self.scoreboard.stop_timeout()
+
         self._known_play_count = len(flat_plays)
 
         # ── Info panel (prediction + odds) ──
