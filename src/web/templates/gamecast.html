@@ -16,53 +16,81 @@
     </div>
 </div>
 
-<div id="gameDetail" class="hidden">
+    <div id="gameDetail" class="hidden">
     <!-- Live Score -->
-    <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: 2px solid var(--accent);">
-        <!-- Faint background accents will be set via JS -->
-        <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:50%; height:100%; opacity:0.1; background:linear-gradient(to right, var(--team-away, transparent), transparent); pointer-events:none;"></div>
-        <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:50%; height:100%; opacity:0.1; background:linear-gradient(to left, var(--team-home, transparent), transparent); pointer-events:none;"></div>
+    <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); padding:0; min-height: 160px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);">
+        
+        <!-- Skewed Backgrounds -->
+        <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(to bottom right, var(--team-away), #000000); clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
+        <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(to bottom left, var(--team-home), #000000); clip-path: polygon(30px 0, 100% 0, 100% 100%, 0 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
+        
+        <!-- Center slanted separator -->
+        <div style="position:absolute; top:0; left:50%; width:2px; height:100%; background:rgba(255,255,255,0.15); transform: translateX(-50%) skewX(-15deg); z-index:0;"></div>
 
-        <div class="score-display" style="position:relative; z-index:1;">
-            <div class="score-team" style="align-items:flex-start;">
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                    <div>
-                        <div class="team-name" id="awayTeamName" style="text-align:left; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted); font-family:var(--font-heading);">Away</div>
-                        <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.8rem; line-height:1; font-weight: 700;">AWY</div>
-                    </div>
+        <!-- Top Status Banner -->
+        <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); background:rgba(10, 15, 25, 0.95); padding: 4px 20px; border-radius: 0 0 8px 8px; z-index:2; text-align:center; min-width: 140px; border: 1px solid rgba(255,255,255,0.1); border-top: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+            <div id="statusBadge" class="live-badge" style="display:none; font-size: 0.65rem; padding: 2px 8px; margin: 0 auto 4px auto; width: fit-content;">LIVE</div>
+            <div id="finalBadge" class="final-badge" style="display:none; font-size: 0.65rem; padding: 2px 8px; margin: 0 auto 4px auto; width: fit-content;">FINAL</div>
+            <div id="clockContainer" style="display:flex; justify-content:center; align-items:center; gap: 8px;">
+                <span id="period" style="font-weight:bold; font-size:0.8rem; color:var(--text);"></span>
+                <span id="clock" style="font-size:0.9rem; font-weight:700; color:var(--text);"></span>
+            </div>
+            <div id="statusText" style="font-size:0.75rem; color:var(--text-muted); font-weight:600; display:none;"></div>
+        </div>
+
+        <!-- Bottom Glowing Borders -->
+        <div id="awayGlow" style="position:absolute; bottom:0; left:0; width:50%; height:4px; background:var(--team-away); z-index:1;"></div>
+        <div id="homeGlow" style="position:absolute; bottom:0; right:0; width:50%; height:4px; background:var(--team-home); z-index:1;"></div>
+
+        <!-- Score Content -->
+        <div class="score-display" style="position:relative; z-index:1; padding: 35px 16px 35px 16px; display:flex; justify-content:space-between; align-items:center;">
+            
+            <!-- AWAY TEAM -->
+            <div class="score-team" style="align-items:center; flex: 1;">
+                <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
+                <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">AWY</div>
+                
+                <!-- Timeouts and Bonus -->
+                <div style="display:flex; flex-direction:column; align-items:center; margin-top: 4px; height: 16px;">
+                    <div id="awayBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
+                    <div id="awayTimeouts" style="display:flex; gap:3px; margin-top:2px;"></div>
                 </div>
             </div>
             
-            <div class="score-center" style="display:flex; align-items:center; gap:20px;">
-                <span class="team-score" id="awayScore" style="color:#ffffff; text-shadow:0 2px 8px rgba(0,0,0,0.5);">0</span>
+            <span class="team-score drop-shadow" id="awayScore" style="color:#ffffff; font-size:3.5rem; text-shadow:0 2px 8px rgba(0,0,0,0.5); min-width: 50px; text-align:right;">0</span>
+
+            <!-- CENTER VS -->
+            <div class="score-center" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width: 30px; margin: 0 5px;">
+                <span id="vsText" style="font-family:var(--font-heading); font-size:1.2rem; color:rgba(255,255,255,0.4); font-weight:700;">VS</span>
+            </div>
+            
+            <span class="team-score drop-shadow" id="homeScore" style="color:#ffffff; font-size:3.5rem; text-shadow:0 2px 8px rgba(0,0,0,0.5); min-width: 50px; text-align:left;">0</span>
+
+            <!-- HOME TEAM -->
+            <div class="score-team" style="align-items:center; flex: 1;">
+                <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
+                <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">HOM</div>
                 
-                <div class="score-status">
-                    <div id="statusBadge" class="live-badge" style="display:none;">LIVE</div>
-                    <div id="finalBadge" class="final-badge" style="display:none;">FINAL</div>
-                    <span id="period" style="font-weight:bold;margin-top:4px;color:var(--text);"></span>
-                    <span id="clock" style="font-size:1.2rem;font-weight:700;color:var(--text);"></span>
+                <!-- Timeouts and Bonus -->
+                <div style="display:flex; flex-direction:column; align-items:center; margin-top: 4px; height: 16px;">
+                    <div id="homeBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
+                    <div id="homeTimeouts" style="display:flex; gap:3px; margin-top:2px;"></div>
                 </div>
-                
-                <span class="team-score" id="homeScore" style="color:#ffffff; text-shadow:0 2px 8px rgba(0,0,0,0.5);">0</span>
             </div>
 
-            <div class="score-team" style="align-items:flex-end;">
-                <div style="display:flex; align-items:center; gap:12px; flex-direction:row-reverse;">
-                    <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                    <div style="text-align:right;">
-                        <div class="team-name" id="homeTeamName" style="text-align:right; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted); font-family:var(--font-heading);">Home</div>
-                        <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.8rem; line-height:1; font-weight: 700;">HOM</div>
-                    </div>
-                </div>
-            </div>
         </div>
-        <div class="quarter-scores" id="quarterScores" style="text-align:center;font-size:0.85rem;color:var(--text-muted);margin-bottom:8px;position:relative;z-index:1;"></div>
+
+        <!-- Quarter Scores -->
+        <div class="quarter-scores" id="quarterScores" style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%); text-align:center;font-size:0.85rem;color:var(--text-muted);z-index:2; background:rgba(0,0,0,0.5); padding: 4px 12px; border-radius: 4px;"></div>
         
         <!-- Animated Score Banner -->
         <div id="scoreBanner" style="position:absolute; top:-60px; left:50%; transform:translateX(-50%); background:var(--accent); color:white; padding:8px 24px; border-radius:0 0 12px 12px; font-weight:800; font-size:1.1rem; box-shadow:0 4px 12px rgba(0,0,0,0.5); z-index:10; transition:top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events:none;">
             TEAM SCORE!
         </div>
+
+        <!-- Flash Overlays -->
+        <div id="awayFlash" style="position:absolute; top:0; left:0; width:55%; height:100%; background:var(--team-away); opacity:0; clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:1; transition: opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></div>
+        <div id="homeFlash" style="position:absolute; top:0; right:0; width:55%; height:100%; background:var(--team-home); opacity:0; clip-path: polygon(30px 0, 100% 0, 100% 100%, 0 100%); pointer-events:none; z-index:1; transition: opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></div>
     </div>
 
     <!-- Live Odds & Prediction (Grid) -->
@@ -635,19 +663,35 @@ function showScoreBanner(teamName, points, teamId) {
 function updateScoreboard(s) {
     if (!s) return;
     
-    // Check for score updates to trigger banner
+    // Check for score updates to trigger banner and flash
     if (previousHomeScore !== null && s.home_score > previousHomeScore) {
         showScoreBanner(s.home_team, s.home_score - previousHomeScore, s.home_team_id);
+        const flash = document.getElementById('homeFlash');
+        if(flash) {
+            flash.style.transition = 'none';
+            flash.style.opacity = '0.6';
+            setTimeout(() => {
+                flash.style.transition = 'opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+                flash.style.opacity = '0';
+            }, 50);
+        }
     } else if (previousAwayScore !== null && s.away_score > previousAwayScore) {
         showScoreBanner(s.away_team, s.away_score - previousAwayScore, s.away_team_id);
+        const flash = document.getElementById('awayFlash');
+        if(flash) {
+            flash.style.transition = 'none';
+            flash.style.opacity = '0.6';
+            setTimeout(() => {
+                flash.style.transition = 'opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+                flash.style.opacity = '0';
+            }, 50);
+        }
     }
     previousHomeScore = s.home_score;
     previousAwayScore = s.away_score;
     
     document.getElementById('homeTeam').textContent = s.home_team || 'HOME';
     document.getElementById('awayTeam').textContent = s.away_team || 'AWAY';
-    document.getElementById('homeTeamName').textContent = s.home_team || '';
-    document.getElementById('awayTeamName').textContent = s.away_team || '';
     document.getElementById('homeScore').textContent = s.home_score || '0';
     document.getElementById('awayScore').textContent = s.away_score || '0';
     document.getElementById('boxAwayLabel').textContent = s.away_team;
@@ -657,20 +701,23 @@ function updateScoreboard(s) {
 
     const st = s.status_state;
     if (st === 'in') {
-        document.getElementById('statusBadge').style.display = 'inline-block';
+        document.getElementById('statusBadge').style.display = 'block';
         document.getElementById('finalBadge').style.display = 'none';
+        document.getElementById('statusText').style.display = 'none';
+        document.getElementById('clockContainer').style.display = 'flex';
         document.getElementById('period').textContent = 'Q' + s.period;
         document.getElementById('clock').textContent = s.clock;
     } else if (st === 'post') {
         document.getElementById('statusBadge').style.display = 'none';
-        document.getElementById('finalBadge').style.display = 'inline-block';
-        document.getElementById('period').textContent = '';
-        document.getElementById('clock').textContent = '';
+        document.getElementById('finalBadge').style.display = 'block';
+        document.getElementById('statusText').style.display = 'none';
+        document.getElementById('clockContainer').style.display = 'none';
     } else {
         document.getElementById('statusBadge').style.display = 'none';
         document.getElementById('finalBadge').style.display = 'none';
-        document.getElementById('period').textContent = s.status || '';
-        document.getElementById('clock').textContent = s.clock || '';
+        document.getElementById('clockContainer').style.display = 'none';
+        document.getElementById('statusText').style.display = 'block';
+        document.getElementById('statusText').textContent = s.status || '';
     }
 
     // Logos
@@ -685,6 +732,28 @@ function updateScoreboard(s) {
         al.style.display = 'block';
     }
 
+    // Bonus
+    document.getElementById('homeBonus').style.visibility = s.home_bonus ? 'visible' : 'hidden';
+    document.getElementById('awayBonus').style.visibility = s.away_bonus ? 'visible' : 'hidden';
+
+    // Timeouts
+    const renderTimeouts = (containerId, count) => {
+        const container = document.getElementById(containerId);
+        if(!container) return;
+        if(count < 0) {
+            container.innerHTML = '';
+            return;
+        }
+        let html = '';
+        for(let i=0; i<7; i++) {
+            const opacity = i < count ? '1' : '0.2';
+            html += `<div style="width:6px; height:3px; background:rgba(255,255,255,${opacity}); border-radius:1px;"></div>`;
+        }
+        container.innerHTML = html;
+    };
+    renderTimeouts('homeTimeouts', s.home_timeouts !== undefined ? s.home_timeouts : -1);
+    renderTimeouts('awayTimeouts', s.away_timeouts !== undefined ? s.away_timeouts : -1);
+
     // Quarter scores table
     const hq = s.home_quarters || [];
     const aq = s.away_quarters || [];
@@ -694,10 +763,10 @@ function updateScoreboard(s) {
             '<tr><th></th><th style="padding:4px 8px;text-align:center;">' + headers + '</th><th style="padding:4px 8px;text-align:center;">T</th></tr>' +
             '<tr style="border-bottom:1px solid var(--border);"><td class="font-bold" style="padding:4px 12px;text-align:right;">' + s.away_team + '</td>' +
             aq.map(function(q) { return '<td style="padding:4px 8px;text-align:center;">' + q + '</td>'; }).join('') +
-            '<td class="font-bold" style="padding:4px 8px;text-align:center;">' + s.away_score + '</td></tr>' +
+            '<td class="font-bold" style="padding:4px 8px;text-align:center;color:var(--team-away);">' + s.away_score + '</td></tr>' +
             '<tr><td class="font-bold" style="padding:4px 12px;text-align:right;">' + s.home_team + '</td>' +
             hq.map(function(q) { return '<td style="padding:4px 8px;text-align:center;">' + q + '</td>'; }).join('') +
-            '<td class="font-bold" style="padding:4px 8px;text-align:center;">' + s.home_score + '</td></tr>' +
+            '<td class="font-bold" style="padding:4px 8px;text-align:center;color:var(--team-home);">' + s.home_score + '</td></tr>' +
             '</table>';
         document.getElementById('quarterScores').innerHTML = html;
     }
@@ -713,17 +782,9 @@ function applyTeamColors(s) {
     document.getElementById('wpBarHome').style.background = hc[0];
     document.getElementById('wpBarAway').style.background = ac[0];
     
-    // Apply color specifically to team names/abbr to pop, keep scores white
-    document.getElementById('homeTeam').style.color = hc[0];
-    document.getElementById('awayTeam').style.color = ac[0];
-    
     // Set CSS variables for gradients and plays
     document.documentElement.style.setProperty('--team-home', hc[0]);
     document.documentElement.style.setProperty('--team-away', ac[0]);
-    
-    // Style background accents
-    document.getElementById('homeBgAccent').style.background = `linear-gradient(to left, ${hc[0]}, transparent)`;
-    document.getElementById('awayBgAccent').style.background = `linear-gradient(to right, ${ac[0]}, transparent)`;
 }
 
 function updateWinProb(pred, s) {

@@ -944,6 +944,11 @@ async def sse_gamecast_stream(game_id: str):
                 home_espn_id = str(home_c.get("team", {}).get("id", ""))
                 away_espn_id = str(away_c.get("team", {}).get("id", ""))
 
+                home_timeouts = home_c.get("timeoutsRemaining", -1)
+                away_timeouts = away_c.get("timeoutsRemaining", -1)
+                home_bonus = home_c.get("linescores", [{}])[-1].get("isBonus", False) if home_c.get("linescores") else False
+                away_bonus = away_c.get("linescores", [{}])[-1].get("isBonus", False) if away_c.get("linescores") else False
+
                 status_detail = comp.get("status", {})
                 status_text = status_detail.get("type", {}).get("description", "")
                 status_state = status_detail.get("type", {}).get("state", "")
@@ -976,6 +981,10 @@ async def sse_gamecast_stream(game_id: str):
                     "period": period,
                     "home_quarters": home_quarters,
                     "away_quarters": away_quarters,
+                    "home_timeouts": home_timeouts,
+                    "away_timeouts": away_timeouts,
+                    "home_bonus": home_bonus,
+                    "away_bonus": away_bonus,
                 }
 
                 # Model prediction
