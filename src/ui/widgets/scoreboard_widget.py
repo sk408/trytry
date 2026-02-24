@@ -100,31 +100,52 @@ class ScoreboardWidget(QWidget):
             
         updated = False
         from src.ui.views.gamecast_view import _espn_headshot_cache, _espn_headshot_data
+        from PySide6.QtCore import QThreadPool, QRunnable
         
+        class _FetchRunnable(QRunnable):
+            def __init__(self, u):
+                super().__init__()
+                self.url = u
+            def run(self):
+                try:
+                    import requests
+                    if self.url not in _espn_headshot_data:
+                        r = requests.get(self.url, timeout=5)
+                        if r.status_code == 200 and r.content:
+                            _espn_headshot_data[self.url] = r.content
+                except:
+                    pass
+
         for key, url_key in [("in_pixmap", "in_url"), ("out_pixmap", "out_url")]:
             if not self._sub_data.get(key) and self._sub_data.get(url_key):
                 url = self._sub_data[url_key]
-                # Check cache first
-                pix = _espn_headshot_cache.get((url, 64))
-                if not pix and url in _espn_headshot_data:
-                    from PySide6.QtGui import QImage, QPixmap
-                    from PySide6.QtCore import Qt
-                    from src.ui.widgets.image_utils import _make_circle_pixmap
-                    img = QImage()
-                    img.loadFromData(_espn_headshot_data[url])
-                    if not img.isNull():
-                        pix = QPixmap.fromImage(img).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        pix = _make_circle_pixmap(pix)
-                        _espn_headshot_cache[(url, 64)] = pix
-                
-                if not pix:
-                    pix = _espn_headshot_cache.get((url, 28))
+                try:
+                    # Check cache first
+                    pix = _espn_headshot_cache.get((url, 64))
+                    if not pix and url in _espn_headshot_data:
+                        from PySide6.QtGui import QImage, QPixmap
+                        from PySide6.QtCore import Qt
+                        from src.ui.widgets.image_utils import _make_circle_pixmap
+                        img = QImage()
+                        img.loadFromData(_espn_headshot_data[url])
+                        if not img.isNull():
+                            pix = QPixmap.fromImage(img).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            pix = _make_circle_pixmap(pix)
+                            _espn_headshot_cache[(url, 64)] = pix
+                    
+                    if not pix:
+                        pix = _espn_headshot_cache.get((url, 28))
+                        if pix:
+                            pix = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    
                     if pix:
-                        pix = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                
-                if pix:
-                    self._sub_data[key] = pix
-                    updated = True
+                        self._sub_data[key] = pix
+                        updated = True
+                    elif url not in _espn_headshot_data:
+                        # Not in data, not in cache, queue fetch
+                        QThreadPool.globalInstance().start(_FetchRunnable(url))
+                except Exception as e:
+                    logger.debug(f"Sub pixmap load failed for {url}: {e}")
                     
         if updated:
             self.update()
@@ -138,16 +159,36 @@ class ScoreboardWidget(QWidget):
         p_in_name = match.group(1).strip()
         p_out_name = match.group(2).replace('.', '').strip()
         
-        # Search boxscore for stats
+        # Search raw ESPN boxscore for stats
         p_in = None
         p_out = None
-        for side in ["home", "away"]:
-            for p in boxscore.get(side, []):
-                p_name = p.get("name", "")
+        
+        box_players = boxscore.get("players", [])
+        for tb in box_players:
+            stats_blocks = tb.get("statistics", [])
+            if not stats_blocks:
+                continue
+            labels = stats_blocks[0].get("labels", [])
+            for ath in stats_blocks[0].get("athletes", []):
+                ainfo = ath.get("athlete", {})
+                p_name = ainfo.get("displayName", "")
+                
+                # Extract stats
+                stats = ath.get("stats", [])
+                smap = dict(zip(labels, stats)) if len(labels) == len(stats) else {}
+                
+                p_dict = {
+                    "name": p_name,
+                    "pts": smap.get("PTS", "0"),
+                    "reb": smap.get("REB", "0"),
+                    "ast": smap.get("AST", "0"),
+                    "headshot": ainfo.get("headshot", {}).get("href", "")
+                }
+                
                 if p_in_name in p_name or p_name in p_in_name:
-                    p_in = p
+                    p_in = p_dict
                 if p_out_name in p_name or p_name in p_out_name:
-                    p_out = p
+                    p_out = p_dict
                     
         in_url = p_in.get("headshot", "") if p_in else ""
         out_url = p_out.get("headshot", "") if p_out else ""
@@ -164,7 +205,10 @@ class ScoreboardWidget(QWidget):
         }
         
         # Trigger an initial check
-        self._refresh_sub_pixmaps()
+        try:
+            self._refresh_sub_pixmaps()
+        except Exception as e:
+            logger.debug(f"Sub pixmap initial check failed: {e}")
             
         self._sub_timer.start(6000)
         self._sub_refresh_timer.start(500)
