@@ -22,12 +22,35 @@
         <span>TIMEOUT:</span><span id="timeoutSeconds">75</span><span>s</span>
     </div>
 
+    <!-- Substitution Overlay -->
+    <div id="subOverlay" style="display:none; position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); background:rgba(15, 23, 42, 0.95); border: 2px solid var(--accent); border-radius:16px; padding:20px 30px; z-index:10000; flex-direction:row; align-items:center; gap:25px; box-shadow:0 10px 40px rgba(0,0,0,0.8); backdrop-filter:blur(8px);">
+        <!-- Entering Player -->
+        <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
+            <span style="color:#22c55e; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">IN</span>
+            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.style.display='none'">
+            <span id="subInName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
+            <span id="subInStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
+        </div>
+        <!-- Arrows -->
+        <div style="color:#64748b; font-size:28px; display:flex; flex-direction:column; gap:5px;">
+            <span style="transform: scaleX(-1);">➔</span>
+            <span>➔</span>
+        </div>
+        <!-- Leaving Player -->
+        <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
+            <span style="color:#ef4444; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">OUT</span>
+            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.style.display='none'">
+            <span id="subOutName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
+            <span id="subOutStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
+        </div>
+    </div>
+
     <!-- Live Score -->
     <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); padding:0; min-height: 220px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); display: flex; flex-direction: column;">
         
         <!-- Skewed Backgrounds -->
-        <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(75deg, var(--team-away) 0%, #000000 100%); clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
-        <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(255deg, var(--team-home) 0%, #000000 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 30px 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
+        <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(97deg, var(--team-away) 0%, #000000 100%); clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
+        <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:55%; height:100%; opacity:0.85; background:linear-gradient(277deg, var(--team-home) 0%, #000000 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 30px 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
         
         <!-- Center slanted separator -->
         <div style="position:absolute; top:0; left:50%; width:2px; height:100%; background:rgba(255,255,255,0.15); transform: translateX(-50%) skewX(-15deg); z-index:0;"></div>
@@ -652,6 +675,7 @@ function selectGame(gameId, element = null) {
             updateWinProb(data.prediction, data.summary);
             updatePrediction(data.prediction, data.summary);
             updateOdds(data.odds);
+            currentBoxscore = data.boxscore;
             updateBoxScore(data.boxscore, data.summary);
             updatePlays(data.plays, data.summary);
             updateCourt(data.plays);
@@ -923,6 +947,7 @@ function fillBoxTable(tableId, players) {
 
 let lastPlayText = "";
 let timeoutInterval = null;
+let subTimeout = null;
 
 function startTimeoutTimer(seconds) {
     const overlay = document.getElementById('timeoutOverlay');
@@ -945,15 +970,76 @@ function startTimeoutTimer(seconds) {
     }, 1000);
 }
 
+function showSubstitution(text, boxscore) {
+    // text format: "Player A enters the game for Player B"
+    const match = text.match(/(.+?)\s+enters the game for\s+(.+)/i);
+    if (!match) return;
+    
+    const pInName = match[1].trim();
+    const pOutName = match[2].replace('.', '').trim();
+    
+    let pIn = null, pOut = null;
+    
+    // Find players in boxscore
+    if (boxscore) {
+        ['home', 'away'].forEach(side => {
+            if (!boxscore[side]) return;
+            boxscore[side].forEach(p => {
+                const name = p.name || '';
+                if (name.includes(pInName) || pInName.includes(name)) pIn = p;
+                if (name.includes(pOutName) || pOutName.includes(name)) pOut = p;
+            });
+        });
+    }
+    
+    const overlay = document.getElementById('subOverlay');
+    
+    // In
+    document.getElementById('subInName').textContent = pInName;
+    const inImg = document.getElementById('subInImg');
+    if (pIn && pIn.headshot) {
+        inImg.src = pIn.headshot;
+        inImg.style.display = 'block';
+        document.getElementById('subInStats').textContent = `${pIn.pts||0} PTS | ${pIn.reb||0} REB | ${pIn.ast||0} AST`;
+    } else {
+        inImg.style.display = 'none';
+        document.getElementById('subInStats').textContent = '';
+    }
+    
+    // Out
+    document.getElementById('subOutName').textContent = pOutName;
+    const outImg = document.getElementById('subOutImg');
+    if (pOut && pOut.headshot) {
+        outImg.src = pOut.headshot;
+        outImg.style.display = 'block';
+        document.getElementById('subOutStats').textContent = `${pOut.pts||0} PTS | ${pOut.reb||0} REB | ${pOut.ast||0} AST`;
+    } else {
+        outImg.style.display = 'none';
+        document.getElementById('subOutStats').textContent = '';
+    }
+    
+    overlay.style.display = 'flex';
+    
+    if (subTimeout) clearTimeout(subTimeout);
+    subTimeout = setTimeout(() => {
+        overlay.style.display = 'none';
+    }, 6000);
+}
+
+// Ensure latest boxscore is available for plays
+let currentBoxscore = null;
+
 function updatePlays(plays, s) {
     if (!plays) return;
     
-    // Check for timeout
+    // Check for timeout or sub
     if (plays.length > 0) {
         const latestPlay = plays[plays.length - 1].text;
         if (latestPlay !== lastPlayText) {
             if (latestPlay.toLowerCase().includes("timeout") && s.status_state === 'in') {
                 startTimeoutTimer(75);
+            } else if (latestPlay.toLowerCase().includes("enters the game")) {
+                showSubstitution(latestPlay, currentBoxscore);
             }
             lastPlayText = latestPlay;
         }

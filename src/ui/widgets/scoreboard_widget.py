@@ -3,7 +3,7 @@
 import logging
 from typing import Optional, Dict, List
 
-from PySide6.QtCore import Qt, QPointF, Property, QVariantAnimation, QObject, QEasingCurve, QRectF
+from PySide6.QtCore import Qt, QPointF, Property, QVariantAnimation, QObject, QEasingCurve, QRectF, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QLinearGradient, QPen, QPixmap, QPolygonF, QPainterPath
 from PySide6.QtWidgets import QWidget, QGraphicsScene, QGraphicsView, QGraphicsDropShadowEffect
 
@@ -45,6 +45,10 @@ class ScoreboardWidget(QWidget):
         self._timeout_timer = QTimer(self)
         self._timeout_timer.timeout.connect(self._on_timeout_tick)
 
+        self._sub_data: Optional[Dict] = None
+        self._sub_timer = QTimer(self)
+        self._sub_timer.timeout.connect(self._clear_substitution)
+
         # Animation state
         self._away_flash_alpha = 0.0
         self._home_flash_alpha = 0.0
@@ -75,6 +79,57 @@ class ScoreboardWidget(QWidget):
             self.update()
             if self._timeout_seconds <= 0:
                 self._timeout_timer.stop()
+
+    def _clear_substitution(self):
+        self._sub_data = None
+        self._sub_timer.stop()
+        self.update()
+
+    def show_substitution(self, text: str, boxscore: dict):
+        import re
+        match = re.search(r"(.+?)\s+enters the game for\s+(.+)", text, re.IGNORECASE)
+        if not match:
+            return
+            
+        p_in_name = match.group(1).strip()
+        p_out_name = match.group(2).replace('.', '').strip()
+        
+        # Search boxscore for stats
+        p_in = None
+        p_out = None
+        for side in ["home", "away"]:
+            for p in boxscore.get(side, []):
+                p_name = p.get("name", "")
+                if p_in_name in p_name or p_name in p_in_name:
+                    p_in = p
+                if p_out_name in p_name or p_name in p_out_name:
+                    p_out = p
+                    
+        self._sub_data = {
+            "in_name": p_in_name,
+            "out_name": p_out_name,
+            "in_stats": f"{p_in.get('pts', 0)} PTS | {p_in.get('reb', 0)} REB | {p_in.get('ast', 0)} AST" if p_in else "",
+            "out_stats": f"{p_out.get('pts', 0)} PTS | {p_out.get('reb', 0)} REB | {p_out.get('ast', 0)} AST" if p_out else "",
+            "in_pixmap": None,
+            "out_pixmap": None
+        }
+        
+        # Try to resolve pixmaps if they are in cache
+        from src.ui.views.gamecast_view import _espn_headshot_cache
+        in_url = p_in.get("headshot", "") if p_in else ""
+        out_url = p_out.get("headshot", "") if p_out else ""
+        
+        if in_url:
+            pix = _espn_headshot_cache.get((in_url, 28))
+            if pix:
+                self._sub_data["in_pixmap"] = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        if out_url:
+            pix = _espn_headshot_cache.get((out_url, 28))
+            if pix:
+                self._sub_data["out_pixmap"] = pix.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            
+        self._sub_timer.start(6000)
+        self.update()
 
     def _set_away_flash_alpha(self, val):
         self._away_flash_alpha = val
@@ -224,11 +279,9 @@ class ScoreboardWidget(QWidget):
         away_name_x = (mid_x - 300 - logo_size / 2) - away_name_w / 2
         draw_text_with_shadow(p, away_name_x, h - 30, self._away_abbr, name_font, QColor("#e2e8f0"))
 
-        # Away Bonus, Timeouts, and Fouls
+        # Away Bonus and Timeouts
         if self._away_bonus:
             draw_text_with_shadow(p, (mid_x - 300 - logo_size / 2) - 15, h - 10, "BONUS", tiny_font, QColor("#fbbf24"))
-        
-        draw_text_with_shadow(p, (mid_x - 300 - logo_size / 2) - 20, h - 45, f"FOULS: {self._away_fouls}", tiny_font, QColor("#94a3b8"))
 
         if self._away_timeouts >= 0:
             to_start_x = (mid_x - 300 - logo_size / 2) - (7 * 8) / 2
@@ -263,11 +316,9 @@ class ScoreboardWidget(QWidget):
         home_name_x = (mid_x + 300 + logo_size / 2) - home_name_w / 2
         draw_text_with_shadow(p, home_name_x, h - 30, self._home_abbr, name_font, QColor("#e2e8f0"))
 
-        # Home Bonus, Timeouts, and Fouls
+        # Home Bonus and Timeouts
         if self._home_bonus:
             draw_text_with_shadow(p, (mid_x + 300 + logo_size / 2) - 15, h - 10, "BONUS", tiny_font, QColor("#fbbf24"))
-        
-        draw_text_with_shadow(p, (mid_x + 300 + logo_size / 2) - 20, h - 45, f"FOULS: {self._home_fouls}", tiny_font, QColor("#94a3b8"))
 
         if self._home_timeouts >= 0:
             to_start_x = (mid_x + 300 + logo_size / 2) - (7 * 8) / 2
@@ -290,6 +341,10 @@ class ScoreboardWidget(QWidget):
         # Background for quarter scores
         bg_rect = QRectF(q_start_x - 10, q_y - 12, max_quarters * 32 + 50, 40)
         p.fillRect(bg_rect, QColor(0, 0, 0, 150))
+
+        # Fouls next to quarters
+        draw_text_with_shadow(p, q_start_x - 55, q_y + 14, f"FOULS: {self._away_fouls}", tiny_font, QColor("#94a3b8"))
+        draw_text_with_shadow(p, q_start_x + max_quarters * 32 + 45, q_y + 14, f"FOULS: {self._home_fouls}", tiny_font, QColor("#94a3b8"))
 
         # Quarter headers
         for qi in range(max_quarters):
@@ -341,6 +396,34 @@ class ScoreboardWidget(QWidget):
             p.setPen(QPen(QColor(252, 165, 165), 2))
             p.drawRect(to_rect)
             draw_text_with_shadow(p, mid_x - to_w/2 + 10, h / 2 - to_h/2 + 54, f"TIMEOUT: {self._timeout_seconds}s", name_font, QColor("#ffffff"))
+
+        # Substitution Overlay
+        if self._sub_data:
+            sub_w = 400
+            sub_h = 100
+            sub_rect = QRectF(mid_x - sub_w/2, h/2 - sub_h/2 + 20, sub_w, sub_h)
+            
+            p.setPen(QPen(QColor("#3b82f6"), 2))
+            p.setBrush(QColor(15, 23, 42, 230))
+            p.drawRoundedRect(sub_rect, 12, 12)
+            
+            # Sub In (Left)
+            draw_text_with_shadow(p, mid_x - 140, h/2 - sub_h/2 + 35, "IN", tiny_font, QColor("#22c55e"))
+            if self._sub_data.get("in_pixmap"):
+                p.drawPixmap(int(mid_x - 170), int(h/2 - sub_h/2 + 45), self._sub_data["in_pixmap"])
+            draw_text_with_shadow(p, mid_x - 180, h/2 + 45, self._sub_data["in_name"][:15], small_font, QColor("#ffffff"))
+            draw_text_with_shadow(p, mid_x - 180, h/2 + 60, self._sub_data["in_stats"], tiny_font, QColor("#94a3b8"))
+
+            # Sub Out (Right)
+            draw_text_with_shadow(p, mid_x + 120, h/2 - sub_h/2 + 35, "OUT", tiny_font, QColor("#ef4444"))
+            if self._sub_data.get("out_pixmap"):
+                p.drawPixmap(int(mid_x + 90), int(h/2 - sub_h/2 + 45), self._sub_data["out_pixmap"])
+            draw_text_with_shadow(p, mid_x + 80, h/2 + 45, self._sub_data["out_name"][:15], small_font, QColor("#ffffff"))
+            draw_text_with_shadow(p, mid_x + 80, h/2 + 60, self._sub_data["out_stats"], tiny_font, QColor("#94a3b8"))
+            
+            # Arrows (Center)
+            draw_text_with_shadow(p, mid_x - 15, h/2 + 5, ">>", small_font, QColor("#64748b"))
+            draw_text_with_shadow(p, mid_x - 15, h/2 + 25, "<<", small_font, QColor("#64748b"))
 
         p.end()
 

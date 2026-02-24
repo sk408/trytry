@@ -660,8 +660,11 @@ class GamecastView(QWidget):
         new_plays = flat_plays[self._known_play_count:]
         for play in new_plays:
             self.court.add_play(play)
-            if "timeout" in play.get("text", "").lower() and status_state == "in":
+            text = play.get("text", "")
+            if "timeout" in text.lower() and status_state == "in":
                 self.scoreboard.start_timeout(75)
+            elif "enters the game" in text.lower():
+                self.scoreboard.show_substitution(text, boxscore)
         self._known_play_count = len(flat_plays)
 
         # ── Info panel (prediction + odds) ──
