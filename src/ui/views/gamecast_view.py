@@ -302,11 +302,16 @@ class GamecastView(QWidget):
         box_layout.setSpacing(0)
 
         box_header = QLabel("  BOX SCORE")
-        box_header.setStyleSheet(
-            "background: #1e293b; color: #94a3b8; font-size: 10px; "
-            "font-weight: 700; letter-spacing: 1px; padding: 4px 8px;"
-        )
-        box_header.setFixedHeight(24)
+        box_header.setStyleSheet("""
+            background: rgba(20, 30, 45, 0.8);
+            color: #00e5ff; font-size: 12px; font-weight: 700;
+            letter-spacing: 1px; padding: 4px 8px;
+            text-transform: uppercase;
+            font-family: 'Oswald', sans-serif;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        """)
+        box_header.setFixedHeight(28)
         box_layout.addWidget(box_header)
 
         self.box_tabs = QTabWidget()
@@ -562,8 +567,20 @@ class GamecastView(QWidget):
 
         home_abbr = home_comp.get("team", {}).get("abbreviation", "HOME")
         away_abbr = away_comp.get("team", {}).get("abbreviation", "AWAY")
+        home_name = home_comp.get("team", {}).get("displayName", home_abbr)
+        away_name = away_comp.get("team", {}).get("displayName", away_abbr)
         home_score = int(home_comp.get("score", 0) or 0)
         away_score = int(away_comp.get("score", 0) or 0)
+
+        # Timeouts remaining
+        home_timeouts = home_comp.get("timeoutsRemaining", -1)
+        away_timeouts = away_comp.get("timeoutsRemaining", -1)
+
+        # Bonus indicator
+        home_bonus = home_comp.get("linescores", [{}])[-1].get("isBonus", False) if home_comp.get("linescores") else False
+        away_bonus = away_comp.get("linescores", [{}])[-1].get("isBonus", False) if away_comp.get("linescores") else False
+        # actually, ESPN often puts bonus flag on the competition or competitors directly?
+        # let's try to extract if available. We will pass to update_data
 
         status_detail = comp.get("status", {})
         status_text = status_detail.get("type", {}).get("description", "")
@@ -599,12 +616,14 @@ class GamecastView(QWidget):
                 away_quarters = quarters
 
         self.scoreboard.update_data(
-            away_abbr=away_abbr, home_abbr=home_abbr,
+            away_abbr=away_name, home_abbr=home_name,
             away_team_id=away_team_id, home_team_id=home_team_id,
             away_score=away_score, home_score=home_score,
             away_quarters=away_quarters, home_quarters=home_quarters,
             status_text=status_text, status_state=status_state,
             clock=clock_str, period=period,
+            away_timeouts=away_timeouts, home_timeouts=home_timeouts,
+            away_bonus=away_bonus, home_bonus=home_bonus
         )
 
         # ── Court ──
@@ -878,8 +897,16 @@ class GamecastView(QWidget):
 
         table.setRowCount(len(athletes))
         for r, ath in enumerate(athletes):
+            is_active = ath.get("active", False)
             athlete_info = ath.get("athlete", {})
             name = athlete_info.get("displayName", "")
+            
+            # Active players styling
+            if is_active:
+                name_display = f"🟢 {name}"
+            else:
+                name_display = name
+
             player_id = athlete_info.get("id", "")
             stats = ath.get("stats", [])
             stat_map = dict(zip(labels, stats)) if len(labels) == len(stats) else {}
@@ -911,10 +938,6 @@ class GamecastView(QWidget):
                             pixmap = _make_circle_pixmap(pix)
                             _espn_headshot_cache[(headshot_url, 28)] = pixmap
 
-                    # Tier 3: local NBA.com photo (works when IDs match)
-                    if not pixmap:
-                        pixmap = get_player_photo(int(player_id), 28, circle=True)
-
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)
                     elif headshot_url:
@@ -926,7 +949,7 @@ class GamecastView(QWidget):
             table.setItem(r, 0, photo_item)
 
             # Column 1: Name
-            table.setItem(r, 1, QTableWidgetItem(name))
+            table.setItem(r, 1, QTableWidgetItem(name_display))
 
             # Columns 2-10: Stats
             stat_keys = ["MIN", "PTS", "REB", "AST", "STL", "BLK", "FG", "3PT", "+/-"]

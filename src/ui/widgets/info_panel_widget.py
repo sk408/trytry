@@ -20,8 +20,8 @@ class _InfoCard(QFrame):
         self.setObjectName("infoCard")
         self.setStyleSheet("""
             #infoCard {
-                background: #111b27;
-                border: 1px solid #1e293b;
+                background: rgba(20, 30, 45, 0.6);
+                border: 1px solid rgba(255, 255, 255, 0.1);
                 border-radius: 8px;
                 padding: 8px;
             }
@@ -32,8 +32,9 @@ class _InfoCard(QFrame):
 
         header = QLabel(title)
         header.setStyleSheet("""
-            color: #94a3b8; font-size: 10px; font-weight: 700;
+            color: #00e5ff; font-size: 11px; font-weight: 700;
             letter-spacing: 1px; text-transform: uppercase;
+            font-family: 'Oswald', sans-serif;
         """)
         self._layout.addWidget(header)
 
@@ -80,26 +81,56 @@ class WinProbBar(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # Background
-        p.fillRect(0, 0, w, h, QColor("#0a1628"))
+        # Background Glass Pill
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(15, 20, 30, 200))
+        p.drawRoundedRect(0, 0, w, h, h/2.0, h/2.0)
+
+        home_w = w * self._home_pct / 100.0
+
+        # Away bar (right) - drawn full width then overdrawn by home, or drawn as right portion
+        away_grad = QLinearGradient(0, 0, 0, h)
+        away_grad.setColorAt(0, QColor(self._away_color).lighter(120))
+        away_grad.setColorAt(0.4, QColor(self._away_color))
+        away_grad.setColorAt(1, QColor(self._away_color).darker(150))
+        
+        p.setBrush(away_grad)
+        p.drawRoundedRect(0, 0, w, h, h/2.0, h/2.0)
 
         # Home bar (left)
-        home_w = int(w * self._home_pct / 100.0)
-        p.fillRect(0, 2, home_w, h - 4, QColor(self._home_color))
-
-        # Away bar (right)
-        p.fillRect(home_w, 2, w - home_w, h - 4, QColor(self._away_color))
+        if home_w > 0:
+            # We want only the left part rounded, and right part straight if it's not 100%. 
+            # Or just draw a rounded rect and it looks like a pill inside a pill.
+            home_grad = QLinearGradient(0, 0, 0, h)
+            home_grad.setColorAt(0, QColor(self._home_color).lighter(120))
+            home_grad.setColorAt(0.4, QColor(self._home_color))
+            home_grad.setColorAt(1, QColor(self._home_color).darker(150))
+            
+            p.setBrush(home_grad)
+            if home_w >= w - 1:
+                p.drawRoundedRect(0, 0, home_w, h, h/2.0, h/2.0)
+            else:
+                # Draw left half rounded, right half straight
+                p.drawRoundedRect(0, 0, int(home_w), h, h/2.0, h/2.0)
+                p.drawRect(int(h/2.0), 0, int(home_w - h/2.0), h)
 
         # Labels
-        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        p.setPen(QColor("#ffffff"))
+        p.setFont(QFont("Oswald", 10, QFont.Weight.Bold))
+        
+        # Shadow helper
+        def draw_text(x, y, text):
+            p.setPen(QColor(0, 0, 0, 180))
+            p.drawText(int(x+1), int(y+1), text)
+            p.setPen(QColor("#ffffff"))
+            p.drawText(int(x), int(y), text)
+
         if home_w > 40:
-            p.drawText(6, h - 6, f"{self._home_abbr} {self._home_pct:.0f}%")
+            draw_text(10, h - 6, f"{self._home_abbr} {self._home_pct:.0f}%")
         away_pct = 100 - self._home_pct
         if w - home_w > 40:
             text = f"{away_pct:.0f}% {self._away_abbr}"
             tw = p.fontMetrics().horizontalAdvance(text)
-            p.drawText(w - tw - 6, h - 6, text)
+            draw_text(w - tw - 10, h - 6, text)
 
         p.end()
 

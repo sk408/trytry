@@ -111,16 +111,28 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         logger.info(msg)
 
     try:
-        # Step 1: Check pipeline state
-        emit("[Step 1/12] Checking pipeline state...")
+        # Step 1: Backup State
+        emit("[Step 1/13] Creating snapshot backup...")
+        from src.analytics.snapshots import create_snapshot
+        snapshot_path = create_snapshot("auto")
+        if snapshot_path:
+            emit(f"  Backup saved to {os.path.basename(snapshot_path)}")
+        else:
+            emit("  Warning: Failed to create backup snapshot")
+            
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Step 2: Check pipeline state
+        emit("[Step 2/13] Checking pipeline state...")
         state = _load_pipeline_state()
         results["state"] = "loaded"
 
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 2: Load data into memory
-        emit("[Step 2/12] Loading data into memory...")
+        # Step 3: Load data into memory
+        emit("[Step 3/13] Loading data into memory...")
         from src.analytics.memory_store import InMemoryDataStore
         store = InMemoryDataStore()
         store.reload()
@@ -130,8 +142,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 3: Full data sync (6 sub-steps)
-        emit("[Step 3/12] Running data sync...")
+        # Step 4: Full data sync (6 sub-steps)
+        emit("[Step 4/13] Running data sync...")
         from src.data.sync_service import full_sync
         sync_result = full_sync(callback=lambda msg: emit(f"  [Sync] {msg}"))
         results["sync"] = sync_result
@@ -139,8 +151,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 4: Reload memory if new data
-        emit("[Step 4/12] Checking for new data...")
+        # Step 5: Reload memory if new data
+        emit("[Step 5/13] Checking for new data...")
         if _has_new_data("pipeline_reload"):
             store.reload()
             _mark_step_done("pipeline_reload")
@@ -151,8 +163,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 5: Build injury history
-        emit("[Step 5/12] Building injury history...")
+        # Step 6: Build injury history
+        emit("[Step 6/13] Building injury history...")
         if not _is_fresh("injury_history", 168) or _has_new_data("injury_history"):
             from src.analytics.injury_history import infer_injuries_from_logs
             ih_result = infer_injuries_from_logs(callback=lambda msg: emit(f"  {msg}"))
@@ -164,8 +176,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 6: Injury intelligence backfill + roster change
-        emit("[Step 6/12] Injury intelligence backfill...")
+        # Step 7: Injury intelligence backfill + roster change
+        emit("[Step 7/13] Injury intelligence backfill...")
         from src.analytics.injury_intelligence import backfill_play_outcomes
         backfill_count = backfill_play_outcomes()
         results["backfill"] = backfill_count
@@ -183,8 +195,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 7: Autotune
-        emit("[Step 7/12] Autotuning teams...")
+        # Step 8: Autotune
+        emit("[Step 8/13] Autotuning teams...")
         if not _is_fresh("autotune", 168) or _has_new_data("autotune"):
             from src.analytics.autotune import autotune_all
             at_result = autotune_all(
@@ -199,15 +211,15 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # --- Pre-compute game data once for steps 8-11 ---
-        _needs_8 = not _is_fresh("ml_train", 168) or _has_new_data("ml_train")
-        _needs_9 = not _is_fresh("weight_optimize", 168) or _has_new_data("weight_optimize")
-        _needs_10 = not _is_fresh("team_refine", 168) or _has_new_data("team_refine")
-        _needs_11 = not _is_fresh("residual_cal", 168) or _has_new_data("residual_cal")
+        # --- Pre-compute game data once for steps 9-12 ---
+        _needs_9 = not _is_fresh("ml_train", 168) or _has_new_data("ml_train")
+        _needs_10 = not _is_fresh("weight_optimize", 168) or _has_new_data("weight_optimize")
+        _needs_11 = not _is_fresh("team_refine", 168) or _has_new_data("team_refine")
+        _needs_12 = not _is_fresh("residual_cal", 168) or _has_new_data("residual_cal")
 
         _precomputed_cache = None
-        if _needs_8 or _needs_9 or _needs_10 or _needs_11:
-            emit("  Precomputing game data (shared by steps 8-11)...")
+        if _needs_9 or _needs_10 or _needs_11 or _needs_12:
+            emit("  Precomputing game data (shared by steps 9-12)...")
             from src.analytics.prediction import precompute_game_data
             _precomputed_cache = precompute_game_data(
                 callback=lambda msg: emit(f"  {msg}")
@@ -217,9 +229,9 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 8: Train ML models
-        emit("[Step 8/12] Training ML models...")
-        if _needs_8:
+        # Step 9: Train ML models
+        emit("[Step 9/13] Training ML models...")
+        if _needs_9:
             from src.analytics.ml_model import train_models
             if _precomputed_cache and len(_precomputed_cache) >= 50:
                 ml_result = train_models(
@@ -236,9 +248,9 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 9: Global weight optimization
-        emit("[Step 9/12] Optimizing weights (200 Optuna trials)...")
-        if _needs_9:
+        # Step 10: Global weight optimization
+        emit("[Step 10/13] Optimizing weights (200 Optuna trials)...")
+        if _needs_10:
             from src.analytics.weight_optimizer import optimize_weights
             if _precomputed_cache and len(_precomputed_cache) >= 20:
                 opt_result = optimize_weights(
@@ -255,9 +267,9 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 10: Per-team refinement
-        emit("[Step 10/12] Per-team weight refinement...")
-        if _needs_10:
+        # Step 11: Per-team refinement
+        emit("[Step 11/13] Per-team weight refinement...")
+        if _needs_11:
             from src.analytics.weight_optimizer import per_team_refinement
             if _precomputed_cache and len(_precomputed_cache) >= 20:
                 refine_result = per_team_refinement(
@@ -272,9 +284,9 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 11: Residual calibration
-        emit("[Step 11/12] Building residual calibration...")
-        if _needs_11:
+        # Step 12: Residual calibration
+        emit("[Step 12/13] Building residual calibration...")
+        if _needs_12:
             from src.analytics.weight_optimizer import build_residual_calibration
             if _precomputed_cache:
                 cal_result = build_residual_calibration(
@@ -289,8 +301,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 12: Validation backtest
-        emit("[Step 12/12] Running validation backtest...")
+        # Step 13: Validation backtest
+        emit("[Step 13/13] Running validation backtest...")
         from src.analytics.backtester import run_backtest
         bt_result = run_backtest(
             use_cache=False,

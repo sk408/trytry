@@ -94,14 +94,22 @@ class _PlayItem(QFrame):
             layout.addWidget(score_label)
 
         # Styling
-        bg = "#111b27" if not is_scoring else "#0d1f12"
-        border_color = primary_color if is_scoring else "transparent"
+        if is_scoring:
+            qc = QColor(primary_color)
+            bg = f"rgba({qc.red()}, {qc.green()}, {qc.blue()}, 0.15)"
+            border_color = primary_color
+            border_width = "4px"
+        else:
+            bg = "rgba(20, 30, 45, 0.4)"
+            border_color = "rgba(255, 255, 255, 0.05)"
+            border_width = "2px"
+            
         self.setStyleSheet(f"""
             #playItem {{
                 background: {bg};
-                border-left: 3px solid {border_color};
-                border-radius: 3px;
-                margin: 1px 0;
+                border-left: {border_width} solid {border_color};
+                border-radius: 4px;
+                margin: 2px 0;
             }}
         """)
 
@@ -123,18 +131,22 @@ class PlayFeedWidget(QWidget):
         # Header
         header = QLabel("  PLAY-BY-PLAY")
         header.setStyleSheet("""
-            background: #1e293b; color: #94a3b8; font-size: 10px;
-            font-weight: 700; letter-spacing: 1px; padding: 4px 8px;
+            background: rgba(20, 30, 45, 0.8);
+            color: #00e5ff; font-size: 12px; font-weight: 700;
+            letter-spacing: 1px; padding: 4px 8px;
             text-transform: uppercase;
+            font-family: 'Oswald', sans-serif;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
         """)
-        header.setFixedHeight(24)
+        header.setFixedHeight(28)
         layout.addWidget(header)
 
         # Scroll area
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("QScrollArea { border: none; background: #0a1628; }")
+        self._scroll.setStyleSheet("QScrollArea { border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(11, 15, 25, 0.6); }")
 
         self._container = QWidget()
         self._container_layout = QVBoxLayout(self._container)

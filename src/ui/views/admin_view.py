@@ -55,15 +55,27 @@ class AdminView(QWidget):
             "border-radius: 8px; padding: 16px; }"
         )
         w_layout = QVBoxLayout(weights_frame)
-        w_layout.addWidget(QLabel("Current Weights"))
+        
+        self.weights_toggle_btn = QPushButton("Current Weights (Click to expand)")
+        self.weights_toggle_btn.setStyleSheet(
+            "text-align: left; background: transparent; color: #00e5ff; font-weight: bold; border: none; padding: 0px;"
+        )
+        self.weights_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.weights_toggle_btn.clicked.connect(self._toggle_weights)
+        w_layout.addWidget(self.weights_toggle_btn)
+        
         self.weights_text = QTextEdit()
         self.weights_text.setReadOnly(True)
         self.weights_text.setMaximumHeight(200)
+        self.weights_text.setVisible(False)
         w_layout.addWidget(self.weights_text)
         layout.addWidget(weights_frame)
 
         # Performance settings
         perf_frame = QFrame()
+        from PySide6.QtWidgets import QSizePolicy
+        perf_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        perf_frame.setMinimumHeight(160)
         perf_frame.setFrameShape(QFrame.Shape.StyledPanel)
         perf_frame.setStyleSheet(
             "QFrame { background: #1e293b; border: 1px solid #334155; "
@@ -158,6 +170,14 @@ class AdminView(QWidget):
         layout.addWidget(refresh_btn)
 
         self._refresh()
+
+    def _toggle_weights(self):
+        is_visible = self.weights_text.isVisible()
+        self.weights_text.setVisible(not is_visible)
+        if not is_visible:
+            self.weights_toggle_btn.setText("Current Weights (Click to collapse)")
+        else:
+            self.weights_toggle_btn.setText("Current Weights (Click to expand)")
 
     def _refresh(self):
         """Refresh DB info."""

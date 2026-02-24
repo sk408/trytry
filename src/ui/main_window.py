@@ -1,10 +1,12 @@
 """PySide6 Desktop GUI — Main window with 10 tabs."""
 
 import logging
+import os
 from PySide6.QtWidgets import (
     QMainWindow, QTabWidget, QStatusBar, QApplication, QWidget, QVBoxLayout,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontDatabase, QFont
 
 from src.ui.theme import GLOBAL_STYLESHEET
 
@@ -16,6 +18,18 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        
+        # Load custom fonts
+        font_dir = os.path.join(os.path.dirname(__file__), "fonts")
+        oswald_path = os.path.join(font_dir, "Oswald.ttf")
+        if os.path.exists(oswald_path):
+            font_id = QFontDatabase.addApplicationFont(oswald_path)
+            if font_id != -1:
+                families = QFontDatabase.applicationFontFamilies(font_id)
+                if families:
+                    app_font = QFont(families[0], 10)
+                    QApplication.setFont(app_font)
+
         self.setWindowTitle("NBA Game Prediction System")
         self.setMinimumSize(1200, 800)
         self.setStyleSheet(GLOBAL_STYLESHEET)
@@ -45,6 +59,8 @@ class MainWindow(QMainWindow):
         from src.ui.views.matchup_view import MatchupView
         from src.ui.views.schedule_view import ScheduleView
         from src.ui.views.accuracy_view import AccuracyView
+        from src.ui.views.automatic_view import AutomaticView
+        from src.ui.views.snapshots_view import SnapshotsView
         from src.ui.views.autotune_view import AutotuneView
         from src.ui.views.admin_view import AdminView
 
@@ -55,6 +71,8 @@ class MainWindow(QMainWindow):
         self.matchup = MatchupView(self)
         self.schedule = ScheduleView(self)
         self.accuracy = AccuracyView(self)
+        self.automatic = AutomaticView(self)
+        self.snapshots = SnapshotsView(self)
         self.autotune = AutotuneView(self)
         self.admin = AdminView(self)
 
@@ -65,6 +83,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.matchup, "Matchups")
         self.tabs.addTab(self.schedule, "Schedule")
         self.tabs.addTab(self.accuracy, "Accuracy")
+        self.tabs.addTab(self.automatic, "Automatic")
+        self.tabs.addTab(self.snapshots, "Snapshots")
         self.tabs.addTab(self.autotune, "Autotune")
         self.tabs.addTab(self.admin, "Admin")
 

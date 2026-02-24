@@ -9,7 +9,7 @@ from PySide6.QtCore import (
     Property, QEasingCurve, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QPainter, QPen, QBrush, QFont, QRadialGradient, QPainterPath,
+    QColor, QPainter, QPen, QBrush, QFont, QRadialGradient, QPainterPath, QLinearGradient
 )
 from PySide6.QtWidgets import QWidget
 
@@ -206,11 +206,15 @@ class CourtWidget(QWidget):
 
         # Court floor
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#1a2744"))
-        p.drawRoundedRect(court_rect, 4, 4)
+        # Use a hardwood-like gradient or a stylized dark court
+        floor_grad = QLinearGradient(0, 0, 0, h)
+        floor_grad.setColorAt(0, QColor("#1e293b"))
+        floor_grad.setColorAt(1, QColor("#0f172a"))
+        p.setBrush(floor_grad)
+        p.drawRect(court_rect)
 
         # Court lines
-        line_pen = QPen(QColor("#334155"), 1.5)
+        line_pen = QPen(QColor(255, 255, 255, 100), 2.0)
         p.setPen(line_pen)
 
         # Baseline
@@ -227,6 +231,20 @@ class CourtWidget(QWidget):
         p.drawLine(bl, hl)
         p.drawLine(br, hr)
 
+        # Center circle (at half court)
+        px_per_foot_x = (w - 2 * margin) / _COURT_W
+        px_per_foot_y = (h - 2 * margin) / _COURT_H
+        center_rx = 6.0 * px_per_foot_x
+        center_ry = 6.0 * px_per_foot_y
+        center_rect = QRectF(hl.x() + (w - 2 * margin) / 2 - center_rx, hl.y() - center_ry, center_rx * 2, center_ry * 2)
+        
+        home_clr, _ = get_team_colors(self._home_team_id) if self._home_team_id else ("#3b82f6", "")
+        p.setBrush(QColor(home_clr))
+        # Draw bottom half of center circle
+        p.drawChord(center_rect, 0, 180 * 16)
+        
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
         # Key / paint area
         key_left = (_COURT_W - _KEY_WIDTH) / 2.0
         key_right = key_left + _KEY_WIDTH
@@ -234,22 +252,33 @@ class CourtWidget(QWidget):
         kr_bl = self._court_to_px(key_right, 0)
         kl_ft = self._court_to_px(key_left, _FT_LINE_Y)
         kr_ft = self._court_to_px(key_right, _FT_LINE_Y)
+        
+        # Fill the paint area with team color slightly transparent
+        paint_color = QColor(home_clr)
+        paint_color.setAlpha(40)
+        p.fillRect(QRectF(kl_bl, kr_ft), paint_color)
+
+        p.setPen(line_pen)
         p.drawLine(kl_bl, kl_ft)
         p.drawLine(kr_bl, kr_ft)
         p.drawLine(kl_ft, kr_ft)
 
         # Free throw circle (top half)
         ft_center = self._court_to_px(_HOOP_X, _FT_LINE_Y)
-        px_per_foot_x = (w - 2 * margin) / _COURT_W
-        px_per_foot_y = (h - 2 * margin) / _COURT_H
         ft_radius_px_x = 6.0 * px_per_foot_x
         ft_radius_px_y = 6.0 * px_per_foot_y
         ft_rect = QRectF(ft_center.x() - ft_radius_px_x, ft_center.y() - ft_radius_px_y,
                          ft_radius_px_x * 2, ft_radius_px_y * 2)
         p.drawArc(ft_rect, 0, 180 * 16)  # top half
+        
+        # Free throw circle (bottom half dashed)
+        dash_pen = QPen(QColor(255, 255, 255, 100), 2.0)
+        dash_pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(dash_pen)
+        p.drawArc(ft_rect, 180 * 16, 180 * 16)
 
         # 3-point arc
-        arc_pen = QPen(QColor("#475569"), 1.5)
+        arc_pen = QPen(QColor(255, 255, 255, 100), 2.0)
         p.setPen(arc_pen)
         hoop_px = self._court_to_px(_HOOP_X, _HOOP_Y)
         three_rx = _THREE_RADIUS * px_per_foot_x

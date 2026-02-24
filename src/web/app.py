@@ -1071,6 +1071,7 @@ async def sse_gamecast_stream(game_id: str):
                             "name": ainfo.get("displayName", ""),
                             "id": ainfo.get("id", ""),
                             "headshot": headshot,
+                            "active": ath.get("active", False),
                             "min": smap.get("MIN", ""),
                             "pts": smap.get("PTS", ""),
                             "reb": smap.get("REB", ""),

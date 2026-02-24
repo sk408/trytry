@@ -6,37 +6,42 @@ from src.database import db
 
 logger = logging.getLogger(__name__)
 
-def fetch_espn_odds(date_str: str) -> list:
-    """Fetch games and odds from ESPN for a specific date (YYYYMMDD)."""
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
+def fetch_action_odds(date_str: str) -> list:
+    """Fetch games and odds from Action Network for a specific date (YYYYMMDD)."""
+    url = f"https://api.actionnetwork.com/web/v1/scoreboard/nba?date={date_str}"
     try:
-        resp = requests.get(url, timeout=10)
+        # Action Network API often blocks default requests User-Agent
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("events", [])
+        return data.get("games", [])
     except Exception as e:
-        logger.error(f"Error fetching ESPN odds for {date_str}: {e}")
+        logger.error(f"Error fetching Action Network odds for {date_str}: {e}")
         return []
 
-def _map_espn_abbrev(espn_abbr: str) -> str:
-    """Map ESPN abbreviations to standard NBA API ones if they differ."""
+def _map_action_abbrev(abbr: str) -> str:
+    """Map Action Network abbreviations to standard NBA API ones if they differ."""
+    if not abbr:
+        return ""
     mapping = {
-        "GS": "GSW",
         "NO": "NOP",
-        "NY": "NOP", # Wait, NY is NYK, ESPN might use NY
+        "NY": "NYK",
+        "SA": "SAS",
         "WSH": "WAS",
+        "GS": "GSW",
         "UTAH": "UTA",
-        "SA": "UTA" # SA is SAS
     }
-    if espn_abbr == "NY": return "NYK"
-    if espn_abbr == "SA": return "SAS"
-    return mapping.get(espn_abbr, espn_abbr)
+    return mapping.get(abbr.upper(), abbr.upper())
 
 def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> int:
     """Fetch and store odds for all games on a date (YYYY-MM-DD)."""
-    espn_date = game_date.replace("-", "")
-    events = fetch_espn_odds(espn_date)
-    if not events:
+    action_date = game_date.replace("-", "")
+    games = fetch_action_odds(action_date)
+    if not games:
         return 0
 
     # Get team mapping
@@ -45,85 +50,79 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
     
     saved_count = 0
     now = datetime.now().isoformat()
+    
+    # We will log if any games were found but had no odds
+    games_with_no_odds = 0
 
-    for event in events:
+    for game in games:
         try:
-            comps = event.get("competitions", [])
-            if not comps: continue
-            comp = comps[0]
+            home_abbr = None
+            away_abbr = None
+            for team in game.get("teams", []):
+                if team.get("id") == game.get("home_team_id"):
+                    home_abbr = team.get("abbr")
+                elif team.get("id") == game.get("away_team_id"):
+                    away_abbr = team.get("abbr")
             
-            odds_list = comp.get("odds", [])
-            if not odds_list: continue
-            
-            # Just take the first provider (usually ESPN BET or Consensus)
-            odds = odds_list[0]
-            
-            home_id = None
-            away_id = None
-            
-            for competitor in comp.get("competitors", []):
-                abbr = competitor.get("team", {}).get("abbreviation", "")
-                norm_abbr = _map_espn_abbrev(abbr)
-                tid = abbrev_to_id.get(norm_abbr)
+            if not home_abbr or not away_abbr:
+                continue
                 
-                if competitor.get("homeAway") == "home":
-                    home_id = tid
-                else:
-                    away_id = tid
+            home_id = abbrev_to_id.get(_map_action_abbrev(home_abbr))
+            away_id = abbrev_to_id.get(_map_action_abbrev(away_abbr))
             
             if not home_id or not away_id:
                 continue
 
-            # ESPN details usually like "BOS -5.5" -> this is the favorite and spread.
-            # But they also have "spread" field? Wait, usually ESPN odds dictionary might not have 'spread'.
-            # We can extract it from "details" string or 'spread' if it exists.
+            odds_list = game.get("odds", [])
+            if not odds_list: 
+                games_with_no_odds += 1
+                continue
             
-            spread = odds.get("spread")
-            # If spread is not directly available but details is:
-            details = odds.get("details", "")
-            if spread is None and details and details != "EVEN":
-                parts = details.split()
-                if len(parts) == 2:
-                    # parts[0] is abbreviation, parts[1] is spread
-                    try:
-                        fav_abbr = _map_espn_abbrev(parts[0])
-                        val = float(parts[1])
-                        # If home is favorite, spread is negative (home perspective)
-                        if abbrev_to_id.get(fav_abbr) == home_id:
-                            spread = val
-                        else:
-                            spread = -val
-                    except Exception:
-                        pass
-            
-            if spread is None and details == "EVEN":
-                spread = 0.0
+            # Find consensus odds (book_id == 15 and type == "game")
+            # Fallback to any game odds if book 15 isn't found
+            game_odds = next((o for o in odds_list if o.get("type") == "game" and o.get("book_id") == 15), None)
+            if not game_odds:
+                game_odds = next((o for o in odds_list if o.get("type") == "game"), None)
                 
-            ou = odds.get("overUnder")
+            if not game_odds:
+                games_with_no_odds += 1
+                continue
             
-            home_ml = odds.get("homeTeamOdds", {}).get("moneyLine")
-            away_ml = odds.get("awayTeamOdds", {}).get("moneyLine")
+            spread = game_odds.get("spread_home")
+            ou = game_odds.get("total")
+            home_ml = game_odds.get("ml_home")
+            away_ml = game_odds.get("ml_away")
             
             if spread is None and ou is None:
                 continue
                 
+            # If the spread is 0, we can save it as 0.0
+            if spread == "EVEN":
+                spread = 0.0
+            elif spread is not None:
+                spread = float(spread)
+
             db.execute("""
-                INSERT INTO game_odds (game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO game_odds (game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, fetched_at, provider)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'actionnetwork')
                 ON CONFLICT(game_date, home_team_id, away_team_id) DO UPDATE SET
                     spread=excluded.spread,
                     over_under=excluded.over_under,
                     home_moneyline=excluded.home_moneyline,
                     away_moneyline=excluded.away_moneyline,
-                    fetched_at=excluded.fetched_at
+                    fetched_at=excluded.fetched_at,
+                    provider=excluded.provider
             """, (game_date, home_id, away_id, spread, ou, home_ml, away_ml, now))
             
             saved_count += 1
         except Exception as e:
-            logger.error(f"Failed to parse odds for event {event.get('id')}: {e}")
+            logger.error(f"Failed to parse odds for game {game.get('id')}: {e}")
             
-    if callback and saved_count > 0:
-        callback(f"Saved odds for {saved_count} games on {game_date}")
+    if callback:
+        if saved_count > 0:
+            callback(f"Saved odds for {saved_count} games on {game_date}")
+        elif games_with_no_odds > 0:
+            logger.info(f"Skipped {game_date} - Action Network had no odds for these {games_with_no_odds} historical games.")
         
     return saved_count
 

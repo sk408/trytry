@@ -3,8 +3,13 @@
 import logging
 import sys
 
+# Load initial config to set correct log level
+import src.config
+initial_log_level_name = src.config.get("log_level", "INFO")
+initial_log_level = getattr(logging, initial_log_level_name, logging.INFO)
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=initial_log_level,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )

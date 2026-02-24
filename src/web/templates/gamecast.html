@@ -3,7 +3,7 @@
 {% block title %}Gamecast — NBA Predictor{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Gamecast</h1>
+<h1 class="page-title" style="font-family: var(--font-heading); color: var(--accent); text-transform: uppercase; font-size: 2rem;">Gamecast</h1>
 
 <!-- Game Selector -->
 <div class="card mb-4 game-selector" id="game-selector" style="padding:0; overflow:hidden;">
@@ -18,7 +18,7 @@
 
 <div id="gameDetail" class="hidden">
     <!-- Live Score -->
-    <div class="card" id="score-card" style="position:relative; overflow:hidden;">
+    <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); border-bottom: 2px solid var(--accent);">
         <!-- Faint background accents will be set via JS -->
         <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:50%; height:100%; opacity:0.1; background:linear-gradient(to right, var(--team-away, transparent), transparent); pointer-events:none;"></div>
         <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:50%; height:100%; opacity:0.1; background:linear-gradient(to left, var(--team-home, transparent), transparent); pointer-events:none;"></div>
@@ -28,8 +28,8 @@
                 <div style="display:flex; align-items:center; gap:12px;">
                     <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
                     <div>
-                        <div class="team-name" id="awayTeamName" style="text-align:left; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted);">Away</div>
-                        <div class="team-abbr drop-shadow" id="awayTeam" style="font-size:1.8rem; line-height:1;">AWY</div>
+                        <div class="team-name" id="awayTeamName" style="text-align:left; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted); font-family:var(--font-heading);">Away</div>
+                        <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.8rem; line-height:1; font-weight: 700;">AWY</div>
                     </div>
                 </div>
             </div>
@@ -51,8 +51,8 @@
                 <div style="display:flex; align-items:center; gap:12px; flex-direction:row-reverse;">
                     <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
                     <div style="text-align:right;">
-                        <div class="team-name" id="homeTeamName" style="text-align:right; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted);">Home</div>
-                        <div class="team-abbr drop-shadow" id="homeTeam" style="font-size:1.8rem; line-height:1;">HOM</div>
+                        <div class="team-name" id="homeTeamName" style="text-align:right; text-transform:uppercase; font-weight:800; letter-spacing:1px; font-size:0.8rem; color:var(--text-muted); font-family:var(--font-heading);">Home</div>
+                        <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.8rem; line-height:1; font-weight: 700;">HOM</div>
                     </div>
                 </div>
             </div>
@@ -211,8 +211,9 @@
 }
 
 .team-score {
+  font-family: var(--font-heading);
   font-size: 3rem;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -816,9 +817,10 @@ function fillBoxTable(tableId, players) {
         const photo = p.headshot ?
             '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.style.display=\'none\'">' :
             '';
+        const activeDot = p.active ? '🟢 ' : '';
         return '<tr>' +
             '<td style="width:32px;">' + photo + '</td>' +
-            '<td class="font-bold">' + (p.name || '') + ' <span class="text-muted text-xs" style="margin-left:4px;">' + (p.position || '') + '</span></td>' +
+            '<td class="font-bold">' + activeDot + (p.name || '') + ' <span class="text-muted text-xs" style="margin-left:4px;">' + (p.position || '') + '</span></td>' +
             '<td class="font-mono text-center">' + (p.min || '') + '</td>' +
             '<td class="font-mono text-center font-bold" style="color:var(--text);">' + (p.pts || '') + '</td>' +
             '<td class="font-mono text-center">' + (p.reb || '') + '</td>' +

@@ -1,97 +1,1229 @@
 {
-  "last_run": "2026-02-22 20:35:23",
-  "elapsed_seconds": 126.9,
+  "last_run": "2026-02-23 18:53:08",
+  "elapsed_seconds": 1237.1,
   "results_summary": {
     "state": "loaded",
     "memory_loaded": true,
-    "backfill": 0,
-    "roster_changes": 29,
+    "backfill": 100,
+    "roster_changes": 28,
+    "autotune": {
+      "teams_tuned": 30
+    },
+    "ml_train": {
+      "n_train": 684,
+      "n_val": 171,
+      "n_features": 88,
+      "spread_mae": 12.205356487056665,
+      "total_mae": 15.394555967453627,
+      "feature_cols": [
+        "home_points",
+        "away_points",
+        "diff_points",
+        "home_rebounds",
+        "away_rebounds",
+        "diff_rebounds",
+        "home_assists",
+        "away_assists",
+        "diff_assists",
+        "home_steals",
+        "away_steals",
+        "diff_steals",
+        "home_blocks",
+        "away_blocks",
+        "diff_blocks",
+        "home_turnovers",
+        "away_turnovers",
+        "diff_turnovers",
+        "home_oreb",
+        "away_oreb",
+        "diff_oreb",
+        "home_dreb",
+        "away_dreb",
+        "diff_dreb",
+        "home_ts_pct",
+        "away_ts_pct",
+        "diff_ts_pct",
+        "home_fg3_rate",
+        "away_fg3_rate",
+        "diff_fg3_rate",
+        "home_ft_rate",
+        "away_ft_rate",
+        "diff_ft_rate",
+        "home_to_margin",
+        "away_to_margin",
+        "diff_to_margin",
+        "home_off_rating",
+        "away_off_rating",
+        "home_def_rating",
+        "away_def_rating",
+        "home_net_rating",
+        "away_net_rating",
+        "diff_net_rating",
+        "home_matchup_edge",
+        "away_matchup_edge",
+        "diff_matchup_edge",
+        "home_def_factor_raw",
+        "away_def_factor_raw",
+        "home_pace",
+        "away_pace",
+        "avg_pace",
+        "diff_pace",
+        "home_court",
+        "home_fatigue",
+        "away_fatigue",
+        "diff_fatigue",
+        "combined_fatigue",
+        "ff_efg_edge",
+        "ff_tov_edge",
+        "ff_oreb_edge",
+        "ff_fta_edge",
+        "home_clutch_net",
+        "away_clutch_net",
+        "diff_clutch_net",
+        "home_clutch_efg",
+        "away_clutch_efg",
+        "home_deflections",
+        "away_deflections",
+        "diff_deflections",
+        "home_contested",
+        "away_contested",
+        "home_loose_balls",
+        "away_loose_balls",
+        "home_injured_count",
+        "away_injured_count",
+        "diff_injured_count",
+        "home_injury_ppg_lost",
+        "away_injury_ppg_lost",
+        "diff_injury_ppg_lost",
+        "home_injury_minutes_lost",
+        "away_injury_minutes_lost",
+        "diff_injury_minutes_lost",
+        "home_games_played",
+        "away_games_played",
+        "min_games_played",
+        "games_played_diff",
+        "home_roster_changed",
+        "away_roster_changed"
+      ],
+      "trained_at": "2026-02-23T18:51:01.898575",
+      "spread_top_features": [
+        {
+          "feature": "diff_net_rating",
+          "importance": 2.8137125968933105
+        },
+        {
+          "feature": "away_net_rating",
+          "importance": 0.7335003614425659
+        },
+        {
+          "feature": "home_def_rating",
+          "importance": 0.6913244724273682
+        },
+        {
+          "feature": "away_off_rating",
+          "importance": 0.6200111508369446
+        },
+        {
+          "feature": "home_net_rating",
+          "importance": 0.5201982259750366
+        },
+        {
+          "feature": "diff_rebounds",
+          "importance": 0.4971146285533905
+        },
+        {
+          "feature": "away_def_rating",
+          "importance": 0.44572439789772034
+        },
+        {
+          "feature": "away_steals",
+          "importance": 0.3989967107772827
+        },
+        {
+          "feature": "diff_ft_rate",
+          "importance": 0.3729064464569092
+        },
+        {
+          "feature": "home_steals",
+          "importance": 0.35029375553131104
+        }
+      ],
+      "total_top_features": [
+        {
+          "feature": "avg_pace",
+          "importance": 1.2614812850952148
+        },
+        {
+          "feature": "home_def_factor_raw",
+          "importance": 0.88097083568573
+        },
+        {
+          "feature": "home_ft_rate",
+          "importance": 0.8528531789779663
+        },
+        {
+          "feature": "away_pace",
+          "importance": 0.7284355759620667
+        },
+        {
+          "feature": "home_assists",
+          "importance": 0.6502296328544617
+        },
+        {
+          "feature": "home_blocks",
+          "importance": 0.6161024570465088
+        },
+        {
+          "feature": "home_pace",
+          "importance": 0.510175883769989
+        },
+        {
+          "feature": "away_points",
+          "importance": 0.5088699460029602
+        },
+        {
+          "feature": "away_ts_pct",
+          "importance": 0.4651300609111786
+        },
+        {
+          "feature": "away_games_played",
+          "importance": 0.450529009103775
+        }
+      ]
+    },
+    "optimize": {
+      "baseline_loss": 21.74252753849729,
+      "best_loss": 21.578655463327976,
+      "improved": true,
+      "spread_mae": 12.945690149698702,
+      "total_mae": 16.768753774475748,
+      "winner_pct": 63.976608187134495,
+      "loss": 21.578655463327976
+    },
+    "refinement": {
+      "teams_refined": 27,
+      "total_teams": 30,
+      "details": {
+        "1610612737": {
+          "loss_before": 17.17921858011191,
+          "loss_after": 16.50126818002997
+        },
+        "1610612738": {
+          "loss_before": 24.383053360798645,
+          "loss_after": 24.18690686656432
+        },
+        "1610612739": {
+          "loss_before": 11.789293692426495,
+          "loss_after": 11.600173830712965
+        },
+        "1610612740": {
+          "loss_before": 27.17343655771093,
+          "loss_after": 25.042369817594352
+        },
+        "1610612741": {
+          "loss_before": 12.437862222370246,
+          "loss_after": 12.224501863959137
+        },
+        "1610612742": {
+          "loss_before": 12.76624987953641,
+          "loss_after": 12.56349607381675
+        },
+        "1610612743": {
+          "loss_before": 23.15279789090861,
+          "loss_after": 23.052277904780095
+        },
+        "1610612744": {
+          "loss_before": 18.152667778030697,
+          "loss_after": 17.90784664975959
+        },
+        "1610612745": {
+          "loss_before": 15.817123581760981,
+          "loss_after": 15.559568016997964
+        },
+        "1610612746": {
+          "loss_before": 12.704215436158053,
+          "loss_after": 12.331897986645147
+        },
+        "1610612747": {
+          "loss_before": 18.375345015629026,
+          "loss_after": 18.120704169230933
+        },
+        "1610612748": {
+          "loss_before": 18.7390150938888,
+          "loss_after": 18.40360571560943
+        },
+        "1610612750": {
+          "loss_before": 27.541472789323937,
+          "loss_after": 27.22302422661216
+        },
+        "1610612751": {
+          "loss_before": 18.892975965601,
+          "loss_after": 18.87183154028084
+        },
+        "1610612752": {
+          "loss_before": 27.45978636323963,
+          "loss_after": 27.23403407745238
+        },
+        "1610612753": {
+          "loss_before": 15.548941579703953,
+          "loss_after": 15.408788278249528
+        },
+        "1610612754": {
+          "loss_before": 27.198794123520408,
+          "loss_after": 26.963099175937987
+        },
+        "1610612756": {
+          "loss_before": 22.259932188565674,
+          "loss_after": 21.66391036162646
+        },
+        "1610612758": {
+          "loss_before": 19.384223315821327,
+          "loss_after": 18.948112662178673
+        },
+        "1610612759": {
+          "loss_before": 24.067235929961647,
+          "loss_after": 23.382853849537184
+        },
+        "1610612760": {
+          "loss_before": 16.4155783228668,
+          "loss_after": 16.276834053242705
+        },
+        "1610612761": {
+          "loss_before": 16.895644002770233,
+          "loss_after": 16.390864409261788
+        },
+        "1610612762": {
+          "loss_before": 25.078863240253835,
+          "loss_after": 24.12869435843833
+        },
+        "1610612763": {
+          "loss_before": 14.784081422924457,
+          "loss_after": 13.546116728468832
+        },
+        "1610612764": {
+          "loss_before": 22.223880312253236,
+          "loss_after": 21.920693707610816
+        },
+        "1610612765": {
+          "loss_before": 13.29403008529662,
+          "loss_after": 13.095472726842273
+        },
+        "1610612766": {
+          "loss_before": 10.16950096399869,
+          "loss_after": 10.073842132696676
+        }
+      }
+    },
+    "calibration": {
+      "spread_bins": {
+        "big_away": 0,
+        "med_away": 170,
+        "small_away": 56,
+        "slight_away": 66,
+        "toss_up": 159,
+        "slight_home": 91,
+        "small_home": 72,
+        "med_home": 241,
+        "big_home": 0
+      },
+      "total_bins": {
+        "very_low": 9,
+        "low": 47,
+        "below_avg": 49,
+        "avg_low": 77,
+        "avg_high": 89,
+        "above_avg": 116,
+        "high": 250,
+        "very_high": 215
+      }
+    },
     "backtest": {
-      "total_games": 844,
-      "overall_spread_accuracy": 62.3,
-      "overall_total_accuracy": 39.2,
-      "avg_spread_error": 12.1,
-      "avg_total_error": 15.6,
-      "spread_within_5_pct": 28.7,
-      "total_within_10_pct": 39.2,
+      "total_games": 855,
+      "overall_spread_accuracy": 61.2,
+      "overall_total_accuracy": 40.1,
+      "avg_spread_error": 12.02,
+      "avg_total_error": 15.5,
+      "spread_within_5_pct": 27.6,
+      "total_within_10_pct": 40.1,
       "home_away": {
-        "actual_home_wins": 454,
-        "actual_away_wins": 390,
-        "pred_home_wins": 515,
-        "pred_away_wins": 328,
-        "home_pred_accuracy": 64.3,
-        "away_pred_accuracy": 62.2,
-        "overall_home_win_rate": 53.8
+        "actual_home_wins": 457,
+        "actual_away_wins": 398,
+        "pred_home_wins": 447,
+        "pred_away_wins": 404,
+        "home_pred_accuracy": 66.7,
+        "away_pred_accuracy": 60.6,
+        "overall_home_win_rate": 53.5
       },
       "spread_ranges": [
         {
           "range": "0-3 (nail-biter)",
-          "games": 85,
-          "winner_pct": 48.2,
-          "within_5_pct": 55.3,
-          "avg_error": 4.7
+          "games": 86,
+          "winner_pct": 45.3,
+          "within_5_pct": 55.8,
+          "avg_error": 4.78
         },
         {
           "range": "3-7 (comfortable)",
-          "games": 175,
-          "winner_pct": 54.3,
-          "within_5_pct": 56.0,
-          "avg_error": 5.29
+          "games": 177,
+          "winner_pct": 53.7,
+          "within_5_pct": 52.5,
+          "avg_error": 5.59
         },
         {
           "range": "7-12 (blowout)",
-          "games": 193,
-          "winner_pct": 58.0,
-          "within_5_pct": 44.6,
-          "avg_error": 7.71
+          "games": 196,
+          "winner_pct": 57.1,
+          "within_5_pct": 40.3,
+          "avg_error": 7.63
         },
         {
           "range": "12+ (landslide)",
-          "games": 391,
-          "winner_pct": 71.1,
-          "within_5_pct": 2.8,
-          "avg_error": 18.92
+          "games": 396,
+          "winner_pct": 69.9,
+          "within_5_pct": 4.0,
+          "avg_error": 18.65
         }
       ],
       "total_ranges": [
         {
           "range": "Under 200",
-          "games": 49,
+          "games": 50,
           "within_10_pct": 0.0,
-          "avg_error": 35.3
+          "avg_error": 35.0
         },
         {
           "range": "200-215",
-          "games": 148,
-          "within_10_pct": 2.7,
-          "avg_error": 19.6
+          "games": 149,
+          "within_10_pct": 6.7,
+          "avg_error": 19.0
         },
         {
           "range": "215-230",
-          "games": 232,
-          "within_10_pct": 64.2,
-          "avg_error": 8.0
+          "games": 236,
+          "within_10_pct": 66.5,
+          "avg_error": 7.7
         },
         {
           "range": "230-245",
-          "games": 215,
-          "within_10_pct": 78.6,
-          "avg_error": 6.5
+          "games": 218,
+          "within_10_pct": 76.1,
+          "avg_error": 6.7
         },
         {
           "range": "245+",
-          "games": 200,
-          "within_10_pct": 4.5,
-          "avg_error": 26.4
+          "games": 202,
+          "within_10_pct": 5.0,
+          "avg_error": 26.8
         }
       ],
       "bias": {
-        "avg_pred_spread": 1.41,
-        "avg_actual_spread": 1.43,
-        "spread_bias": -0.02,
-        "avg_pred_total": 229.4,
+        "avg_pred_spread": 1.2,
+        "avg_actual_spread": 1.31,
+        "spread_bias": -0.11,
+        "avg_pred_total": 229.0,
         "avg_actual_total": 229.6,
-        "total_bias": -0.2
+        "total_bias": -0.5
+      },
+      "quality_metrics": {
+        "naive_baseline_acc": 100.0,
+        "skill_score": 0,
+        "upset_detection_rate": 0,
+        "upset_opportunities": 0,
+        "upsets_detected": 0,
+        "confidence_buckets": {
+          "toss_up": {
+            "games": 228,
+            "correct": 109,
+            "label": "< 3 points",
+            "accuracy": 47.8
+          },
+          "moderate": {
+            "games": 401,
+            "correct": 252,
+            "label": "3-7 points",
+            "accuracy": 62.8
+          },
+          "strong": {
+            "games": 226,
+            "correct": 162,
+            "label": "7+ points",
+            "accuracy": 71.7
+          }
+        },
+        "tier_accuracy": {
+          "Elite vs Elite": {
+            "games": 81,
+            "correct": 39,
+            "accuracy": 48.1
+          },
+          "Elite vs Middle": {
+            "games": 197,
+            "correct": 109,
+            "accuracy": 55.3
+          },
+          "Bottom vs Middle": {
+            "games": 180,
+            "correct": 117,
+            "accuracy": 65.0
+          },
+          "Bottom vs Elite": {
+            "games": 209,
+            "correct": 159,
+            "accuracy": 76.1
+          },
+          "Middle vs Middle": {
+            "games": 99,
+            "correct": 50,
+            "accuracy": 50.5
+          },
+          "Bottom vs Bottom": {
+            "games": 89,
+            "correct": 49,
+            "accuracy": 55.1
+          }
+        },
+        "progression": {
+          "monthly_breakdown": [
+            {
+              "month": "2025-10",
+              "games": 80,
+              "accuracy": 60.0,
+              "mae": 11.29
+            },
+            {
+              "month": "2025-11",
+              "games": 219,
+              "accuracy": 65.3,
+              "mae": 11.59
+            },
+            {
+              "month": "2025-12",
+              "games": 197,
+              "accuracy": 55.3,
+              "mae": 12.55
+            },
+            {
+              "month": "2026-01",
+              "games": 233,
+              "accuracy": 60.5,
+              "mae": 11.79
+            },
+            {
+              "month": "2026-02",
+              "games": 115,
+              "accuracy": 65.2,
+              "mae": 12.81
+            },
+            {
+              "month": "Unknown",
+              "games": 11,
+              "accuracy": 63.6,
+              "mae": 13.2
+            }
+          ],
+          "rolling_30": [
+            {
+              "game_num": 10,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 20,
+              "accuracy": 55.0
+            },
+            {
+              "game_num": 30,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 40,
+              "accuracy": 50.0
+            },
+            {
+              "game_num": 50,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 60,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 70,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 80,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 90,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 100,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 110,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 120,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 130,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 140,
+              "accuracy": 73.3
+            },
+            {
+              "game_num": 150,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 160,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 170,
+              "accuracy": 76.7
+            },
+            {
+              "game_num": 180,
+              "accuracy": 76.7
+            },
+            {
+              "game_num": 190,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 200,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 210,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 220,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 230,
+              "accuracy": 76.7
+            },
+            {
+              "game_num": 240,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 250,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 260,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 270,
+              "accuracy": 73.3
+            },
+            {
+              "game_num": 280,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 290,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 300,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 310,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 320,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 330,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 340,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 350,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 360,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 370,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 380,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 390,
+              "accuracy": 36.7
+            },
+            {
+              "game_num": 400,
+              "accuracy": 43.3
+            },
+            {
+              "game_num": 410,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 420,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 430,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 440,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 450,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 460,
+              "accuracy": 50.0
+            },
+            {
+              "game_num": 470,
+              "accuracy": 50.0
+            },
+            {
+              "game_num": 480,
+              "accuracy": 46.7
+            },
+            {
+              "game_num": 490,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 500,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 510,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 520,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 530,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 540,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 550,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 560,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 570,
+              "accuracy": 46.7
+            },
+            {
+              "game_num": 580,
+              "accuracy": 46.7
+            },
+            {
+              "game_num": 590,
+              "accuracy": 43.3
+            },
+            {
+              "game_num": 600,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 610,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 620,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 630,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 640,
+              "accuracy": 50.0
+            },
+            {
+              "game_num": 650,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 660,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 670,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 680,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 690,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 700,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 710,
+              "accuracy": 80.0
+            },
+            {
+              "game_num": 720,
+              "accuracy": 73.3
+            },
+            {
+              "game_num": 730,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 740,
+              "accuracy": 53.3
+            },
+            {
+              "game_num": 750,
+              "accuracy": 46.7
+            },
+            {
+              "game_num": 760,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 770,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 780,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 790,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 800,
+              "accuracy": 66.7
+            },
+            {
+              "game_num": 810,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 820,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 830,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 840,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 850,
+              "accuracy": 70.0
+            }
+          ],
+          "cumulative_curve": [
+            {
+              "game_num": 10,
+              "accuracy": 70.0
+            },
+            {
+              "game_num": 20,
+              "accuracy": 55.0
+            },
+            {
+              "game_num": 30,
+              "accuracy": 56.7
+            },
+            {
+              "game_num": 40,
+              "accuracy": 55.0
+            },
+            {
+              "game_num": 50,
+              "accuracy": 58.0
+            },
+            {
+              "game_num": 60,
+              "accuracy": 61.7
+            },
+            {
+              "game_num": 70,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 80,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 90,
+              "accuracy": 61.1
+            },
+            {
+              "game_num": 100,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 110,
+              "accuracy": 59.1
+            },
+            {
+              "game_num": 120,
+              "accuracy": 60.8
+            },
+            {
+              "game_num": 130,
+              "accuracy": 62.3
+            },
+            {
+              "game_num": 140,
+              "accuracy": 62.1
+            },
+            {
+              "game_num": 150,
+              "accuracy": 62.7
+            },
+            {
+              "game_num": 160,
+              "accuracy": 63.7
+            },
+            {
+              "game_num": 170,
+              "accuracy": 64.7
+            },
+            {
+              "game_num": 180,
+              "accuracy": 65.0
+            },
+            {
+              "game_num": 190,
+              "accuracy": 64.2
+            },
+            {
+              "game_num": 200,
+              "accuracy": 63.0
+            },
+            {
+              "game_num": 210,
+              "accuracy": 63.3
+            },
+            {
+              "game_num": 220,
+              "accuracy": 64.5
+            },
+            {
+              "game_num": 230,
+              "accuracy": 64.8
+            },
+            {
+              "game_num": 240,
+              "accuracy": 63.7
+            },
+            {
+              "game_num": 250,
+              "accuracy": 64.4
+            },
+            {
+              "game_num": 260,
+              "accuracy": 64.2
+            },
+            {
+              "game_num": 270,
+              "accuracy": 64.8
+            },
+            {
+              "game_num": 280,
+              "accuracy": 64.6
+            },
+            {
+              "game_num": 290,
+              "accuracy": 63.8
+            },
+            {
+              "game_num": 300,
+              "accuracy": 64.0
+            },
+            {
+              "game_num": 310,
+              "accuracy": 63.5
+            },
+            {
+              "game_num": 320,
+              "accuracy": 63.7
+            },
+            {
+              "game_num": 330,
+              "accuracy": 63.6
+            },
+            {
+              "game_num": 340,
+              "accuracy": 63.5
+            },
+            {
+              "game_num": 350,
+              "accuracy": 63.1
+            },
+            {
+              "game_num": 360,
+              "accuracy": 63.9
+            },
+            {
+              "game_num": 370,
+              "accuracy": 63.5
+            },
+            {
+              "game_num": 380,
+              "accuracy": 62.6
+            },
+            {
+              "game_num": 390,
+              "accuracy": 61.8
+            },
+            {
+              "game_num": 400,
+              "accuracy": 62.0
+            },
+            {
+              "game_num": 410,
+              "accuracy": 62.0
+            },
+            {
+              "game_num": 420,
+              "accuracy": 61.2
+            },
+            {
+              "game_num": 430,
+              "accuracy": 61.9
+            },
+            {
+              "game_num": 440,
+              "accuracy": 61.4
+            },
+            {
+              "game_num": 450,
+              "accuracy": 61.6
+            },
+            {
+              "game_num": 460,
+              "accuracy": 61.1
+            },
+            {
+              "game_num": 470,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 480,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 490,
+              "accuracy": 60.8
+            },
+            {
+              "game_num": 500,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 510,
+              "accuracy": 60.8
+            },
+            {
+              "game_num": 520,
+              "accuracy": 61.0
+            },
+            {
+              "game_num": 530,
+              "accuracy": 61.1
+            },
+            {
+              "game_num": 540,
+              "accuracy": 60.9
+            },
+            {
+              "game_num": 550,
+              "accuracy": 60.9
+            },
+            {
+              "game_num": 560,
+              "accuracy": 60.7
+            },
+            {
+              "game_num": 570,
+              "accuracy": 60.2
+            },
+            {
+              "game_num": 580,
+              "accuracy": 60.2
+            },
+            {
+              "game_num": 590,
+              "accuracy": 59.8
+            },
+            {
+              "game_num": 600,
+              "accuracy": 60.3
+            },
+            {
+              "game_num": 610,
+              "accuracy": 60.5
+            },
+            {
+              "game_num": 620,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 630,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 640,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 650,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 660,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 670,
+              "accuracy": 60.1
+            },
+            {
+              "game_num": 680,
+              "accuracy": 60.0
+            },
+            {
+              "game_num": 690,
+              "accuracy": 60.3
+            },
+            {
+              "game_num": 700,
+              "accuracy": 60.3
+            },
+            {
+              "game_num": 710,
+              "accuracy": 60.8
+            },
+            {
+              "game_num": 720,
+              "accuracy": 60.8
+            },
+            {
+              "game_num": 730,
+              "accuracy": 60.5
+            },
+            {
+              "game_num": 740,
+              "accuracy": 60.5
+            },
+            {
+              "game_num": 750,
+              "accuracy": 60.3
+            },
+            {
+              "game_num": 760,
+              "accuracy": 60.4
+            },
+            {
+              "game_num": 770,
+              "accuracy": 60.4
+            },
+            {
+              "game_num": 780,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 790,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 800,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 810,
+              "accuracy": 60.6
+            },
+            {
+              "game_num": 820,
+              "accuracy": 60.7
+            },
+            {
+              "game_num": 830,
+              "accuracy": 60.7
+            },
+            {
+              "game_num": 840,
+              "accuracy": 61.0
+            },
+            {
+              "game_num": 850,
+              "accuracy": 61.1
+            },
+            {
+              "game_num": 855,
+              "accuracy": 61.2
+            }
+          ]
+        },
+        "vegas_comparison": {
+          "ats_games": 844,
+          "ats_rate": 49.9,
+          "clv_rate": 43.1,
+          "edge_hit_rate": 50.4,
+          "total_edge_games": 494,
+          "final_bankroll": 702.22,
+          "roi_pct": -29.8,
+          "feature_attribution": {
+            "avg_fatigue_adj": 1.23,
+            "avg_rating_adj": 0.7,
+            "avg_ml_adj": 0.57
+          }
+        }
       }
     }
   }

@@ -2,26 +2,27 @@
 /* Mobile-first, responsive, 968 lines dark theme */
 
 :root {
-    --bg-dark: #0f172a;
-    --bg-card: #1e293b;
-    --bg-input: #334155;
-    --bg-hover: #475569;
-    --text-primary: #f1f5f9;
+    --bg-dark: #0b0f19;
+    --bg-card: rgba(20, 30, 45, 0.8);
+    --bg-input: rgba(15, 23, 42, 0.9);
+    --bg-hover: rgba(59, 130, 246, 0.2);
+    --text-primary: #e2e8f0;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
-    --accent: #3b82f6;
-    --accent-hover: #2563eb;
+    --accent: #00e5ff;
+    --accent-hover: #00b8cc;
     --success: #22c55e;
     --warning: #f59e0b;
     --danger: #ef4444;
     --info: #06b6d4;
-    --border: #334155;
-    --border-light: #475569;
-    --shadow: rgba(0, 0, 0, 0.3);
-    --radius: 8px;
-    --radius-lg: 12px;
+    --border: rgba(255, 255, 255, 0.1);
+    --border-light: rgba(255, 255, 255, 0.15);
+    --shadow: rgba(0, 0, 0, 0.5);
+    --radius: 4px;
+    --radius-lg: 8px;
     --transition: 0.2s ease;
     --font-mono: 'Cascadia Code', 'Fira Code', monospace;
+    --font-heading: 'Oswald', 'Segoe UI', sans-serif;
 }
 
 *, *::before, *::after {
@@ -45,7 +46,8 @@ body {
 
 /* ---- Navbar ---- */
 .navbar {
-    background: var(--bg-card);
+    background: rgba(11, 15, 25, 0.9);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
     padding: 0.75rem 1.5rem;
     display: flex;
@@ -62,7 +64,9 @@ body {
     text-decoration: none;
     font-size: 1.25rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    font-family: var(--font-heading);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
 .hamburger {
@@ -124,7 +128,15 @@ body {
     border-radius: var(--radius-lg);
     padding: 1.5rem;
     margin-bottom: 1rem;
-    box-shadow: 0 1px 4px var(--shadow);
+    box-shadow: 0 4px 6px var(--shadow);
+    backdrop-filter: blur(8px);
+}
+
+.card h2, .section-header {
+    font-family: var(--font-heading);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
 }
 
 .card-header {
@@ -151,6 +163,7 @@ body {
 }
 
 .stat-card .stat-value {
+    font-family: var(--font-heading);
     font-size: 2rem;
     font-weight: 700;
     color: var(--accent);
@@ -158,6 +171,7 @@ body {
 }
 
 .stat-card .stat-label {
+    font-family: var(--font-heading);
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.1em;
