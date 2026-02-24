@@ -989,9 +989,18 @@ async def sse_gamecast_stream(game_id: str):
                         if status_state == "in":
                             q = min(max(0, period - 1), 4)
                             try:
-                                parts = clock_str.split(":")
-                                mins_left = int(parts[0]) if parts else 0
-                                secs_left = int(parts[1]) if len(parts) > 1 else 0
+                                clock_clean = clock_str.replace(" ", "")
+                                if ":" in clock_clean:
+                                    parts = clock_clean.split(":")
+                                    mins_left = float(parts[0])
+                                    secs_left = float(parts[1])
+                                else:
+                                    try:
+                                        mins_left = 0
+                                        secs_left = float(clock_clean)
+                                    except ValueError:
+                                        mins_left = 12 if period <= 4 else 5
+                                        secs_left = 0
                                 period_len = 12 * 60 if period <= 4 else 5 * 60
                                 mins_el = ((period - 1) * 12.0 if period <= 4
                                            else 48.0 + (period - 5) * 5.0)
@@ -1016,8 +1025,8 @@ async def sse_gamecast_stream(game_id: str):
                         prediction = {
                             "spread": round(spread, 1) if spread else 0,
                             "total": round(pred.get("total", 0), 1),
-                            "home_score": round(pred.get("home_score", 0), 1),
-                            "away_score": round(pred.get("away_score", 0), 1),
+                            "home_score": round(pred.get("home_projected", 0), 1),
+                            "away_score": round(pred.get("away_projected", 0), 1),
                             "home_win_prob": round(home_wp, 1),
                         }
                     except Exception:

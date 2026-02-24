@@ -119,17 +119,21 @@
             <button class="btn btn-primary" id="btnBoxAway" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></button>
             <button class="btn btn-outline" id="btnBoxHome" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></button>
         </div>
-        <div id="boxAway" class="tab-content active scroll-x">
-            <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
-                <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
-                <tbody></tbody>
-            </table>
+        <div id="boxAway" class="tab-content active">
+            <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
+                <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
+                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
-        <div id="boxHome" class="tab-content" style="display:none;" class="scroll-x">
-            <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
-                <thead><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
-                <tbody></tbody>
-            </table>
+        <div id="boxHome" class="tab-content" style="display:none;">
+            <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
+                <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
+                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -817,7 +821,7 @@ function fillBoxTable(tableId, players) {
         const photo = p.headshot ?
             '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.style.display=\'none\'">' :
             '';
-        const activeDot = p.active ? '🟢 ' : '';
+        const activeDot = p.active ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:#22c55e;box-shadow:0 0 6px #22c55e;margin-right:6px;vertical-align:middle;"></span>' : '';
         return '<tr>' +
             '<td style="width:32px;">' + photo + '</td>' +
             '<td class="font-bold">' + activeDot + (p.name || '') + ' <span class="text-muted text-xs" style="margin-left:4px;">' + (p.position || '') + '</span></td>' +
@@ -900,14 +904,17 @@ function drawCourt() {
     const cw = W - 2*margin, ch = H - 2*margin;
 
     ctx.clearRect(0, 0, W, H);
-    // Draw base floor
-    ctx.fillStyle = '#1a2744';
+    // Draw base floor with gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, H);
+    gradient.addColorStop(0, '#1e293b');
+    gradient.addColorStop(1, '#0f172a');
+    ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, W, H);
 
     function cx(x) { return margin + (x / COURT_W) * cw; }
     function cy(y) { return margin + (y / COURT_H) * ch; }
 
-    ctx.strokeStyle = '#ffffff30';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1.5;
 
     // Court outline
@@ -915,42 +922,49 @@ function drawCourt() {
     ctx.rect(cx(0), cy(0), cw, ch);
     ctx.stroke();
 
+    // Half-court line
+    ctx.beginPath();
+    ctx.moveTo(cx(0), cy(COURT_H));
+    ctx.lineTo(cx(COURT_W), cy(COURT_H));
+    ctx.stroke();
+
+    // Center circle (at half court)
+    ctx.beginPath();
+    ctx.arc(cx(25), cy(COURT_H), (6/COURT_W)*cw, Math.PI, 0);
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+    ctx.fill();
+    ctx.stroke();
+
     // Paint / key (16ft wide)
     const keyL = cx(17), keyR = cx(33), keyTop = cy(0), keyBot = cy(19);
-    ctx.fillStyle = '#ffffff05';
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
     ctx.fillRect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
     ctx.beginPath();
     ctx.rect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
     ctx.stroke();
 
-    // Free throw circle
+    // Free throw circle top half
     ctx.beginPath();
-    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI*2);
+    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI, true);
     ctx.stroke();
-
-    // Hoop
+    // Free throw circle bottom half (dashed)
     ctx.beginPath();
-    ctx.arc(cx(HOOP_X), cy(HOOP_Y), 3, 0, Math.PI*2);
-    ctx.strokeStyle = '#ff6b35';
-    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI, false);
     ctx.stroke();
+    ctx.setLineDash([]);
 
-    // Backboard
+    // Restricted area arc
     ctx.beginPath();
-    ctx.moveTo(cx(22), cy(4));
-    ctx.lineTo(cx(28), cy(4));
-    ctx.strokeStyle = '#ffffff80';
-    ctx.lineWidth = 3;
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (4/COURT_W)*cw, 0, Math.PI);
     ctx.stroke();
 
     // Three-point arc
     ctx.beginPath();
-    ctx.strokeStyle = '#ffffff30';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1.5;
-    // Corner 3s (14ft straight lines from baseline at x=3 and x=47)
     ctx.moveTo(cx(3), cy(0));
     ctx.lineTo(cx(3), cy(14));
-    // Arc from (3,14) around hoop (25,5.25) radius 23.75
     const r3 = 23.75;
     const startAng = Math.atan2(14 - HOOP_Y, 3 - HOOP_X);
     const endAng = Math.atan2(14 - HOOP_Y, 47 - HOOP_X);
@@ -958,9 +972,19 @@ function drawCourt() {
     ctx.lineTo(cx(47), cy(0));
     ctx.stroke();
 
-    // Restricted area arc
+    // Backboard
     ctx.beginPath();
-    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (4/COURT_W)*cw, Math.PI, 0);
+    ctx.moveTo(cx(22), cy(4));
+    ctx.lineTo(cx(28), cy(4));
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Hoop
+    ctx.beginPath();
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), 3, 0, Math.PI*2);
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     // Draw shots
