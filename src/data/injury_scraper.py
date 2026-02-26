@@ -23,6 +23,35 @@ logger = logging.getLogger(__name__)
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
 MANUAL_INJURIES_PATH = Path("data") / "manual_injuries.json"
 
+# ── TTL cache for HTTP scrapes (avoid hammering sources) ──
+_scrape_cache: Dict[str, Any] = {}
+_scrape_cache_ts: Dict[str, float] = {}
+_SCRAPE_TTL = 3600  # 60 minutes
+
+
+def _get_cached_scrape(source: str) -> Optional[List[Dict[str, Any]]]:
+    """Return cached scrape result if still fresh."""
+    import time
+    if source in _scrape_cache:
+        age = time.time() - _scrape_cache_ts.get(source, 0)
+        if age < _SCRAPE_TTL:
+            logger.info("Using cached %s injuries (%.0fs old)", source, age)
+            return _scrape_cache[source]
+    return None
+
+
+def _set_cached_scrape(source: str, data: List[Dict[str, Any]]):
+    """Store scrape result in TTL cache."""
+    import time
+    _scrape_cache[source] = data
+    _scrape_cache_ts[source] = time.time()
+
+
+def invalidate_injury_scrape_cache():
+    """Clear all cached scrape results."""
+    _scrape_cache.clear()
+    _scrape_cache_ts.clear()
+
 
 # ---------------------------------------------------------------------------
 # Name normalization
@@ -99,6 +128,10 @@ def scrape_espn_injuries() -> List[Dict[str, Any]]:
     ESPN table columns (as of 2025):
       Name | Position | Est. Return | Status | Detail
     """
+    cached = _get_cached_scrape("ESPN")
+    if cached is not None:
+        return cached
+
     url = "https://www.espn.com/nba/injuries"
     try:
         resp = requests.get(url, headers={"User-Agent": _UA}, timeout=10)
@@ -158,6 +191,7 @@ def scrape_espn_injuries() -> List[Dict[str, Any]]:
                     "keyword": _classify_keyword(detail),
                     "source": "ESPN",
                 })
+        _set_cached_scrape("ESPN", injuries)
         return injuries
     except Exception as e:
         logger.warning(f"ESPN injury scrape failed: {e}")
@@ -214,6 +248,10 @@ def scrape_cbs_injuries() -> List[Dict[str, Any]]:
     Note: CBS does NOT provide an explicit status (Out/Day-To-Day/etc).
     We default to "Out" and refine if the injury text hints at status.
     """
+    cached = _get_cached_scrape("CBS")
+    if cached is not None:
+        return cached
+
     url = "https://www.cbssports.com/nba/injuries/"
     try:
         resp = requests.get(url, headers={"User-Agent": _UA}, timeout=10)
@@ -266,6 +304,7 @@ def scrape_cbs_injuries() -> List[Dict[str, Any]]:
                     "keyword": _classify_keyword(detail),
                     "source": "CBS",
                 })
+        _set_cached_scrape("CBS", injuries)
         return injuries
     except Exception as e:
         logger.warning(f"CBS injury scrape failed: {e}")
@@ -291,6 +330,10 @@ def _infer_status_from_text(text: str) -> str:
 
 def scrape_rotowire_injuries() -> List[Dict[str, Any]]:
     """Scrape injuries from RotoWire (fallback — may return 0 if site changed)."""
+    cached = _get_cached_scrape("RotoWire")
+    if cached is not None:
+        return cached
+
     url = "https://www.rotowire.com/basketball/injury-report.php"
     try:
         resp = requests.get(url, headers={"User-Agent": _UA}, timeout=10)
@@ -321,6 +364,7 @@ def scrape_rotowire_injuries() -> List[Dict[str, Any]]:
                         "keyword": _classify_keyword(detail),
                         "source": "RotoWire",
                     })
+        _set_cached_scrape("RotoWire", injuries)
         return injuries
     except Exception as e:
         logger.warning(f"RotoWire injury scrape failed: {e}")

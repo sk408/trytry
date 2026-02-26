@@ -567,6 +567,10 @@ def build_residual_calibration(games: List[PrecomputedGame],
             (label, lo, hi, avg, len(residuals))
         )
 
+    # Invalidate the in-memory residual cache so it reloads from DB
+    from src.analytics.prediction import invalidate_residual_cache
+    invalidate_residual_cache()
+
     if callback:
         callback("Residual calibration built")
 

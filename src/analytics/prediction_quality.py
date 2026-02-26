@@ -1,11 +1,44 @@
 """Prediction quality, value-add metrics, and season progression tracking."""
 
 import logging
-from typing import List, Dict, Any
+import threading
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from src.database import db
 
 logger = logging.getLogger(__name__)
+
+# ── Vegas odds in-memory cache ──
+_odds_cache: Optional[Dict[Tuple, Any]] = None
+_odds_cache_lock = threading.Lock()
+
+
+def _get_odds_map() -> Dict[Tuple, Any]:
+    """Load game_odds table into memory once. Returns {(date, home_id, away_id): row}."""
+    global _odds_cache
+    with _odds_cache_lock:
+        if _odds_cache is not None:
+            return _odds_cache
+    try:
+        rows = db.fetch_all(
+            "SELECT game_date, home_team_id, away_team_id, spread, "
+            "home_moneyline, away_moneyline FROM game_odds"
+        )
+        result = {(r["game_date"], r["home_team_id"], r["away_team_id"]): r for r in rows}
+    except Exception as e:
+        logger.warning("Could not fetch game_odds: %s", e)
+        result = {}
+    with _odds_cache_lock:
+        _odds_cache = result
+    logger.info("Loaded %d game odds into memory cache", len(result))
+    return result
+
+
+def invalidate_odds_cache():
+    """Clear odds cache (call after odds sync)."""
+    global _odds_cache
+    with _odds_cache_lock:
+        _odds_cache = None
 
 def compute_quality_metrics(per_game: List[Dict[str, Any]], per_team: Dict[str, Any]) -> Dict[str, Any]:
     """Compute value-add metrics from backtest per_game results."""
@@ -194,13 +227,8 @@ def compute_vegas_comparison(per_game: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not per_game:
         return {}
 
-    # Fetch all odds for these games
-    try:
-        rows = db.fetch_all("SELECT game_date, home_team_id, away_team_id, spread, home_moneyline, away_moneyline FROM game_odds")
-        odds_map = {(r["game_date"], r["home_team_id"], r["away_team_id"]): r for r in rows}
-    except Exception as e:
-        logger.warning(f"Could not fetch game_odds: {e}")
-        odds_map = {}
+    # Use cached odds map
+    odds_map = _get_odds_map()
 
     if not odds_map:
         return {"error": "No odds data available"}

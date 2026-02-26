@@ -61,10 +61,15 @@ def clear_sync_cache():
     """Delete all freshness metadata so next sync re-fetches everything."""
     db.execute("DELETE FROM sync_meta")
     db.execute("DELETE FROM player_sync_cache")
-    # Also invalidate the precompute disk cache so games are rebuilt from fresh data
-    from src.analytics.prediction import invalidate_precompute_cache
+    # Invalidate ALL caches so everything is rebuilt from fresh data
+    from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache
+    from src.analytics.stats_engine import invalidate_stats_caches
+    from src.analytics.prediction_quality import invalidate_odds_cache
     invalidate_precompute_cache()
-    logger.info("Cleared all sync freshness caches (including precompute cache)")
+    invalidate_residual_cache()
+    invalidate_stats_caches()
+    invalidate_odds_cache()
+    logger.info("Cleared all sync freshness caches (including all compute caches)")
 
 
 def sync_reference_data(callback: Optional[Callable] = None, force: bool = False):

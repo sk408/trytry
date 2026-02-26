@@ -349,13 +349,9 @@ def run_backtest(team_id: Optional[int] = None,
     avg_spread_err = sum(g["spread_error"] for g in per_game) / total
     avg_total_err = sum(g["total_error"] for g in per_game) / total
 
-    # ---- Team abbreviation lookup ---
-    team_abbrev: Dict[int, str] = {}
-    try:
-        rows = db.fetch_all("SELECT team_id, abbreviation FROM teams")
-        team_abbrev = {r["team_id"]: r["abbreviation"] for r in rows}
-    except Exception:
-        pass
+    # ---- Team abbreviation lookup (cached singleton) ---
+    from src.analytics.stats_engine import get_team_abbreviations
+    team_abbrev = get_team_abbreviations()
 
     # ---- Per-team metrics ---
     team_results: Dict[int, Dict] = {}
@@ -583,13 +579,9 @@ def export_diagnostic_csv(
     if callback:
         callback(f"Re-predicting {len(target_games)} games with full diagnostics...")
 
-    # 4. Team abbreviation lookup
-    team_abbrev: Dict[int, str] = {}
-    try:
-        rows = db.fetch_all("SELECT team_id, abbreviation FROM teams")
-        team_abbrev = {r["team_id"]: r["abbreviation"] for r in rows}
-    except Exception:
-        pass
+    # 4. Team abbreviation lookup (cached singleton)
+    from src.analytics.stats_engine import get_team_abbreviations
+    team_abbrev = get_team_abbreviations()
 
     # 5. Re-run predictions capturing all detail
     csv_rows = []

@@ -91,7 +91,13 @@ session_cache = SessionCache()
 
 
 def start_session_caches():
-    """Clear and initialize session caches for a fresh run (e.g. backtest)."""
+    """Clear and initialize session caches for a fresh run (e.g. backtest).
+
+    NOTE: We only clear team_cache and session_cache here. Stats engine
+    caches (player_splits, streak, fatigue, hca) are NOT cleared between
+    backtest sessions because they hold immutable historical data that
+    is valid across sessions. They are only cleared on data sync.
+    """
     team_cache.clear()
     session_cache.clear()
 

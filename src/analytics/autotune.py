@@ -223,8 +223,10 @@ def autotune_all(strength: float = DEFAULT_STRENGTH,
     if not games:
         return {"error": "No games to autotune", "teams_tuned": 0}
 
-    # Get all teams
-    teams = db.fetch_all("SELECT team_id, abbreviation FROM teams")
+    # Get all teams (cached singleton)
+    from src.analytics.stats_engine import get_team_abbreviations
+    abbr_map = get_team_abbreviations()
+    teams = [{"team_id": tid, "abbreviation": abbr} for tid, abbr in abbr_map.items()]
     if not teams:
         return {"error": "No teams found", "teams_tuned": 0}
 

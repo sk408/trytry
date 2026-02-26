@@ -391,12 +391,25 @@ def _infer_historical_injuries(team_id: int, game_date: str,
 
 
 def _get_team_metrics(team_id: int) -> Dict[str, float]:
-    """Fetch team metrics as a flat dict, using cache."""
+    """Fetch team metrics as a flat dict, using cache + memory store."""
     cached = team_cache.get(team_id, "metrics")
     if cached is not None:
         return cached
 
+    # Try memory store first (already loaded as DataFrame)
+    from src.analytics.memory_store import get_store
+    store = get_store()
     season = get_season()
+    if store.team_metrics is not None and not store.team_metrics.empty:
+        rows = store.team_metrics[
+            (store.team_metrics["team_id"] == team_id) &
+            (store.team_metrics["season"] == season)
+        ]
+        if not rows.empty:
+            result = rows.iloc[0].to_dict()
+            team_cache.set(team_id, "metrics", result)
+            return result
+
     row = db.fetch_one(
         "SELECT * FROM team_metrics WHERE team_id = ? AND season = ?",
         (team_id, season)
@@ -407,10 +420,24 @@ def _get_team_metrics(team_id: int) -> Dict[str, float]:
 
 
 def _get_tuning(team_id: int) -> Dict[str, float]:
-    """Get per-team autotune corrections, using cache."""
+    """Get per-team autotune corrections, using cache + memory store."""
     cached = team_cache.get(team_id, "tuning")
     if cached is not None:
         return cached
+
+    # Try memory store first
+    from src.analytics.memory_store import get_store
+    store = get_store()
+    if store.team_tuning is not None and not store.team_tuning.empty:
+        rows = store.team_tuning[store.team_tuning["team_id"] == team_id]
+        if not rows.empty:
+            r = rows.iloc[0]
+            result = {
+                "home_pts_correction": r.get("home_pts_correction", 0.0),
+                "away_pts_correction": r.get("away_pts_correction", 0.0),
+            }
+            team_cache.set(team_id, "tuning", result)
+            return result
 
     row = db.fetch_one(
         "SELECT home_pts_correction, away_pts_correction FROM team_tuning WHERE team_id = ?",
@@ -444,8 +471,43 @@ def _get_espn_predictor(home_abbr: str, away_abbr: str) -> Dict[str, float]:
     return {"home_win_pct": 50.0, "away_win_pct": 50.0}
 
 
+# ── Residual calibration in-memory cache ──
+_residual_spread_cache: Optional[Dict[str, float]] = None
+_residual_total_cache: Optional[Dict[str, float]] = None
+
+
+def _load_residual_tables():
+    """Load both residual calibration tables into memory (once)."""
+    global _residual_spread_cache, _residual_total_cache
+    if _residual_spread_cache is not None:
+        return
+
+    _residual_spread_cache = {}
+    rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration")
+    for r in rows:
+        if r["avg_residual"] is not None:
+            _residual_spread_cache[r["bin_label"]] = r["avg_residual"]
+
+    _residual_total_cache = {}
+    rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration_total")
+    for r in rows:
+        if r["avg_residual"] is not None:
+            _residual_total_cache[r["bin_label"]] = r["avg_residual"]
+
+    logger.info("Loaded residual calibration tables (%d spread, %d total bins)",
+                len(_residual_spread_cache), len(_residual_total_cache))
+
+
+def invalidate_residual_cache():
+    """Clear residual calibration cache (call after optimizer recalibrates)."""
+    global _residual_spread_cache, _residual_total_cache
+    _residual_spread_cache = None
+    _residual_total_cache = None
+
+
 def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]:
-    """Look up residual calibration corrections."""
+    """Look up residual calibration corrections from in-memory cache."""
+    _load_residual_tables()
     spread_corr = 0.0
     total_corr = 0.0
 
@@ -457,12 +519,7 @@ def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]
     ]
     for idx, (label, lo, hi) in enumerate(spread_bins):
         if (lo < spread <= hi) if idx > 0 else (lo <= spread <= hi):
-            row = db.fetch_one(
-                "SELECT avg_residual FROM residual_calibration WHERE bin_label = ?",
-                (label,)
-            )
-            if row and row["avg_residual"] is not None:
-                spread_corr = row["avg_residual"]
+            spread_corr = _residual_spread_cache.get(label, 0.0)
             break
 
     # Total bins
@@ -473,12 +530,7 @@ def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]
     ]
     for label, lo, hi in total_bins:
         if lo <= total < hi:
-            row = db.fetch_one(
-                "SELECT avg_residual FROM residual_calibration_total WHERE bin_label = ?",
-                (label,)
-            )
-            if row and row["avg_residual"] is not None:
-                total_corr = row["avg_residual"]
+            total_corr = _residual_total_cache.get(label, 0.0)
             break
 
     return spread_corr, total_corr
@@ -496,13 +548,14 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         game_date=game_date,
     )
 
-    # Team abbreviations
-    home_row = db.fetch_one("SELECT abbreviation, name FROM teams WHERE team_id = ?", (home_team_id,))
-    away_row = db.fetch_one("SELECT abbreviation, name FROM teams WHERE team_id = ?", (away_team_id,))
-    pred.home_team = home_row["abbreviation"] if home_row else str(home_team_id)
-    pred.away_team = away_row["abbreviation"] if away_row else str(away_team_id)
-    home_name = home_row["name"] if home_row else ""
-    away_name = away_row["name"] if away_row else ""
+    # Team abbreviations (cached singleton — no DB queries)
+    from src.analytics.stats_engine import get_team_abbreviations, get_team_names
+    abbr_map = get_team_abbreviations()
+    name_map = get_team_names()
+    pred.home_team = abbr_map.get(home_team_id, str(home_team_id))
+    pred.away_team = abbr_map.get(away_team_id, str(away_team_id))
+    home_name = name_map.get(home_team_id, "")
+    away_name = name_map.get(away_team_id, "")
 
     if injured_players is None:
         injured_players = {}

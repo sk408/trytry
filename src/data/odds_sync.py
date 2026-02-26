@@ -44,9 +44,10 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
     if not games:
         return 0
 
-    # Get team mapping
-    rows = db.fetch_all("SELECT team_id, abbreviation FROM teams")
-    abbrev_to_id = {r["abbreviation"]: r["team_id"] for r in rows}
+    # Get team mapping (cached singleton)
+    from src.analytics.stats_engine import get_team_abbreviations
+    id_to_abbrev = get_team_abbreviations()
+    abbrev_to_id = {v: k for k, v in id_to_abbrev.items()}
     
     saved_count = 0
     now = datetime.now().isoformat()
@@ -143,12 +144,20 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
         except Exception as e:
             logger.error(f"Failed to parse odds for game {game.get('id')}: {e}")
             
+    # Invalidate odds cache if we saved new data
+    if saved_count > 0:
+        try:
+            from src.analytics.prediction_quality import invalidate_odds_cache
+            invalidate_odds_cache()
+        except ImportError:
+            pass
+
     if callback:
         if saved_count > 0:
             callback(f"Saved odds for {saved_count} games on {game_date}")
         elif games_with_no_odds > 0:
             logger.info(f"Skipped {game_date} - Action Network had no odds for these {games_with_no_odds} historical games.")
-        
+
     return saved_count
 
 def backfill_odds(callback: Optional[Callable] = None, force: bool = False) -> int:

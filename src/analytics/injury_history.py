@@ -15,8 +15,10 @@ def infer_injuries_from_logs(callback: Optional[Callable] = None) -> Dict[str, A
     Consecutive missed games form an "injury stint".
     Records individual game-date rows in injury_history.
     """
-    # Get all teams
-    teams = db.fetch_all("SELECT team_id, abbreviation FROM teams")
+    # Get all teams (cached singleton)
+    from src.analytics.stats_engine import get_team_abbreviations
+    abbr_map = get_team_abbreviations()
+    teams = [{"team_id": tid, "abbreviation": abbr} for tid, abbr in abbr_map.items()]
     if not teams:
         return {"stints_found": 0, "records": 0}
 
