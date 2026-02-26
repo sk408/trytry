@@ -113,10 +113,13 @@ class PrecomputedGame:
 
 _PRECOMPUTE_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "cache")
 _PRECOMPUTE_CACHE_FILE = os.path.join(_PRECOMPUTE_CACHE_DIR, "precomputed_games.pkl")
+_CONTEXT_CACHE_FILE = os.path.join(_PRECOMPUTE_CACHE_DIR, "precompute_context.pkl")
 
-# In-memory cache (persists across calls within the same process)
+# In-memory caches (persist across calls within the same process)
 _mem_pc_cache: Optional[Dict[str, "PrecomputedGame"]] = None
 _mem_pc_schema: Optional[str] = None
+_mem_ctx_cache: Optional[Dict[str, Any]] = None
+_mem_ctx_game_count: Optional[int] = None
 
 
 def _precompute_schema_version() -> str:
@@ -174,19 +177,218 @@ def _save_pc_cache(cache: Dict[str, "PrecomputedGame"]):
 
 
 def invalidate_precompute_cache():
-    """Clear precompute cache (memory + disk). Call on force-refresh."""
-    global _mem_pc_cache, _mem_pc_schema
+    """Clear all precompute caches (games + context, memory + disk)."""
+    global _mem_pc_cache, _mem_pc_schema, _mem_ctx_cache, _mem_ctx_game_count
     _mem_pc_cache = None
     _mem_pc_schema = None
-    try:
-        if os.path.exists(_PRECOMPUTE_CACHE_FILE):
-            os.remove(_PRECOMPUTE_CACHE_FILE)
-            logger.info("Deleted precompute cache file")
-    except Exception:
-        pass
+    _mem_ctx_cache = None
+    _mem_ctx_game_count = None
+    for path in (_PRECOMPUTE_CACHE_FILE, _CONTEXT_CACHE_FILE):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    logger.info("Invalidated all precompute caches")
 
 
 from src.analytics.cache import team_cache
+
+
+# ──────────────────────────────────────────────────────────────
+# Precompute context: historical rosters + inferred injuries
+# ──────────────────────────────────────────────────────────────
+
+def _load_ctx_cache(game_count: int) -> Optional[Dict[str, Any]]:
+    """Load precompute context from memory or disk if game count matches."""
+    global _mem_ctx_cache, _mem_ctx_game_count
+    if _mem_ctx_cache is not None and _mem_ctx_game_count == game_count:
+        return _mem_ctx_cache
+    try:
+        if os.path.exists(_CONTEXT_CACHE_FILE):
+            with open(_CONTEXT_CACHE_FILE, "rb") as f:
+                data = pickle.load(f)
+            if data.get("game_count") == game_count:
+                _mem_ctx_cache = data["ctx"]
+                _mem_ctx_game_count = game_count
+                logger.info("Loaded precompute context from disk (%d games)", game_count)
+                return _mem_ctx_cache
+    except Exception as e:
+        logger.warning("Failed to load context cache: %s", e)
+    return None
+
+
+def _save_ctx_cache(ctx: Dict[str, Any], game_count: int):
+    """Persist precompute context to disk."""
+    global _mem_ctx_cache, _mem_ctx_game_count
+    os.makedirs(_PRECOMPUTE_CACHE_DIR, exist_ok=True)
+    try:
+        with open(_CONTEXT_CACHE_FILE, "wb") as f:
+            pickle.dump({"game_count": game_count, "ctx": ctx}, f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info("Saved precompute context to disk (%d games)", game_count)
+    except Exception as e:
+        logger.warning("Failed to save context cache: %s", e)
+    _mem_ctx_cache = ctx
+    _mem_ctx_game_count = game_count
+
+
+def _build_precompute_context(games: List[Dict], force: bool = False) -> Dict[str, Any]:
+    """Build lookup tables for historical roster + injury inference.
+
+    One bulk SQL query determines which team each player was on for every
+    game (handles trades automatically — team membership follows the data).
+    Then for each game we can infer injuries by comparing the recent active
+    roster vs who actually played.
+
+    Cached to disk — only rebuilt when new games are added.
+    Returns a context dict that is read-only and thread-safe.
+    """
+    from collections import defaultdict
+
+    game_count = len(games)
+
+    # Try cache first
+    if not force:
+        cached = _load_ctx_cache(game_count)
+        if cached is not None:
+            return cached
+
+    # 1) game_id → (home_team_id, away_team_id) from actual results
+    game_team_map: Dict[str, tuple] = {}
+    for g in games:
+        gid = g.get("game_id")
+        if gid:
+            game_team_map[gid] = (g["home_team_id"], g["away_team_id"])
+
+    # 2) Player info (names, positions) — one query
+    player_info: Dict[int, Dict] = {}
+    for r in db.fetch_all("SELECT player_id, name, position FROM players"):
+        player_info[r["player_id"]] = {
+            "player_id": r["player_id"],
+            "name": r["name"],
+            "position": r["position"],
+        }
+
+    # 3) All player game appearances — the single expensive query
+    rows = db.fetch_all("""
+        SELECT player_id, game_id, game_date, is_home,
+               points, minutes
+        FROM player_stats
+        ORDER BY game_date
+    """)
+
+    # team_game_players[(team_id, game_date)] = set of player_ids who played
+    team_game_players: Dict[tuple, set] = defaultdict(set)
+    # player season stats for injury impact estimation (full season — all data)
+    player_season_stats: Dict[int, List[Dict]] = defaultdict(list)
+
+    for r in rows:
+        gid = r["game_id"]
+        if gid not in game_team_map:
+            continue
+
+        htid, atid = game_team_map[gid]
+        team_id = htid if r["is_home"] else atid
+        pid = r["player_id"]
+        gdate = r["game_date"]
+
+        team_game_players[(team_id, gdate)].add(pid)
+        player_season_stats[pid].append({
+            "pts": r["points"] or 0,
+            "mins": r["minutes"] or 0,
+        })
+
+    # 4) Team game dates (sorted) for binary search in injury inference
+    team_dates: Dict[int, List[str]] = defaultdict(list)
+    for (tid, gdate) in team_game_players:
+        team_dates[tid].append(gdate)
+    for tid in team_dates:
+        team_dates[tid] = sorted(set(team_dates[tid]))
+
+    # 5) Player average stats (full season — user wants all available data)
+    player_avg: Dict[int, Dict[str, float]] = {}
+    for pid, stats in player_season_stats.items():
+        n = len(stats)
+        if n > 0:
+            player_avg[pid] = {
+                "ppg": sum(s["pts"] for s in stats) / n,
+                "mpg": sum(s["mins"] for s in stats) / n,
+            }
+
+    result = {
+        "game_team_map": dict(game_team_map),
+        "team_game_players": dict(team_game_players),
+        "team_dates": dict(team_dates),
+        "player_info": player_info,
+        "player_avg": player_avg,
+    }
+    _save_ctx_cache(result, game_count)
+    return result
+
+
+def _get_historical_roster(team_id: int, game_date: str,
+                           ctx: Dict[str, Any]) -> List[Dict]:
+    """Get the roster for a team on a given date from precompute context.
+
+    Uses actual game data — handles trades automatically because team
+    membership is determined by which team a player appeared in game stats for.
+    """
+    pids = ctx["team_game_players"].get((team_id, game_date), set())
+    info = ctx["player_info"]
+    return [info.get(pid, {"player_id": pid, "name": "Unknown", "position": "F"})
+            for pid in pids]
+
+
+def _infer_historical_injuries(team_id: int, game_date: str,
+                               ctx: Dict[str, Any]) -> Dict[str, float]:
+    """Infer injuries for a historical game by comparing recent roster vs actual.
+
+    If a player played in the last 5 games for this team but didn't play in
+    THIS game, they were effectively injured/unavailable — a fact that was
+    known at game time.  Uses full-season averages for impact estimation.
+    """
+    import bisect
+
+    team_dates = ctx["team_dates"].get(team_id, [])
+    tgp = ctx["team_game_players"]
+    pavg = ctx["player_avg"]
+
+    # Find last 5 game dates for this team BEFORE this game
+    idx = bisect.bisect_left(team_dates, game_date)
+    recent_dates = team_dates[max(0, idx - 5):idx]
+
+    if not recent_dates:
+        return {"injured_count": 0, "injury_ppg_lost": 0.0, "injury_minutes_lost": 0.0}
+
+    # Expected roster: union of players from last 5 games
+    expected = set()
+    for d in recent_dates:
+        expected |= tgp.get((team_id, d), set())
+
+    # Actual roster: who played in THIS game
+    actual = tgp.get((team_id, game_date), set())
+
+    # Missing = inferred injured/unavailable
+    missing = expected - actual
+
+    count = 0
+    ppg_lost = 0.0
+    min_lost = 0.0
+    for pid in missing:
+        avg = pavg.get(pid, {})
+        mpg = avg.get("mpg", 0)
+        if mpg >= 10:  # Only count rotation players (10+ min/game)
+            count += 1
+            ppg_lost += avg.get("ppg", 0)
+            min_lost += mpg
+
+    return {
+        "injured_count": count,
+        "injury_ppg_lost": ppg_lost,
+        "injury_minutes_lost": min_lost,
+    }
+
 
 def _get_team_metrics(team_id: int) -> Dict[str, float]:
     """Fetch team metrics as a flat dict, using cache."""
@@ -629,8 +831,8 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     # ── Load cache ──
     cache = {} if force else _load_pc_cache()
 
-    games = get_actual_game_results()
-    if not games:
+    all_games = get_actual_game_results()
+    if not all_games:
         if callback:
             callback("No game results found")
         return []
@@ -638,11 +840,11 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     # Filter teams with < 5 games
     from collections import Counter
     team_games = Counter()
-    for g in games:
+    for g in all_games:
         team_games[g.get("home_team_id", 0)] += 1
         team_games[g.get("away_team_id", 0)] += 1
     valid_teams = {tid for tid, cnt in team_games.items() if cnt >= 5}
-    games = [g for g in games
+    games = [g for g in all_games
              if g.get("home_team_id") in valid_teams and g.get("away_team_id") in valid_teams]
 
     # ── Determine which games still need computing ──
@@ -666,6 +868,12 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     if callback:
         callback(f"Precomputing {len(new_games)} new games ({cached_count} cached)...")
 
+    # Build historical context ONCE (rosters, trades, injury inference)
+    # Uses all_games (not filtered) so every game_id is in the map.
+    if callback:
+        callback("Building historical roster & injury context...")
+    ctx = _build_precompute_context(all_games)
+
     cfg = get_config()
     max_workers = cfg.get("worker_threads", 4)
     _pc_lock = threading.Lock()
@@ -678,9 +886,16 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
             atid = g["away_team_id"]
             gdate = g["game_date"]
 
-            # Projections
-            home_proj = aggregate_projection(htid, atid, is_home=1, as_of_date=gdate)
-            away_proj = aggregate_projection(atid, htid, is_home=0, as_of_date=gdate)
+            # Historical roster from context (handles trades — team membership
+            # follows actual game data, not the current players table).
+            home_roster = _get_historical_roster(htid, gdate, ctx)
+            away_roster = _get_historical_roster(atid, gdate, ctx)
+
+            # Projections (with historical rosters)
+            home_proj = aggregate_projection(htid, atid, is_home=1, as_of_date=gdate,
+                                             roster=home_roster)
+            away_proj = aggregate_projection(atid, htid, is_home=0, as_of_date=gdate,
+                                             roster=away_roster)
 
             # Home court
             home_court = get_home_court_advantage(htid)
@@ -761,8 +976,20 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                         "contested": (am.get("contested_shots", 0) or 0) / a_gp,
                         "loose_balls": (am.get("loose_balls_recovered", 0) or 0) / a_gp}
 
-            # Injury context — query current injuries for each team
-            inj_ctx = _build_injury_context(htid, atid)
+            # Inferred historical injuries — compare recent active roster vs
+            # who actually played in this game.  If a rotation player was
+            # playing last week but not today, they're injured.  Uses only
+            # data that was known at game time.
+            h_inj = _infer_historical_injuries(htid, gdate, ctx)
+            a_inj = _infer_historical_injuries(atid, gdate, ctx)
+            inj_ctx = {
+                "home_injured_count": h_inj["injured_count"],
+                "away_injured_count": a_inj["injured_count"],
+                "home_injury_ppg_lost": h_inj["injury_ppg_lost"],
+                "away_injury_ppg_lost": a_inj["injury_ppg_lost"],
+                "home_injury_minutes_lost": h_inj["injury_minutes_lost"],
+                "away_injury_minutes_lost": a_inj["injury_minutes_lost"],
+            }
 
             return PrecomputedGame(
                 game_date=gdate,

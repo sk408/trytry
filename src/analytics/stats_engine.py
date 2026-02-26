@@ -56,8 +56,11 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
 
 
 def player_splits(player_id: int, opponent_team_id: int, is_home: int,
-                  recent_games: int = 10, as_of_date: Optional[str] = None) -> Dict[str, float]:
-    """Compute 50/25/25 blended stat projection for a player.
+                  recent_games: int = 20, as_of_date: Optional[str] = None) -> Dict[str, float]:
+    """Compute blended stat projection for a player.
+
+    Uses a larger window (20 games) with exponential decay so recent form
+    dominates while still capturing enough signal from location/opponent splits.
 
     Returns dict of stat averages.
     """
@@ -94,8 +97,7 @@ def player_splits(player_id: int, opponent_team_id: int, is_home: int,
     # vs-opponent split
     opp = ps[ps["opponent_team_id"] == opponent_team_id].head(recent_games)
 
-    # Blend weights
-    w_opp = 0.0
+    # Blend weights — graduated for both opponent and location splits
     n_opp = len(opp)
     if n_opp >= 3:
         w_opp = 0.25
@@ -103,8 +105,21 @@ def player_splits(player_id: int, opponent_team_id: int, is_home: int,
         w_opp = 0.15
     elif n_opp == 1:
         w_opp = 0.10
+    else:
+        w_opp = 0.0
 
-    w_loc = 0.25 if len(loc) >= 3 else 0.0
+    n_loc = len(loc)
+    if n_loc >= 5:
+        w_loc = 0.25
+    elif n_loc >= 3:
+        w_loc = 0.20
+    elif n_loc >= 2:
+        w_loc = 0.15
+    elif n_loc == 1:
+        w_loc = 0.10
+    else:
+        w_loc = 0.0
+
     w_base = 1.0 - w_loc - w_opp
 
     result = {}
@@ -167,22 +182,30 @@ def get_games_missed_streak(player_id: int, as_of_date: Optional[str] = None) ->
 def aggregate_projection(team_id: int, opponent_team_id: int, is_home: int,
                          as_of_date: Optional[str] = None,
                          player_weights: Optional[Dict[int, float]] = None,
-                         injured_players: Optional[Dict[int, float]] = None) -> Dict[str, float]:
+                         injured_players: Optional[Dict[int, float]] = None,
+                         roster: Optional[List[Dict]] = None) -> Dict[str, float]:
     """Aggregate team projection from player splits with 240-min budget.
 
     Args:
         injured_players: {player_id: play_probability} for injured players
+        roster: Optional list of {player_id, name, position} dicts.
+                When provided (historical precompute), uses this instead of
+                querying the current players table — avoids traded-player
+                lookahead bias.
     """
     if player_weights is None:
         player_weights = {}
     if injured_players is None:
         injured_players = {}
 
-    # Get active players
-    rows = db.fetch_all(
-        "SELECT player_id, name, position FROM players WHERE team_id = ?",
-        (team_id,)
-    )
+    # Get active players — historical roster or current
+    if roster is not None:
+        rows = roster
+    else:
+        rows = db.fetch_all(
+            "SELECT player_id, name, position FROM players WHERE team_id = ?",
+            (team_id,)
+        )
 
     totals = {c: 0.0 for c in STAT_COLS}
     total_projected_minutes = 0.0
@@ -221,15 +244,24 @@ def aggregate_projection(team_id: int, opponent_team_id: int, is_home: int,
             "weight": weight,
         })
 
-    # 240-minute budget normalization
+    # 240-minute budget normalization (scale down OR up)
+    scaling_cols = ["points", "rebounds", "assists", "minutes", "steals",
+                    "blocks", "turnovers", "oreb", "dreb",
+                    "fg_made", "fg_attempted", "fg3_made", "fg3_attempted",
+                    "ft_made", "ft_attempted"]
     if total_projected_minutes > TEAM_MINUTES_PER_GAME:
         scale = TEAM_MINUTES_PER_GAME / total_projected_minutes
-        scaling_cols = ["points", "rebounds", "assists", "minutes", "steals",
-                        "blocks", "turnovers", "oreb", "dreb",
-                        "fg_made", "fg_attempted", "fg3_made", "fg3_attempted",
-                        "ft_made", "ft_attempted"]
         for c in scaling_cols:
             totals[c] *= scale
+    elif 0 < total_projected_minutes < TEAM_MINUTES_PER_GAME:
+        # Short-handed teams: remaining players absorb extra minutes but
+        # replacement-level production is lower — use a dampened scale-up.
+        # Full scale would assume bench players are equally productive;
+        # 70% accounts for drop-off to replacement level.
+        gap_ratio = TEAM_MINUTES_PER_GAME / total_projected_minutes
+        dampened_scale = 1.0 + (gap_ratio - 1.0) * 0.70
+        for c in scaling_cols:
+            totals[c] *= dampened_scale
 
     totals["_active_players"] = active_players
     totals["_total_projected_minutes"] = min(total_projected_minutes, TEAM_MINUTES_PER_GAME)
