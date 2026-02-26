@@ -40,10 +40,23 @@ def _load_pipeline_state() -> Dict:
     return {}
 
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        import numpy as np
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 def _save_pipeline_state(state: Dict):
     os.makedirs(os.path.dirname(PIPELINE_STATE_PATH), exist_ok=True)
     with open(PIPELINE_STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2)
+        json.dump(state, f, indent=2, cls=NumpyEncoder)
 
 
 def _is_fresh(step_name: str, max_age_hours: float = 24) -> bool:

@@ -93,6 +93,16 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
             home_ml = game_odds.get("ml_home")
             away_ml = game_odds.get("ml_away")
             
+            # Sharp money metrics
+            spread_home_public = game_odds.get("spread_home_public")
+            spread_away_public = game_odds.get("spread_away_public")
+            spread_home_money = game_odds.get("spread_home_money")
+            spread_away_money = game_odds.get("spread_away_money")
+            ml_home_public = game_odds.get("ml_home_public")
+            ml_away_public = game_odds.get("ml_away_public")
+            ml_home_money = game_odds.get("ml_home_money")
+            ml_away_money = game_odds.get("ml_away_money")
+            
             if spread is None and ou is None:
                 continue
                 
@@ -103,16 +113,31 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
                 spread = float(spread)
 
             db.execute("""
-                INSERT INTO game_odds (game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, fetched_at, provider)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'actionnetwork')
+                INSERT INTO game_odds (
+                    game_date, home_team_id, away_team_id, spread, over_under, 
+                    home_moneyline, away_moneyline, fetched_at, provider,
+                    spread_home_public, spread_away_public, spread_home_money, spread_away_money,
+                    ml_home_public, ml_away_public, ml_home_money, ml_away_money
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'actionnetwork', ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_date, home_team_id, away_team_id) DO UPDATE SET
                     spread=excluded.spread,
                     over_under=excluded.over_under,
                     home_moneyline=excluded.home_moneyline,
                     away_moneyline=excluded.away_moneyline,
+                    spread_home_public=excluded.spread_home_public,
+                    spread_away_public=excluded.spread_away_public,
+                    spread_home_money=excluded.spread_home_money,
+                    spread_away_money=excluded.spread_away_money,
+                    ml_home_public=excluded.ml_home_public,
+                    ml_away_public=excluded.ml_away_public,
+                    ml_home_money=excluded.ml_home_money,
+                    ml_away_money=excluded.ml_away_money,
                     fetched_at=excluded.fetched_at,
                     provider=excluded.provider
-            """, (game_date, home_id, away_id, spread, ou, home_ml, away_ml, now))
+            """, (game_date, home_id, away_id, spread, ou, home_ml, away_ml, now,
+                  spread_home_public, spread_away_public, spread_home_money, spread_away_money,
+                  ml_home_public, ml_away_public, ml_home_money, ml_away_money))
             
             saved_count += 1
         except Exception as e:
@@ -126,29 +151,45 @@ def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> i
         
     return saved_count
 
-def backfill_odds(callback: Optional[Callable] = None) -> int:
-    """Backfill odds for all historical games that have player_stats but no odds."""
-    # Find dates with games but no odds
-    rows = db.fetch_all("""
-        SELECT DISTINCT game_date 
-        FROM player_stats 
-        WHERE game_date NOT IN (SELECT DISTINCT game_date FROM game_odds)
-        ORDER BY game_date DESC
-    """)
+def backfill_odds(callback: Optional[Callable] = None, force: bool = False) -> int:
+    """Backfill odds for all historical games that have player_stats but no odds.
+
+    Args:
+        force: If True, re-fetch ALL dates (even those with existing sharp money data).
+    """
+    if force:
+        rows = db.fetch_all("""
+            SELECT DISTINCT game_date
+            FROM player_stats
+            ORDER BY game_date DESC
+        """)
+    else:
+        # Find dates with games but no odds OR missing sharp money metrics
+        rows = db.fetch_all("""
+            SELECT DISTINCT game_date
+            FROM player_stats
+            WHERE game_date NOT IN (
+                SELECT game_date FROM game_odds WHERE spread_home_public IS NOT NULL
+            )
+            ORDER BY game_date DESC
+        """)
     
     dates = [r["game_date"] for r in rows]
     total_dates = len(dates)
     total_saved = 0
     
     if callback:
-        callback(f"Found {total_dates} dates needing odds backfill. Starting...")
+        callback(f"Found {total_dates} dates needing odds/sharp money backfill. Starting...")
         
+    import time
     for i, game_date in enumerate(dates):
         if not game_date or len(game_date) != 10:
             continue
         try:
             saved = sync_odds_for_date(game_date)
             total_saved += saved
+            # Sleep to avoid rate limiting from Action Network
+            time.sleep(0.5)
         except Exception as e:
             logger.error(f"Error backfilling odds for {game_date}: {e}")
             
@@ -156,6 +197,6 @@ def backfill_odds(callback: Optional[Callable] = None) -> int:
             callback(f"Odds backfill progress: {i + 1}/{total_dates} dates processed.")
             
     if callback:
-        callback(f"Odds backfill complete! Saved odds for {total_saved} games.")
+        callback(f"Odds backfill complete! Saved/updated odds for {total_saved} games.")
         
     return total_saved

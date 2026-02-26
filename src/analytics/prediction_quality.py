@@ -217,6 +217,8 @@ def compute_vegas_comparison(per_game: List[Dict[str, Any]]) -> Dict[str, Any]:
     
     # Bankroll Simulation
     bankroll = 1000.0
+    total_wagered = 0.0
+    total_profit = 0.0
     
     for g in per_game:
         key = (g.get("game_date"), g.get("home_team_id"), g.get("away_team_id"))
@@ -256,13 +258,19 @@ def compute_vegas_comparison(per_game: List[Dict[str, Any]]) -> Dict[str, Any]:
             b = 100 / 110 # decimal odds - 1
             kelly_fraction = max(0, p - (1 - p) / b)
             
+            # Cap the Kelly fraction to prevent insane bets
+            kelly_fraction = min(kelly_fraction, 0.10) # Max 10% Kelly
+            
             bet_size = bankroll * (kelly_fraction * 0.25) # Quarter Kelly
+            
             if bet_size > 0 and not actual_push:
+                total_wagered += bet_size
                 if covered:
                     profit = bet_size * (100 / 110)
                 else:
                     profit = -bet_size
                 bankroll += profit
+                total_profit += profit
 
             edge_games.append({
                 "game_id": g.get("game_id"),
@@ -303,6 +311,6 @@ def compute_vegas_comparison(per_game: List[Dict[str, Any]]) -> Dict[str, Any]:
         "edge_hit_rate": edge_hit_rate,
         "total_edge_games": len(edge_games),
         "final_bankroll": round(bankroll, 2),
-        "roi_pct": round((bankroll - 1000) / 1000 * 100, 1),
+        "roi_pct": round((total_profit / total_wagered) * 100, 1) if total_wagered > 0 else 0.0,
         "feature_attribution": feature_attr
     }

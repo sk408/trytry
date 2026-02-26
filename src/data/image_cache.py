@@ -73,8 +73,32 @@ def preload_images(player_ids=None, team_ids=None, callback=None):
                 rows = db.fetch_all("SELECT team_id FROM teams")
                 team_ids = [r["team_id"] for r in rows] if rows else []
             if player_ids is None:
-                rows = db.fetch_all("SELECT player_id FROM players")
+                # We want a very comprehensive list of player IDs since gamecasts can include anyone.
+                # Try getting from standard tables.
+                rows = db.fetch_all("""
+                    SELECT player_id FROM players
+                    UNION 
+                    SELECT player_id FROM player_sync_cache
+                    UNION
+                    SELECT player_id FROM injuries
+                    UNION
+                    SELECT player_id FROM player_impact
+                    UNION
+                    SELECT player_id FROM player_stats
+                    UNION
+                    SELECT player_id FROM injury_history
+                """)
                 player_ids = [r["player_id"] for r in rows] if rows else []
+                
+                # Fetch recent games to get all players involved
+                recent_logs = db.fetch_all("SELECT DISTINCT player_id FROM player_sync_cache")
+                if recent_logs:
+                    player_ids.extend([r["player_id"] for r in recent_logs])
+                player_ids = list(set(player_ids))
+                
+                # Fallback to some generic IDs just to get started if the DB is somehow empty
+                if not player_ids:
+                    player_ids = [2544, 201939]
         except Exception as e:
             logger.warning(f"Failed to auto-fetch IDs: {e}")
             if player_ids is None:
@@ -84,6 +108,10 @@ def preload_images(player_ids=None, team_ids=None, callback=None):
 
     total = len(player_ids) + len(team_ids)
     done = 0
+    
+    if callback:
+        callback(f"Images: {done}/{total}")
+        
     for tid in team_ids:
         get_team_logo_path(tid)
         done += 1

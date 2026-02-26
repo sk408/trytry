@@ -4,7 +4,7 @@ import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit,
-    QFrame, QGridLayout, QComboBox, QTabWidget,
+    QFrame, QGridLayout, QComboBox, QTabWidget, QCheckBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -39,16 +39,39 @@ class AccuracyView(QWidget):
 
         # Action buttons (row 1)
         btn_row1 = QHBoxLayout()
-        actions1 = [
-            ("Backtest", self._on_backtest),
-            ("Optimize Weights", self._on_optimize),
-            ("Calibrate", self._on_calibrate),
-            ("Feature Importance", self._on_feature_importance),
-        ]
-        for text, handler in actions1:
-            btn = QPushButton(text)
-            btn.clicked.connect(handler)
-            btn_row1.addWidget(btn)
+        
+        btn_backtest = QPushButton("Run Backtest (Auto)")
+        btn_backtest.clicked.connect(self._on_backtest)
+        btn_row1.addWidget(btn_backtest)
+        
+        # Group the Optimize button and its checkbox so they share one button-slot
+        opt_layout = QHBoxLayout()
+        opt_layout.setContentsMargins(0, 0, 0, 0)
+        opt_layout.setSpacing(6)
+        
+        btn_opt = QPushButton("Optimize Weights")
+        btn_opt.clicked.connect(self._on_optimize)
+        opt_layout.addWidget(btn_opt, stretch=1)
+        
+        self.opt_target_cb = QComboBox()
+        self.opt_target_cb.addItems(["ATS", "ROI", "ML", "All (Cycle)"])
+        self.opt_target_cb.setToolTip("Optimization Target")
+        opt_layout.addWidget(self.opt_target_cb, stretch=0)
+        
+        self.continuous_opt_cb = QCheckBox("Cont.")
+        self.continuous_opt_cb.setToolTip("Run optimization continuously until stopped")
+        opt_layout.addWidget(self.continuous_opt_cb, stretch=0)
+        
+        btn_row1.addLayout(opt_layout)
+        
+        btn_cal = QPushButton("Calibrate")
+        btn_cal.clicked.connect(self._on_calibrate)
+        btn_row1.addWidget(btn_cal)
+        
+        btn_fi = QPushButton("Feature Importance")
+        btn_fi.clicked.connect(self._on_feature_importance)
+        btn_row1.addWidget(btn_fi)
+
         layout.addLayout(btn_row1)
 
         # Action buttons (row 2)
@@ -59,6 +82,7 @@ class AccuracyView(QWidget):
             ("FFT Analysis", self._on_fft),
             ("Full Pipeline", self._on_pipeline),
             ("Sync Odds", self._on_sync_odds),
+            ("Force Resync Odds", self._on_force_sync_odds),
         ]
         for text, handler in actions2:
             btn = QPushButton(text)
@@ -155,6 +179,16 @@ class AccuracyView(QWidget):
         )
         self.home_away_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.breakdown_tabs.addTab(self.home_away_table, "Home vs Away")
+
+        # --- Vegas Comparison ---
+        self.vegas_table = QTableWidget()
+        self.vegas_table.setColumnCount(2)
+        self.vegas_table.setHorizontalHeaderLabels(["Metric", "Value"])
+        self.vegas_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.vegas_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.breakdown_tabs.addTab(self.vegas_table, "Vegas Betting Comparison")
 
         layout.addWidget(self.breakdown_tabs)
 
@@ -323,6 +357,30 @@ class AccuracyView(QWidget):
             self.home_away_table.setItem(row, 0, QTableWidgetItem(metric))
             self.home_away_table.setItem(row, 1, QTableWidgetItem(val))
 
+        # ---------- Vegas Comparison table ----------
+        q_metrics = results.get("quality_metrics", {})
+        vegas = q_metrics.get("vegas_comparison", {})
+        if vegas and not vegas.get("error"):
+            feat = vegas.get("feature_attribution", {})
+            v_rows = [
+                ("ATS Hit Rate", f"{vegas.get('ats_rate', 0)}%"),
+                ("CLV Win Rate", f"{vegas.get('clv_rate', 0)}%"),
+                ("Edge Hit Rate", f"{vegas.get('edge_hit_rate', 0)}%"),
+                ("Bankroll Sim ($1000 start)", f"${vegas.get('final_bankroll', 0)}"),
+                ("Simulated ROI", f"{vegas.get('roi_pct', 0)}%"),
+                ("Feature: Avg Fatigue/Rest", str(feat.get("avg_fatigue_adj", 0))),
+                ("Feature: Avg Rating Matchup", str(feat.get("avg_rating_adj", 0))),
+                ("Feature: Avg ML Blend", str(feat.get("avg_ml_adj", 0))),
+            ]
+            self.vegas_table.setRowCount(len(v_rows))
+            for row, (metric, val) in enumerate(v_rows):
+                self.vegas_table.setItem(row, 0, QTableWidgetItem(metric))
+                self.vegas_table.setItem(row, 1, QTableWidgetItem(val))
+        else:
+            self.vegas_table.setRowCount(1)
+            self.vegas_table.setItem(0, 0, QTableWidgetItem("Status"))
+            self.vegas_table.setItem(0, 1, QTableWidgetItem("No Vegas odds data available"))
+
     def _on_done(self):
         self._append_log("Operation complete")
         if self.main_window:
@@ -336,7 +394,9 @@ class AccuracyView(QWidget):
 
     def _on_optimize(self):
         self.log.clear()
-        self._current_worker = start_optimizer_worker(self._append_log, self._on_done)
+        is_cont = self.continuous_opt_cb.isChecked()
+        target = self.opt_target_cb.currentText().split()[0].lower()
+        self._current_worker = start_optimizer_worker(is_cont, target, self._append_log, self._on_done)
 
     def _on_calibrate(self):
         self.log.clear()
@@ -369,6 +429,11 @@ class AccuracyView(QWidget):
     def _on_sync_odds(self):
         self.log.clear()
         self._current_worker = start_odds_sync_worker(self._append_log, self._on_done)
+
+    def _on_force_sync_odds(self):
+        self.log.clear()
+        self._append_log("Force re-fetching odds for ALL dates (this may take a while)...")
+        self._current_worker = start_odds_sync_worker(self._append_log, self._on_done, force=True)
 
     def _on_diagnostic_csv(self):
         self.log.clear()

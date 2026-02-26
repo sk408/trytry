@@ -58,6 +58,8 @@ EXTREME_RANGES = {
     "steals_penalty":        (-1.0,  3.0),
     "blocks_penalty":        (-1.0,  3.0),
     "oreb_mult":             (-2.0,  5.0),
+    "sharp_money_weight":    (-5.0, 10.0),
+    "ats_edge_threshold":    (0.5,  8.0),
 }
 
 # Parameters NOT used by VectorizedGames.evaluate()
@@ -92,11 +94,16 @@ def _load_games(callback: Optional[Callable] = None) -> List:
 def sweep_parameter(param_name: str, min_val: float, max_val: float,
                     steps: int = 200, games: Optional[List[PrecomputedGame]] = None,
                     vg: Optional[VectorizedGames] = None,
-                    callback: Optional[Callable] = None) -> List[Dict]:
+                    callback: Optional[Callable] = None,
+                    target: str = "ats") -> List[Dict]:
     """Sweep a single parameter through [min_val, max_val] in `steps` increments.
 
+    Args:
+        target: Optimization target for loss calculation — "ats", "roi", or "ml".
+
     Returns a list of dicts with columns:
-        param_value, spread_mae, total_mae, winner_pct, loss
+        param_value, spread_mae, total_mae, winner_pct, ats_rate, edge_rate,
+        ats_roi, edge_roi, ml_win_rate, ml_roi, loss
     """
     if param_name not in SWEEPABLE_PARAMS:
         raise ValueError(f"Unknown parameter: {param_name}. Available: {SWEEPABLE_PARAMS}")
@@ -114,23 +121,34 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
         w_dict = base_w.to_dict()
         w_dict[param_name] = float(val)
         w = WeightConfig.from_dict(w_dict)
-        metrics = vg.evaluate(w)
+        metrics = vg.evaluate(w, target=target)
         results.append({
             "param_value": round(float(val), 6),
-            "spread_mae": round(metrics["spread_mae"], 4),
-            "total_mae": round(metrics["total_mae"], 4),
-            "winner_pct": round(metrics["winner_pct"], 2),
-            "loss": round(metrics["loss"], 4),
+            "spread_mae": round(metrics.get("spread_mae", 0), 4),
+            "total_mae": round(metrics.get("total_mae", 0), 4),
+            "winner_pct": round(metrics.get("winner_pct", 0), 2),
+            "ats_rate": round(metrics.get("ats_rate", 0), 2),
+            "edge_rate": round(metrics.get("edge_rate", 0), 2),
+            "ats_roi": round(metrics.get("ats_roi", 0), 2),
+            "edge_roi": round(metrics.get("edge_roi", 0), 2),
+            "ml_win_rate": round(metrics.get("ml_win_rate", 0), 2),
+            "ml_roi": round(metrics.get("ml_roi", 0), 2),
+            "loss": round(metrics.get("loss", 0), 4),
         })
         if callback and (i + 1) % 50 == 0:
-            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} -> MAE={metrics['spread_mae']:.2f})")
+            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} -> ROI={metrics.get('ats_roi', 0):.2f}%)")
 
     return results
 
 
 def sweep_all_parameters(steps: int = 100,
-                         callback: Optional[Callable] = None) -> Dict[str, List[Dict]]:
-    """Sweep every sweepable parameter and return results keyed by param name."""
+                         callback: Optional[Callable] = None,
+                         target: str = "ats") -> Dict[str, List[Dict]]:
+    """Sweep every sweepable parameter and return results keyed by param name.
+
+    Args:
+        target: Optimization target for loss calculation — "ats", "roi", or "ml".
+    """
     games = _load_games(callback)
     vg = VectorizedGames(games)
 
@@ -141,7 +159,8 @@ def sweep_all_parameters(steps: int = 100,
         lo, hi = EXTREME_RANGES[param_name]
         if callback:
             callback(f"[{pi + 1}/{len(params)}] Sweeping {param_name} ({lo} to {hi})...")
-        results = sweep_parameter(param_name, lo, hi, steps=steps, vg=vg, callback=callback)
+        results = sweep_parameter(param_name, lo, hi, steps=steps, vg=vg,
+                                  callback=callback, target=target)
         all_results[param_name] = results
 
     return all_results
@@ -156,7 +175,11 @@ def export_sweep_csv(param_name: str, results: List[Dict], output_dir: str = Non
     path = os.path.join(out, filename)
 
     with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["param_value", "spread_mae", "total_mae", "winner_pct", "loss"])
+        writer = csv.DictWriter(f, fieldnames=[
+            "param_value", "spread_mae", "total_mae", "winner_pct",
+            "ats_rate", "edge_rate", "ats_roi", "edge_roi",
+            "ml_win_rate", "ml_roi", "loss"
+        ])
         writer.writeheader()
         writer.writerows(results)
 
@@ -216,15 +239,19 @@ def format_ascii_chart(param_name: str, results: List[Dict],
     return "\n".join(lines)
 
 
-def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None) -> str:
+def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
+                      target: str = "ats") -> str:
     """Run sensitivity sweep on all parameters, export CSVs, print summary.
+
+    Args:
+        target: Optimization target for loss calculation — "ats", "roi", or "ml".
 
     Returns the output directory path.
     """
     if callback:
-        callback("Starting full sensitivity analysis...")
+        callback(f"Starting full sensitivity analysis (target={target})...")
 
-    all_results = sweep_all_parameters(steps=steps, callback=callback)
+    all_results = sweep_all_parameters(steps=steps, callback=callback, target=target)
 
     os.makedirs(_OUTPUT_DIR, exist_ok=True)
 
@@ -245,6 +272,8 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None) -> 
         best_mae_idx = np.argmin([r["spread_mae"] for r in results])
         best_win_idx = np.argmax([r["winner_pct"] for r in results])
         best_loss_idx = np.argmin([r["loss"] for r in results])
+        best_roi_idx = np.argmax([r.get("ats_roi", 0) for r in results])
+        best_ml_roi_idx = np.argmax([r.get("ml_roi", -100) for r in results])
 
         best_mae_val = results[best_mae_idx]["param_value"]
         best_mae = results[best_mae_idx]["spread_mae"]
@@ -252,25 +281,35 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None) -> 
         best_win = results[best_win_idx]["winner_pct"]
         best_loss_val = results[best_loss_idx]["param_value"]
         best_loss = results[best_loss_idx]["loss"]
+        best_roi_val = results[best_roi_idx]["param_value"]
+        best_roi = results[best_roi_idx].get("ats_roi", 0)
+        best_ml_roi_val = results[best_ml_roi_idx]["param_value"]
+        best_ml_roi = results[best_ml_roi_idx].get("ml_roi", -100)
 
         # Evaluate at current default
         current_idx = np.argmin([abs(r["param_value"] - current_val) for r in results])
         current_mae = results[current_idx]["spread_mae"]
         current_win = results[current_idx]["winner_pct"]
+        current_roi = results[current_idx].get("ats_roi", 0)
+        current_ml_roi = results[current_idx].get("ml_roi", -100)
 
         # Check if optimizer range is too narrow
         if param_name in OPTIMIZER_RANGES:
             opt_lo, opt_hi = OPTIMIZER_RANGES[param_name]
             outside = (best_mae_val < opt_lo or best_mae_val > opt_hi or
-                       best_win_val < opt_lo or best_win_val > opt_hi)
+                       best_win_val < opt_lo or best_win_val > opt_hi or
+                       best_roi_val < opt_lo or best_roi_val > opt_hi or
+                       best_ml_roi_val < opt_lo or best_ml_roi_val > opt_hi)
             flag = " ** OUTSIDE OPT RANGE" if outside else ""
         else:
             flag = ""
 
         summary_lines.append(f"  {param_name}:")
-        summary_lines.append(f"    Current={current_val:.4f} (MAE={current_mae:.2f}, Win={current_win:.1f}%)")
+        summary_lines.append(f"    Current={current_val:.4f} (MAE={current_mae:.2f}, Win={current_win:.1f}%, ATS ROI={current_roi:.1f}%, ML ROI={current_ml_roi:.1f}%)")
         summary_lines.append(f"    Best MAE={best_mae:.2f} at {best_mae_val:.4f}")
         summary_lines.append(f"    Best Win={best_win:.1f}% at {best_win_val:.4f}")
+        summary_lines.append(f"    Best ATS ROI={best_roi:.1f}% at {best_roi_val:.4f}")
+        summary_lines.append(f"    Best ML ROI={best_ml_roi:.1f}% at {best_ml_roi_val:.4f}")
         summary_lines.append(f"    Best Loss={best_loss:.4f} at {best_loss_val:.4f}{flag}")
         summary_lines.append("")
 
@@ -313,6 +352,8 @@ def read_sweep_optimals(metric: str = "loss",
         raise FileNotFoundError(f"No sweep CSVs found in {out}. Run --all first.")
 
     minimize = metric in ("spread_mae", "total_mae", "loss")
+    # For metrics not in every CSV (older sweeps), fall back gracefully
+    betting_metrics = {"ats_rate", "edge_rate", "ats_roi", "edge_roi", "ml_win_rate", "ml_roi"}
     base_w = WeightConfig()
     optimals = {}
 
@@ -322,7 +363,10 @@ def read_sweep_optimals(metric: str = "loss",
             rows = list(csv.DictReader(f))
 
         vals = [float(r["param_value"]) for r in rows]
-        scores = [float(r[metric]) for r in rows]
+        if metric in betting_metrics and metric not in rows[0]:
+            logger.warning("Metric %s not in CSV %s — re-run sweeps to include it", metric, fpath)
+            continue
+        scores = [float(r.get(metric, 0)) for r in rows]
 
         # Check if parameter has any effect
         score_range = max(scores) - min(scores)
@@ -451,7 +495,8 @@ def coordinate_descent(params: Optional[List[str]] = None,
                        steps: int = 100,
                        max_rounds: int = 10,
                        convergence_threshold: float = 0.005,
-                       callback: Optional[Callable] = None) -> Dict[str, Any]:
+                       callback: Optional[Callable] = None,
+                       target: str = "ats") -> Dict[str, Any]:
     """Iteratively sweep each parameter and lock in the best value.
 
     This is far more effective than individual sweeps because it captures
@@ -464,6 +509,7 @@ def coordinate_descent(params: Optional[List[str]] = None,
         max_rounds: Maximum descent rounds before stopping.
         convergence_threshold: Stop when round-over-round loss improvement < this.
         callback: Progress callback.
+        target: Optimization target — "ats", "roi", or "ml".
 
     Returns:
         Dict with 'weights' (final WeightConfig dict), 'history' (per-round metrics),
@@ -478,16 +524,18 @@ def coordinate_descent(params: Optional[List[str]] = None,
     # Start from current weights
     w = get_weight_config()
     w_dict = w.to_dict()
-    initial_loss = vg.evaluate(w)["loss"]
+    initial_metrics = vg.evaluate(w, target=target)
+    initial_loss = initial_metrics["loss"]
     if callback:
-        callback(f"Starting coordinate descent: {len(params)} params, {max_rounds} max rounds")
-        callback(f"Initial loss: {initial_loss:.4f}")
+        callback(f"Starting coordinate descent: {len(params)} params, {max_rounds} max rounds, target={target}")
+        callback(f"Initial loss: {initial_loss:.4f}, ATS={initial_metrics['ats_rate']:.1f}%, "
+                 f"ATS ROI={initial_metrics['ats_roi']:.1f}%, ML ROI={initial_metrics['ml_roi']:.1f}%")
 
     history = []
     all_changes = {}
 
     for round_num in range(1, max_rounds + 1):
-        round_start_loss = vg.evaluate(WeightConfig.from_dict(w_dict))["loss"]
+        round_start_loss = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)["loss"]
         improved_count = 0
 
         for pi, param_name in enumerate(params):
@@ -501,7 +549,7 @@ def coordinate_descent(params: Optional[List[str]] = None,
                 test_dict = w_dict.copy()
                 test_dict[param_name] = float(val)
                 test_w = WeightConfig.from_dict(test_dict)
-                metrics = vg.evaluate(test_w)
+                metrics = vg.evaluate(test_w, target=target)
                 if metrics["loss"] < best_loss:
                     best_loss = metrics["loss"]
                     best_val = float(val)
@@ -517,15 +565,19 @@ def coordinate_descent(params: Optional[List[str]] = None,
             if callback and (pi + 1) % 5 == 0:
                 callback(f"  Round {round_num}: {pi + 1}/{len(params)} params swept")
 
-        round_end_loss = vg.evaluate(WeightConfig.from_dict(w_dict))["loss"]
+        round_end_metrics = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)
+        round_end_loss = round_end_metrics["loss"]
         improvement = round_start_loss - round_end_loss
-        metrics = vg.evaluate(WeightConfig.from_dict(w_dict))
 
         history.append({
             "round": round_num,
             "loss": round_end_loss,
-            "spread_mae": metrics["spread_mae"],
-            "winner_pct": metrics["winner_pct"],
+            "spread_mae": round_end_metrics["spread_mae"],
+            "winner_pct": round_end_metrics["winner_pct"],
+            "ats_rate": round_end_metrics["ats_rate"],
+            "ats_roi": round_end_metrics["ats_roi"],
+            "ml_win_rate": round_end_metrics["ml_win_rate"],
+            "ml_roi": round_end_metrics["ml_roi"],
             "improvement": improvement,
             "params_changed": improved_count,
         })
@@ -533,14 +585,15 @@ def coordinate_descent(params: Optional[List[str]] = None,
         if callback:
             callback(f"  Round {round_num} complete: loss={round_end_loss:.4f} "
                      f"(delta={improvement:+.4f}), {improved_count} params moved, "
-                     f"MAE={metrics['spread_mae']:.2f}, Win%={metrics['winner_pct']:.1f}%")
+                     f"MAE={round_end_metrics['spread_mae']:.2f}, ATS={round_end_metrics['ats_rate']:.1f}%, "
+                     f"ATS ROI={round_end_metrics['ats_roi']:.1f}%, ML ROI={round_end_metrics['ml_roi']:.1f}%")
 
         if improvement < convergence_threshold:
             if callback:
                 callback(f"Converged after {round_num} rounds (improvement {improvement:.6f} < {convergence_threshold})")
             break
 
-    final_metrics = vg.evaluate(WeightConfig.from_dict(w_dict))
+    final_metrics = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)
 
     return {
         "weights": w_dict,
@@ -551,6 +604,9 @@ def coordinate_descent(params: Optional[List[str]] = None,
         "final_loss": final_metrics["loss"],
         "final_mae": final_metrics["spread_mae"],
         "final_winner_pct": final_metrics["winner_pct"],
+        "final_ats_rate": final_metrics["ats_rate"],
+        "final_ats_roi": final_metrics["ats_roi"],
+        "final_ml_roi": final_metrics["ml_roi"],
     }
 
 
@@ -1072,7 +1128,8 @@ def main():
     parser.add_argument("--apply", action="store_true",
                         help="Apply best sweep values to the pipeline (saves snapshot first)")
     parser.add_argument("--metric", type=str, default="loss",
-                        choices=["loss", "spread_mae", "winner_pct"],
+                        choices=["loss", "spread_mae", "winner_pct", "ats_rate",
+                                 "ats_roi", "edge_roi", "ml_win_rate", "ml_roi"],
                         help="Metric to optimize when using --show or --apply (default: loss)")
     parser.add_argument("--descent", action="store_true",
                         help="Run coordinate descent: iteratively sweep and lock in best values")
@@ -1084,6 +1141,9 @@ def main():
                         help="Run 3-parameter triplet interaction analysis")
     parser.add_argument("--anchor", type=str, default="ff_tov_weight",
                         help="Anchor parameter for triplet analysis (default: ff_tov_weight)")
+    parser.add_argument("--target", type=str, default="ats",
+                        choices=["ats", "roi", "ml"],
+                        help="Optimization target for loss calculation (default: ats)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -1129,11 +1189,12 @@ def main():
             steps=min(args.steps, 100),  # cap steps per-param for speed
             max_rounds=args.descent_rounds,
             callback=cb,
+            target=args.target,
         )
         elapsed = time.time() - t0
 
         print(f"\n{'='*60}")
-        print(f"COORDINATE DESCENT RESULTS ({elapsed:.0f}s)")
+        print(f"COORDINATE DESCENT RESULTS ({elapsed:.0f}s, target={args.target})")
         print(f"{'='*60}")
         print(f"  Rounds: {result['rounds']}")
         print(f"  Initial loss: {result['initial_loss']:.4f}")
@@ -1141,6 +1202,9 @@ def main():
               f"(improvement: {result['initial_loss'] - result['final_loss']:+.4f})")
         print(f"  Final MAE:    {result['final_mae']:.2f}")
         print(f"  Final Win%:   {result['final_winner_pct']:.1f}%")
+        print(f"  Final ATS:    {result.get('final_ats_rate', 0):.1f}%  "
+              f"ATS ROI: {result.get('final_ats_roi', 0):.1f}%  "
+              f"ML ROI: {result.get('final_ml_roi', 0):.1f}%")
         print(f"\n  Parameter changes:")
         for name, info in sorted(result['changes'].items()):
             print(f"    {name:<28} {info['old']:>10.4f} -> {info['new']:>10.4f}")
@@ -1201,7 +1265,7 @@ def main():
         return
 
     if args.all:
-        run_full_analysis(steps=args.steps, callback=cb)
+        run_full_analysis(steps=args.steps, callback=cb, target=args.target)
         return
 
     if not args.param:
@@ -1214,7 +1278,7 @@ def main():
     print(f"Sweeping {args.param} from {lo} to {hi} in {args.steps} steps...")
     t0 = time.time()
 
-    results = sweep_parameter(args.param, lo, hi, steps=args.steps, callback=cb)
+    results = sweep_parameter(args.param, lo, hi, steps=args.steps, callback=cb, target=args.target)
     path = export_sweep_csv(args.param, results)
     print(f"\nCSV exported: {path}  ({time.time() - t0:.1f}s)")
 

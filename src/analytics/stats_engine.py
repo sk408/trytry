@@ -155,6 +155,8 @@ def get_games_missed_streak(player_id: int, as_of_date: Optional[str] = None) ->
     # Count missed games after last played
     count = 0
     for r in rows:
+        if r["game_date"] is None or last_played["d"] is None:
+            continue
         if r["game_date"] > last_played["d"]:
             count += 1
         else:

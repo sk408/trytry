@@ -108,9 +108,24 @@ function classifyMsg(msg) {
 function startStyledSSE(url, logEl, onResult) {
     const es = new EventSource(url);
     es.onmessage = function(e) {
-        if (e.data === '[DONE]') {
+        let isDone = false;
+        if (e.data === '[DONE]') isDone = true;
+        if (e.data && e.data.includes && e.data.includes('Images: ')) {
+            const parts = e.data.split('/');
+            if (parts.length === 2 && parts[0].includes(':')) {
+                const current = parts[0].split(':')[1].trim();
+                const total = parts[1].trim();
+                if (current === total && parseInt(total) > 0) {
+                    isDone = true;
+                }
+            }
+        }
+        
+        if (isDone) {
             es.close();
             if (logEl) logEl.innerHTML += '<div class="log-done">✓ Done</div>';
+            // Call the callback to mark as not running
+            if (window._syncCompleteCallback) window._syncCompleteCallback();
             return;
         }
         if (e.data === '[CANCELLED]') {
@@ -148,6 +163,13 @@ function runSync(url) {
     if (currentES) currentES.close();
     var log = document.getElementById('syncLog');
     log.innerHTML = '';
+    
+    // Store callback globally for the SSE event handler to use
+    window._syncCompleteCallback = function() {
+        _syncRunning = false;
+        showToast('Sync complete', 'success');
+    };
+    
     currentES = startStyledSSE(url, log, function() {
         _syncRunning = false;
         showToast('Sync complete', 'success');

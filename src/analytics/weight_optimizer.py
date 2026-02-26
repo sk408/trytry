@@ -97,7 +97,19 @@ class VectorizedGames:
         ])
         self.combined_fatigue = self.home_fatigue + self.away_fatigue
 
-    def evaluate(self, w: WeightConfig) -> Dict[str, float]:
+        self.vegas_spread = np.array([g.vegas_spread for g in games])
+        self.vegas_home_ml = np.array([g.vegas_home_ml for g in games])
+        self.vegas_away_ml = np.array([g.vegas_away_ml for g in games])
+        
+        # Default to 50/50 split if missing to avoid division by zero or skewed data
+        self.spread_home_public = np.array([g.spread_home_public if g.spread_home_public else 50.0 for g in games], dtype=float)
+        self.spread_home_money = np.array([g.spread_home_money if g.spread_home_money else 50.0 for g in games], dtype=float)
+        
+        # Calculate sharp money edge (Money % - Ticket %)
+        # Positive means sharp money is on the home team
+        self.sharp_money_edge = (self.spread_home_money - self.spread_home_public) / 100.0
+
+    def evaluate(self, w: WeightConfig, target: str = "ats") -> Dict[str, float]:
         """Vectorized loss evaluation. Returns spread_mae, total_mae, winner_pct, loss."""
         # Defensive factor
         away_def_f = 1.0 + (self.away_def_factor_raw - 1.0) * w.def_factor_dampening
@@ -129,6 +141,11 @@ class VectorizedGames:
 
         # Hustle
         spread += self.hustle_effort_diff * w.hustle_effort_mult
+
+        # Sharp Money (Vegas)
+        # We only apply sharp money edge if there's an actual edge recorded (i.e. not the default 0.0)
+        # sharp_money_edge is positive when money > tickets for the home team.
+        spread += self.sharp_money_edge * w.sharp_money_weight
 
         # Total
         total = home_base + away_base
@@ -165,31 +182,130 @@ class VectorizedGames:
 
         # Composite loss
         loss = spread_mae * 1.0 + total_mae * 0.3 + (100.0 - winner_pct) * 0.1
+        
+        # Vegas Betting objectives (ATS, Edge Hit Rate)
+        if np.any(self.vegas_spread != 0.0):
+            v_mask = self.vegas_spread != 0.0
+            v_margin = -self.vegas_spread[v_mask]
+            p_spread = spread[v_mask]
+            a_spread = self.actual_spread[v_mask]
+            
+            pick_home = p_spread > v_margin
+            actual_home_cover = a_spread > v_margin
+            v_push = a_spread == v_margin
+            
+            covered = (pick_home == actual_home_cover) & ~v_push
+            ats_rate = np.mean(covered) * 100.0 if len(covered) > 0 else 50.0
+            
+            edge_mask = np.abs(p_spread - v_margin) >= w.ats_edge_threshold
+            if np.any(edge_mask):
+                edge_rate = np.mean(covered[edge_mask]) * 100.0
+            else:
+                edge_rate = 50.0
+                
+            # ROI calculation (approximate for ATS assuming -110 odds)
+            ats_roi = (ats_rate / 100.0 * 2.1 - 1.1) / 1.1 * 100.0
+            edge_roi = (edge_rate / 100.0 * 2.1 - 1.1) / 1.1 * 100.0
+            
+            # Moneyline calculations
+            ml_mask = (self.vegas_home_ml != 0) & (self.vegas_away_ml != 0)
+            if np.any(ml_mask):
+                h_ml = self.vegas_home_ml[ml_mask]
+                a_ml = self.vegas_away_ml[ml_mask]
+                p_spread_ml = spread[ml_mask]
+                a_spread_ml = self.actual_spread[ml_mask]
+                
+                # Model's pick based on spread (who does it think wins straight up?)
+                pick_home_ml = p_spread_ml > 0
+                actual_home_win_ml = a_spread_ml > 0
+                
+                # Calculate ML payout multipliers
+                # If ML is negative (e.g. -150), multiplier is 1 + 100/abs(ML)
+                # If ML is positive (e.g. +130), multiplier is 1 + ML/100
+                h_mult = np.where(h_ml < 0, 1.0 + 100.0 / np.abs(h_ml), 1.0 + h_ml / 100.0)
+                a_mult = np.where(a_ml < 0, 1.0 + 100.0 / np.abs(a_ml), 1.0 + a_ml / 100.0)
+                
+                # Winnings: if pick wins, profit = mult - 1. If pick loses, profit = -1.
+                h_profit = np.where(pick_home_ml & actual_home_win_ml, h_mult - 1.0, 
+                           np.where(pick_home_ml & ~actual_home_win_ml, -1.0, 0.0))
+                a_profit = np.where(~pick_home_ml & ~actual_home_win_ml, a_mult - 1.0, 
+                           np.where(~pick_home_ml & actual_home_win_ml, -1.0, 0.0))
+                
+                total_profit = h_profit + a_profit
+                
+                ml_win_rate = np.mean((pick_home_ml & actual_home_win_ml) | (~pick_home_ml & ~actual_home_win_ml)) * 100.0
+                ml_roi = np.mean(total_profit) * 100.0
+            else:
+                ml_win_rate = winner_pct
+                ml_roi = -4.54 # Default negative
+            
+            if target == "ats":
+                # Strongly penalize losing to Vegas and reward beating it
+                loss += max(0, 52.5 - ats_rate) * 0.5 
+                loss += max(0, 52.5 - edge_rate) * 0.5
+                
+                # Reward higher hit rates
+                loss -= (ats_rate * 0.05)
+                loss -= (edge_rate * 0.05)
+                
+                if ats_roi > 0: loss -= ats_roi * 0.05
+                if edge_roi > 0: loss -= edge_roi * 0.05
+                
+            elif target == "roi":
+                # Optimize purely for max ROI %
+                loss -= ats_roi * 0.2
+                loss -= edge_roi * 0.2
+                # Still penalize horrible hit rates
+                loss += max(0, 52.5 - ats_rate) * 0.2
+                
+            elif target == "ml":
+                # Optimize for Moneyline ROI
+                loss -= ml_roi * 0.2
+                # Penalize low win rates (below 60% is bad for ML since favs win a lot)
+                loss += max(0, 60.0 - ml_win_rate) * 0.5
+                
+        else:
+            ats_rate = 50.0
+            edge_rate = 50.0
+            ats_roi = -4.54
+            edge_roi = -4.54
+            ml_win_rate = winner_pct
+            ml_roi = -4.54
 
         return {
             "spread_mae": spread_mae,
             "total_mae": total_mae,
             "winner_pct": winner_pct,
+            "ats_rate": ats_rate,
+            "edge_rate": edge_rate,
+            "ats_roi": ats_roi,
+            "edge_roi": edge_roi,
+            "ml_win_rate": ml_win_rate,
+            "ml_roi": ml_roi,
             "loss": loss,
         }
 
-
-def optimize_weights(games: List[PrecomputedGame], n_trials: int = 200,
-                     callback: Optional[Callable] = None) -> Dict[str, Any]:
+    
+def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
+                     callback: Optional[Callable] = None,
+                     is_cancelled: Optional[Callable[[], bool]] = None,
+                     target: str = "ats") -> Dict[str, Any]:
     """Run Optuna TPE optimization on global weights."""
     vg = VectorizedGames(games)
 
     # Baseline
     baseline_w = get_weight_config()
-    baseline_result = vg.evaluate(baseline_w)
+    baseline_result = vg.evaluate(baseline_w, target=target)
     baseline_loss = baseline_result["loss"]
 
     if callback:
         callback(f"Baseline: MAE={baseline_result['spread_mae']:.2f}, "
-                 f"Winner={baseline_result['winner_pct']:.1f}%, Loss={baseline_loss:.3f}")
+                 f"Winner={baseline_result['winner_pct']:.1f}%, ATS={baseline_result['ats_rate']:.1f}%, "
+                 f"ML ROI={baseline_result['ml_roi']:.1f}%, Loss={baseline_loss:.3f}")
 
     best_w = baseline_w
     best_loss = baseline_loss
+    best_result = baseline_result
 
     try:
         import optuna
@@ -203,24 +319,53 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 200,
             params["espn_weight"] = 1.0 - params.get("espn_model_weight", 0.8)
 
             w = WeightConfig.from_dict({**baseline_w.to_dict(), **params})
-            result = vg.evaluate(w)
+            result = vg.evaluate(w, target=target)
+            # Store result in trial for callback
+            trial.set_user_attr("result", result)
             return result["loss"]
 
         sampler = optuna.samplers.TPESampler(seed=42)
         study = optuna.create_study(direction="minimize", sampler=sampler)
 
         def trial_callback(study, trial):
+            if is_cancelled and is_cancelled():
+                if callback:
+                    callback("Optimization cancelled by user. Stopping gracefully...")
+                study.stop()
+                return
+
             if trial.number % 25 == 0 or trial.value < best_loss:
                 if callback:
-                    callback(f"Trial {trial.number}/{n_trials}: loss={trial.value:.3f}")
+                    res = trial.user_attrs.get("result", {})
+                    if target == "ml":
+                        win = res.get('ml_win_rate', 0)
+                        roi = res.get('ml_roi', -4.54)
+                        callback(f"Trial {trial.number}/{n_trials}: loss={trial.value:.3f} "
+                                 f"(ML Win={win:.1f}%, ML ROI={roi:.1f}%)")
+                    else:
+                        ats = res.get('ats_rate', 0)
+                        roi = res.get('ats_roi', -4.54)
+                        callback(f"Trial {trial.number}/{n_trials}: loss={trial.value:.3f} "
+                                 f"(ATS={ats:.1f}%, ROI={roi:.1f}%)")
 
         study.optimize(objective, n_trials=n_trials, callbacks=[trial_callback])
+
+        try:
+            if len(study.trials) > 0 and callback:
+                import optuna.importance
+                importances = optuna.importance.get_param_importances(study)
+                top_params = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:5]
+                param_str = ", ".join([f"{k}: {v:.2f}" for k, v in top_params])
+                callback(f"Top 5 ROI impact parameters: {param_str}")
+        except Exception:
+            pass
 
         if study.best_value < baseline_loss:
             best_params = study.best_params
             best_params["espn_weight"] = 1.0 - best_params.get("espn_model_weight", 0.8)
             best_w = WeightConfig.from_dict({**baseline_w.to_dict(), **best_params})
             best_loss = study.best_value
+            best_result = vg.evaluate(best_w, target=target)
 
     except ImportError:
         if callback:
@@ -232,10 +377,11 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 200,
                 params[key] = random.uniform(lo, hi)
             params["espn_weight"] = 1.0 - params.get("espn_model_weight", 0.8)
             w = WeightConfig.from_dict({**baseline_w.to_dict(), **params})
-            result = vg.evaluate(w)
+            result = vg.evaluate(w, target=target)
             if result["loss"] < best_loss:
                 best_w = w
                 best_loss = result["loss"]
+                best_result = result
             if callback and (i + 1) % 25 == 0:
                 callback(f"Random trial {i + 1}/{n_trials}: best_loss={best_loss:.3f}")
 
@@ -244,12 +390,13 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 200,
         save_weight_config(best_w)
         invalidate_weight_cache()
         if callback:
-            callback(f"Saved optimized weights (loss {baseline_loss:.3f} → {best_loss:.3f})")
+            callback(f"Saved optimized weights (loss {baseline_loss:.3f} → {best_loss:.3f}, "
+                     f"ATS: {baseline_result['ats_rate']:.1f}% → {best_result['ats_rate']:.1f}%)")
     else:
         if callback:
             callback("No improvement found, keeping current weights")
 
-    final = vg.evaluate(best_w)
+    final = vg.evaluate(best_w, target=target)
     return {
         "baseline_loss": baseline_loss,
         "best_loss": best_loss,
@@ -260,7 +407,15 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 200,
 
 def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
                         callback: Optional[Callable] = None) -> Dict[str, Any]:
-    """Per-team weight refinement (100 random trials per team)."""
+    """Per-team weight refinement with expanded tunable parameter set.
+
+    Changes from v1:
+    - 8 tunable params (was 4): adds rating_matchup_mult, clutch_scale,
+      hustle_effort_mult, sharp_money_weight
+    - Minimum 15 games per team (was 10) for more robust holdout
+    - Holdout minimum raised to 7 games (was 5) for reliable evaluation
+    - Perturbation range scales with distance from optimizer range midpoint
+    """
     global_w = get_weight_config()
     vg_all = VectorizedGames(games)
     global_result = vg_all.evaluate(global_w)
@@ -279,16 +434,17 @@ def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
         # Filter games involving this team
         team_games = [g for g in games
                       if g.home_team_id == team_id or g.away_team_id == team_id]
-        if len(team_games) < 10:
+        if len(team_games) < 15:
             continue
 
-        # Sort by date, split train/holdout
+        # Sort by date, split train/holdout (min 7 holdout games)
         team_games.sort(key=lambda g: g.game_date)
-        holdout_n = min(5, len(team_games) // 4)
+        holdout_n = max(7, len(team_games) // 4)
+        holdout_n = min(holdout_n, len(team_games) // 2)  # never exceed half
         train_games = team_games[:-holdout_n] if holdout_n > 0 else team_games
         holdout_games = team_games[-holdout_n:] if holdout_n > 0 else []
 
-        if not holdout_games:
+        if len(holdout_games) < 7:
             continue
 
         vg_holdout = VectorizedGames(holdout_games)
@@ -297,15 +453,20 @@ def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
         best_team_w = global_w
         best_team_loss = global_holdout_loss
 
-        tunable_keys = ["def_factor_dampening", "turnover_margin_mult",
-                        "four_factors_scale", "pace_mult"]
+        tunable_keys = [
+            "def_factor_dampening", "turnover_margin_mult",
+            "four_factors_scale", "pace_mult",
+            "rating_matchup_mult", "clutch_scale",
+            "hustle_effort_mult", "sharp_money_weight",
+        ]
 
         for _ in range(n_trials):
             params = global_w.to_dict()
             for key in tunable_keys:
                 lo, hi = OPTIMIZER_RANGES.get(key, (params[key] * 0.8, params[key] * 1.2))
-                # Perturb by ±20%
-                delta = params[key] * 0.2
+                # Perturb by ±20% of the optimizer range width (not value)
+                range_width = hi - lo
+                delta = range_width * 0.20
                 val = params[key] + random.uniform(-delta, delta)
                 params[key] = max(lo, min(hi, val))
 
@@ -437,6 +598,8 @@ def compute_feature_importance(games: List[PrecomputedGame],
         ("steals_penalty", "steals_penalty", 0.0),
         ("blocks_penalty", "blocks_penalty", 0.0),
         ("oreb_mult", "oreb_mult", 0.0),
+        ("sharp_money_weight", "sharp_money_weight", 0.0),
+        ("ats_edge_threshold", "ats_edge_threshold", 3.0),
     ]
 
     results = []

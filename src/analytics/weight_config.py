@@ -66,18 +66,39 @@ class WeightConfig:
     ml_disagree_damp: float = 0.5
     ml_disagree_threshold: float = 6.0
 
+    # Sharp Money
+    sharp_money_weight: float = 0.0
+
+    # Betting edge filter — minimum spread edge (in points) to qualify as a
+    # "high-confidence" ATS pick for edge_rate / edge_roi evaluation.
+    ats_edge_threshold: float = 3.0
+
     # Clamps
     spread_clamp: float = 25.0
     total_min: float = 140.0
     total_max: float = 280.0
 
-    def blend(self, other: "WeightConfig") -> "WeightConfig":
-        """Average all fields with another WeightConfig."""
+    def blend(self, other: "WeightConfig",
+              self_games: int = 0, other_games: int = 0) -> "WeightConfig":
+        """Blend two WeightConfigs weighted by games_analyzed.
+
+        If games counts are provided, the team with more analysed games
+        gets proportionally higher influence. Falls back to simple average
+        when no counts are provided (backward-compatible).
+        """
+        total = self_games + other_games
+        if total > 0:
+            w_self = self_games / total
+            w_other = other_games / total
+        else:
+            w_self = 0.5
+            w_other = 0.5
+
         new_data = {}
         for f in fields(self):
             v1 = getattr(self, f.name)
             v2 = getattr(other, f.name)
-            new_data[f.name] = (v1 + v2) / 2.0
+            new_data[f.name] = v1 * w_self + v2 * w_other
         return WeightConfig(**new_data)
 
     def to_dict(self) -> Dict[str, float]:
@@ -191,27 +212,29 @@ def invalidate_weight_cache():
 # Parameters that should always be positive have floor >= 0.
 # spread_clamp must stay large enough to distinguish blowouts from close games.
 OPTIMIZER_RANGES = {
-    "def_factor_dampening": (0.3, 1.2),      # dampens toward 1.0; >1 amplifies (allow slight)
-    "turnover_margin_mult": (0.0, 1.5),      # more TOs = worse; must be positive
-    "rebound_diff_mult": (0.0, 0.3),         # more rebounds = better; must be positive
-    "rating_matchup_mult": (0.1, 1.5),       # better matchup edge = higher spread; must be positive
-    "four_factors_scale": (80.0, 350.0),      # scales weighted FF edge into spread points
-    "clutch_scale": (0.01, 0.3),             # clutch rating impact; small positive
-    "hustle_effort_mult": (0.0, 0.05),       # hustle has small positive effect
-    "pace_mult": (0.02, 0.3),               # faster pace → more scoring; must be positive
-    "fatigue_total_mult": (0.1, 1.0),        # fatigue reduces total; must be positive
-    "espn_model_weight": (0.50, 0.95),       # model weight in ESPN blend; >0.5 means model-dominant
-    "ml_ensemble_weight": (0.0, 0.50),       # ML blend weight; must be non-negative
-    "ml_disagree_damp": (0.2, 1.0),          # dampening factor; ≤1.0 to dampen, not amplify
-    "spread_clamp": (15.0, 30.0),            # hard cap on spreads; must be high enough for blowouts
-    "ff_efg_weight": (0.1, 1.0),             # relative weight of eFG% in FF composite
-    "ff_tov_weight": (0.05, 0.8),            # relative weight of TOV% in FF composite
-    "ff_oreb_weight": (0.05, 0.6),           # relative weight of OREB% in FF composite
-    "ff_fta_weight": (0.05, 0.5),            # relative weight of FTA rate in FF composite
-    "blocks_penalty": (0.0, 0.5),            # blocks reduce total; must be non-negative
-    "steals_penalty": (0.0, 0.5),            # steals reduce total; must be non-negative
-    "oreb_mult": (0.0, 0.5),                # OREBs boost total; must be non-negative
-    "pace_baseline": (90.0, 105.0),           # league-average pace reference point
+    "def_factor_dampening": (0.1, 3.0),      # sensitivity: optimal ~1.5, was capped at 2.0
+    "turnover_margin_mult": (-1.0, 3.0),     # sweeps showed value outside original bounds
+    "rebound_diff_mult": (-2.0, 2.0),        # sensitivity: optimal ~-1.0, sign can reverse
+    "rating_matchup_mult": (-2.0, 2.0),      # sensitivity: optimal ~-1.1, sign can reverse
+    "four_factors_scale": (50.0, 1500.0),    # scales weighted FF edge into spread points
+    "clutch_scale": (0.01, 2.0),             # clutch rating impact
+    "hustle_effort_mult": (-1.0, 5.0),       # sensitivity: optimal ~3.0, was capped at 2.0
+    "pace_mult": (-2.0, 1.0),
+    "fatigue_total_mult": (-1.0, 2.0),
+    "espn_model_weight": (0.0, 1.0),         # model weight in ESPN blend
+    "ml_ensemble_weight": (-2.0, 2.0),       # ML blend weight
+    "ml_disagree_damp": (0.0, 2.0),
+    "spread_clamp": (5.0, 40.0),             # hard cap on spreads (keep wide — big games matter)
+    "ff_efg_weight": (0.0, 3.0),             # sensitivity: optimal ~1.85, was capped at 2.0
+    "ff_tov_weight": (0.0, 2.0),             # relative weight of TOV% in FF composite
+    "ff_oreb_weight": (0.0, 2.0),            # sensitivity: optimal ~1.2, was capped at 1.5
+    "ff_fta_weight": (0.0, 2.0),             # relative weight of FTA rate in FF composite
+    "blocks_penalty": (-1.0, 2.0),
+    "steals_penalty": (-1.0, 2.0),
+    "oreb_mult": (-1.0, 1.0),
+    "pace_baseline": (80.0, 115.0),          # league-average pace reference point
+    "sharp_money_weight": (-2.0, 5.0),       # influence of sharp money vs public
+    "ats_edge_threshold": (1.0, 6.0),         # min spread edge for "confident" pick
 }
 
 

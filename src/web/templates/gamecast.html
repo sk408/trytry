@@ -27,7 +27,7 @@
         <!-- Entering Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#22c55e; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">IN</span>
-            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'block', 100);">
+            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'inline-block', 100);">
             <span id="subInName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subInStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -39,7 +39,7 @@
         <!-- Leaving Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#ef4444; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">OUT</span>
-            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'block', 100);">
+            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'inline-block', 100);">
             <span id="subOutName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subOutStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -153,6 +153,29 @@
             <h2>Vegas Odds</h2>
             <div id="oddsInfo" class="odds-grid mt-2">
                 <div class="text-muted text-sm" style="grid-column: 1 / -1;">Loading...</div>
+            </div>
+        </div>
+        
+        <!-- Game Flow Stats -->
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>Game Flow Stats</h2>
+            <div style="display:flex; justify-content:space-around; align-items:center; text-align:center; padding: 10px 0;">
+                <div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Drives Scored</div>
+                    <div style="font-size: 1.5rem; font-weight: bold; margin-top: 5px;">
+                        <span id="awayDrives" style="color: var(--team-away);">0</span> - <span id="homeDrives" style="color: var(--team-home);">0</span>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Poss Scored</div>
+                    <div style="font-size: 1.5rem; font-weight: bold; margin-top: 5px;">
+                        <span id="awayPoss" style="color: var(--team-away);">0</span> - <span id="homePoss" style="color: var(--team-home);">0</span>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Current Run</div>
+                    <div id="currentRun" style="font-size: 1.2rem; font-weight: bold; margin-top: 5px; color: var(--text);">None</div>
+                </div>
             </div>
         </div>
     </div>
@@ -773,6 +796,34 @@ function updateScoreboard(s) {
     document.getElementById('homeBonus').style.visibility = s.home_bonus ? 'visible' : 'hidden';
     document.getElementById('awayBonus').style.visibility = s.away_bonus ? 'visible' : 'hidden';
 
+    // Game Stats
+    if (document.getElementById('homeDrives')) {
+        const hScored = s.home_drives_scored || 0;
+        const hTotal = s.home_drives || 0;
+        const aScored = s.away_drives_scored || 0;
+        const aTotal = s.away_drives || 0;
+        
+        document.getElementById('homeDrives').textContent = `${hScored}/${hTotal}`;
+        document.getElementById('awayDrives').textContent = `${aScored}/${aTotal}`;
+        
+        const hPossScored = s.home_poss_scored || 0;
+        const hPossTotal = s.home_poss || 0;
+        const aPossScored = s.away_poss_scored || 0;
+        const aPossTotal = s.away_poss || 0;
+        
+        document.getElementById('homePoss').textContent = `${hPossScored}/${hPossTotal}`;
+        document.getElementById('awayPoss').textContent = `${aPossScored}/${aPossTotal}`;
+        
+        const runEl = document.getElementById('currentRun');
+        if (s.current_run) {
+            runEl.textContent = s.current_run;
+            runEl.style.color = 'var(--warning)';
+        } else {
+            runEl.textContent = 'None';
+            runEl.style.color = 'var(--text)';
+        }
+    }
+
     // Timeouts
     const renderTimeouts = (containerId, count) => {
         const container = document.getElementById(containerId);
@@ -921,7 +972,7 @@ function fillBoxTable(tableId, players) {
     if (!tbody) return;
     tbody.innerHTML = players.map(function(p) {
         const photo = p.headshot ?
-            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.onerror=null; this.src=\'/images/players/fallback.png\'; this.style.display=this.src.includes(\'fallback\') ? \'none\' : \'inline-block\';">' :
+            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.onerror=null; this.src=\'/images/players/fallback.png\'; setTimeout(()=>this.style.display=this.src.includes(\'fallback\') ? \'none\' : \'inline-block\', 100);">' :
             '<div style="width:30px;height:30px;border-radius:50%;background-color:#1e293b;box-shadow:0 2px 4px rgba(0,0,0,0.3); display:inline-block; vertical-align:middle;"></div>';
         const activeDot = p.active ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:#22c55e;box-shadow:0 0 6px #22c55e;margin-right:6px;vertical-align:middle;"></span>' : '';
         return '<tr>' +

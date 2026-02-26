@@ -54,7 +54,6 @@ class MainWindow(QMainWindow):
     def _init_tabs(self):
         """Create all tabs."""
         from src.ui.views.dashboard_view import DashboardView
-        from src.ui.views.live_view import LiveView
         from src.ui.views.gamecast_view import GamecastView
         from src.ui.views.players_view import PlayersView
         from src.ui.views.matchup_view import MatchupView
@@ -63,10 +62,12 @@ class MainWindow(QMainWindow):
         from src.ui.views.automatic_view import AutomaticView
         from src.ui.views.snapshots_view import SnapshotsView
         from src.ui.views.autotune_view import AutotuneView
+        from src.ui.views.sensitivity_view import SensitivityView
         from src.ui.views.admin_view import AdminView
+        from src.ui.views.overview_view import OverviewView
 
         self.dashboard = DashboardView(self)
-        self.live_view = LiveView(self)
+        self.overview = OverviewView(self)
         self.gamecast = GamecastView(self)
         self.players = PlayersView(self)
         self.matchup = MatchupView(self)
@@ -75,10 +76,11 @@ class MainWindow(QMainWindow):
         self.automatic = AutomaticView(self)
         self.snapshots = SnapshotsView(self)
         self.autotune = AutotuneView(self)
+        self.sensitivity = SensitivityView(self)
         self.admin = AdminView(self)
 
         self.tabs.addTab(self.dashboard, "Dashboard")
-        self.tabs.addTab(self.live_view, "Live Games")
+        self.tabs.addTab(self.overview, "Today's Overview")
         self.tabs.addTab(self.gamecast, "Gamecast")
         self.tabs.addTab(self.players, "Players")
         self.tabs.addTab(self.matchup, "Matchups")
@@ -87,6 +89,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.automatic, "Automatic")
         self.tabs.addTab(self.snapshots, "Snapshots")
         self.tabs.addTab(self.autotune, "Autotune")
+        self.tabs.addTab(self.sensitivity, "Sensitivity")
         self.tabs.addTab(self.admin, "Admin")
 
     def _init_notifications(self):

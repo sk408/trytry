@@ -32,7 +32,7 @@ class NotificationBell(QPushButton):
             "QPushButton { background: transparent; border: none; font-size: 18px; }"
         )
         self._count = 0
-        self._panel = NotificationPanel(parent)
+        self._panel = NotificationPanel(parent, bell=self)
         self._panel.hide()
 
         self.clicked.connect(self._toggle_panel)
@@ -91,8 +91,9 @@ class NotificationBell(QPushButton):
 class NotificationPanel(QFrame):
     """Popup panel showing recent notifications."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, bell=None):
         super().__init__(parent, Qt.WindowType.Popup)
+        self.bell = bell
         self.setFixedSize(320, 400)
         self.setStyleSheet(
             "NotificationPanel { background: #1e293b; border: 1px solid #334155; "
@@ -204,7 +205,9 @@ class NotificationPanel(QFrame):
             from src.notifications.service import mark_all_read
             mark_all_read()
             self.refresh()
-            if hasattr(self.parent(), "_poll"):
+            if self.bell and hasattr(self.bell, "_poll"):
+                self.bell._poll()
+            elif hasattr(self.parent(), "_poll"):
                 self.parent()._poll()
         except Exception as e:
             logger.error(f"Mark all read error: {e}")

@@ -69,7 +69,15 @@ class _GameCache:
             self._state[game_id] = state
 
     def is_final(self, game_id: str) -> bool:
-        return self._state.get(game_id) == "post"
+        state = self._state.get(game_id)
+        if state == "post":
+            return True
+        # also check data just in case state got out of sync
+        if game_id in self._data:
+            if self._data[game_id].get("status_state") == "post":
+                self._state[game_id] = "post"
+                return True
+        return False
 
     def _ttl_for(self, game_id: str) -> float:
         s = self._state.get(game_id, "")
@@ -95,7 +103,20 @@ _cache = _GameCache()
 def _fetch_and_parse(game_id: str) -> dict:
     """Network call + parse — runs off main thread. Returns parsed dict."""
     from src.data.gamecast import fetch_espn_game_summary, normalize_espn_abbr, get_actionnetwork_odds
-    summary = fetch_espn_game_summary(game_id)
+    
+    # Retry logic since this runs on a background thread anyway
+    import time
+    summary = {}
+    for attempt in range(3):
+        try:
+            summary = fetch_espn_game_summary(game_id)
+            if summary and "header" in summary:
+                break
+        except Exception as e:
+            if attempt == 2:
+                logger.error(f"Failed to fetch summary for {game_id} after 3 attempts: {e}")
+            else:
+                time.sleep(1)
 
     # Detect game state from header
     header = summary.get("header", {})
@@ -187,8 +208,15 @@ class _PreloadRunnable(QRunnable):
 
     def run(self):
         try:
+            # First check if we're shutting down (crude but effective)
+            import sys
+            if not getattr(sys, "modules", None):
+                return
+                
             if _cache.get(self.game_id) is not None:
-                return  # already cached
+                cached = _cache.get(self.game_id)
+                if cached.get("status_state") != "in":
+                    return  # already cached
             data = _fetch_and_parse(self.game_id)
             state = data.get("status_state", "")
             _cache.put(self.game_id, data, state)
@@ -360,7 +388,12 @@ class GamecastView(QWidget):
     def _load_games(self):
         """Load today's games into combo — runs ESPN scoreboard on background thread."""
         self.refresh_btn.setEnabled(False)
-        self._status_hint.setText("Loading games...")
+        
+        if self.game_combo.count() == 0:
+            self._status_hint.setText("Loading games...")
+        else:
+            self._status_hint.setText("Refreshing...")
+
         self._launch_worker(_ScoreboardWorker(), self._on_scoreboard_loaded,
                             self._on_scoreboard_error)
 
@@ -371,8 +404,17 @@ class GamecastView(QWidget):
 
         self.game_combo.blockSignals(True)
         prev_id = self._current_game_id
+        
+        # Keep track of current index if we have one
+        current_idx = self.game_combo.currentIndex()
+
         self.game_combo.clear()
         self._game_ids.clear()
+        
+        has_added_games = False
+
+        # Add an initial "Select Game" to prevent it from automatically triggering the first item
+        self.game_combo.addItem("— Select Game —", None)
 
         for g in games:
             status = g.get("status", "")
@@ -409,14 +451,19 @@ class GamecastView(QWidget):
             espn_id = str(g.get("espn_id", ""))
             self.game_combo.addItem(label, espn_id)
             self._game_ids.append(espn_id)
+            has_added_games = True
 
         self.game_combo.blockSignals(False)
 
-        # Restore previous selection or pick first
+        # Restore previous selection or pick first valid one if not previously selected
         if prev_id and prev_id in self._game_ids:
-            self.game_combo.setCurrentIndex(self._game_ids.index(prev_id))
-        elif self.game_combo.count() > 0:
-            self._on_game_selected(0)
+            # +1 because of "Select Game" at index 0
+            self.game_combo.setCurrentIndex(self._game_ids.index(prev_id) + 1)
+        elif current_idx > 0 and self.game_combo.count() > current_idx:
+            self.game_combo.setCurrentIndex(current_idx)
+        elif not prev_id:
+             # Just leave it on "Select Game" so it doesn't auto-load
+             self.game_combo.setCurrentIndex(0)
 
         # ── Preload all games in background ──
         self._preload_all_games()
@@ -431,6 +478,12 @@ class GamecastView(QWidget):
         for gid in self._game_ids:
             if _cache.is_final(gid):
                 continue  # already finalized, skip
+                
+            # If it's cached and pre-game, don't continually pre-load unless we need to
+            cached = _cache.get(gid)
+            if cached and cached.get("status_state") == "pre":
+                 continue
+                 
             self._pool.start(_PreloadRunnable(gid))
 
     # ──────────────────────── GAME SELECTION ────────────────────────
@@ -440,8 +493,43 @@ class GamecastView(QWidget):
             return
         game_id = self.game_combo.itemData(idx)
         if not game_id:
+            # Selected the empty "Select Game" option
+            self._current_game_id = None
+            self.live_timer.stop()
+            self._status_hint.setText("")
+            self.court.clear_shots()
+            self.info_panel.update_info(None, "HOME", "AWAY", 0, 0, 50.0, None)
+            
+            # Clear scoreboard and other parts
+            self.scoreboard.update_scores(
+                home_abbr="HOME",
+                home_name="Home Team",
+                away_abbr="AWAY",
+                away_name="Away Team",
+                home_score=0,
+                away_score=0,
+                period=0,
+                clock="12:00",
+                status_text="Select a game",
+                status_state="pre"
+            )
+            self.scoreboard.update_odds({})
+            self.play_feed.clear()
+            self.box_tabs.setTabText(0, "AWAY")
+            self.box_tabs.setTabText(1, "HOME")
+            self._away_box.setRowCount(0)
+            self._home_box.setRowCount(0)
             return
-        self._current_game_id = str(game_id)
+            
+        game_id = str(game_id)
+            
+        # Prevent re-fetching if we're already viewing this game
+        if game_id == self._current_game_id:
+            # If timer is active and game id matches, no-op.
+            if self.live_timer.isActive() or _cache.is_final(game_id):
+                return
+            
+        self._current_game_id = game_id
         self._known_play_count = 0
         self.court.clear_shots()
 
@@ -449,6 +537,13 @@ class GamecastView(QWidget):
         cached = _cache.get(self._current_game_id)
         if cached:
             self._apply_data(cached)
+            state = cached.get("status_state", "")
+            if state == "post":
+                self._status_hint.setText("Final")
+                self.live_timer.stop()
+            else:
+                self._status_hint.setText("Refreshing...")
+                self._fetch_game(self._current_game_id)
         else:
             self._status_hint.setText("Loading...")
             self._fetch_game(self._current_game_id)
@@ -468,8 +563,15 @@ class GamecastView(QWidget):
     def _on_game_fetched(self, game_id: str, data: dict):
         """Game data arrived — if it's still the selected game, update UI."""
         if game_id == self._current_game_id:
-            self._status_hint.setText("")
+            state = data.get("status_state", "")
+            if state == "post":
+                self._status_hint.setText("Final")
+            else:
+                self._status_hint.setText("")
             self._apply_data(data)
+            
+            # Since state might have changed, ensure timer is updated
+            self._start_smart_timer()
 
     def _on_game_fetch_error(self, game_id: str, msg: str):
         if game_id == self._current_game_id:
@@ -496,8 +598,16 @@ class GamecastView(QWidget):
             self.live_timer.stop()
             self._status_hint.setText("Final")
             return
+            
         cached = _cache.get(gid)
         state = cached.get("status_state", "") if cached else ""
+        if state == "post":
+            # If we know it's final now, update cache and stop
+            _cache._state[gid] = "post"
+            self.live_timer.stop()
+            self._status_hint.setText("Final")
+            return
+            
         if state == "in":
             self.live_timer.start(15_000)
         elif state == "pre":
@@ -715,13 +825,107 @@ class GamecastView(QWidget):
 
         self._known_play_count = len(flat_plays)
 
-        # ── Info panel (prediction + odds) ──
+        # ── Info panel (prediction + odds + flow) ──
         model_spread = self._update_prediction(
             home_team_id, away_team_id,
             home_score, away_score,
             status_state, period, clock_str,
         )
         self.info_panel.update_odds(odds)
+
+        home_espn_id = home_comp.get("team", {}).get("id", "")
+        away_espn_id = away_comp.get("team", {}).get("id", "")
+
+        # Calculate Game Flow Stats
+        home_drives = 0
+        away_drives = 0
+        home_drives_scored = 0
+        away_drives_scored = 0
+        current_run_team = None
+        current_run_pts = 0
+
+        for p in flat_plays:
+            text = p.get("text", "").lower()
+            espn_tid = str(p.get("team", {}).get("id", ""))
+            team = home_team_id if espn_tid == home_espn_id else (away_team_id if espn_tid == away_espn_id else None)
+            scoring = p.get("scoringPlay")
+            
+            if "driving" in text:
+                if team == home_team_id:
+                    home_drives += 1
+                    if scoring:
+                        home_drives_scored += 1
+                elif team == away_team_id:
+                    away_drives += 1
+                    if scoring:
+                        away_drives_scored += 1
+                        
+            if not scoring:
+                continue
+            
+            pts = 0
+            if "free throw" in text:
+                pts = 1
+            elif "3-pt" in text or "three point" in text:
+                pts = 3
+            else:
+                pts = 2
+                
+            if team == current_run_team:
+                current_run_pts += pts
+            else:
+                current_run_team = team
+                current_run_pts = pts
+                
+        run_text = ""
+        if current_run_pts >= 5 and current_run_team:
+            run_team_abbr = home_abbr if current_run_team == home_team_id else away_abbr
+            run_text = f"{run_team_abbr} on a {current_run_pts}-0 run"
+            
+        # Calculate Game Possessions from Team Box Score
+        box_teams = boxscore.get("teams", []) if isinstance(boxscore, dict) else []
+        home_poss = 0
+        away_poss = 0
+        home_poss_scored = 0
+        away_poss_scored = 0
+        for tb in box_teams:
+            tb_tid = str(tb.get("team", {}).get("id", ""))
+            side = "home" if tb_tid == home_espn_id else "away"
+            stats_blocks = tb.get("statistics", [])
+            if not stats_blocks:
+                continue
+            stats_dict = {}
+            for s in stats_blocks:
+                if "abbreviation" in s:
+                    stats_dict[s["abbreviation"]] = s.get("displayValue")
+                elif "label" in s:
+                    stats_dict[s["label"]] = s.get("displayValue")
+            
+            try:
+                fg = stats_dict.get("FG", "0-0").split("-")
+                fgm = int(fg[0]) if len(fg) > 0 and fg[0].isdigit() else 0
+                fga = int(fg[1]) if len(fg) > 1 and fg[1].isdigit() else 0
+                
+                ft = stats_dict.get("FT", "0-0").split("-")
+                ftm = int(ft[0]) if len(ft) > 0 and ft[0].isdigit() else 0
+                fta = int(ft[1]) if len(ft) > 1 and ft[1].isdigit() else 0
+                
+                orb = int(stats_dict.get("OR", stats_dict.get("Offensive Rebounds", 0)))
+                tov = int(stats_dict.get("TO", stats_dict.get("Turnovers", 0)))
+                
+                poss = round(fga + 0.44 * fta - orb + tov)
+                scored = round(fgm + (ftm / 2))
+                
+                if side == "home":
+                    home_poss = poss
+                    home_poss_scored = scored
+                else:
+                    away_poss = poss
+                    away_poss_scored = scored
+            except Exception:
+                pass
+            
+        self.info_panel.update_flow_stats(f"{home_drives_scored}/{home_drives}", f"{away_drives_scored}/{away_drives}", run_text, f"{home_poss_scored}/{home_poss}", f"{away_poss_scored}/{away_poss}")
 
         # Win probability — prefer model spread; fall back to ESPN predictor
         if model_spread is not None and model_spread != 0:
@@ -752,8 +956,6 @@ class GamecastView(QWidget):
         self._fill_box_table(boxscore, competitors, is_home=True, table=self._home_box)
 
         # ── Play feed ──
-        home_espn_id = home_comp.get("team", {}).get("id", "")
-        away_espn_id = away_comp.get("team", {}).get("id", "")
         self.play_feed.set_teams(
             home_team_id, away_team_id, home_abbr, away_abbr,
             home_espn_id, away_espn_id,

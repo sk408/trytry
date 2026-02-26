@@ -239,8 +239,11 @@ def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
         if match:
             odds_list = g.get("odds", [])
             if odds_list:
-                # Typically index 0 is the consensus or primary book (like DraftKings)
-                o = odds_list[0]
+                # Prefer live odds if available, then fallback to pre-game
+                live_odds = [o for o in odds_list if o.get("type") == "live"]
+                game_odds = [o for o in odds_list if o.get("type") == "game"]
+                
+                o = live_odds[0] if live_odds else (game_odds[0] if game_odds else odds_list[0])
                 
                 # Figure out which spread goes to which team based on IDs
                 home_team_id = g.get("home_team_id")
@@ -256,7 +259,7 @@ def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
                     "over_under": o.get("total"),
                     "home_moneyline": o.get("ml_home"),
                     "away_moneyline": o.get("ml_away"),
-                    "provider": "Action Network",
+                    "provider": "Action Network" + (" (Live)" if live_odds else ""),
                 }
             
     return {}

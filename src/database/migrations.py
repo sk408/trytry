@@ -302,6 +302,14 @@ CREATE TABLE IF NOT EXISTS game_odds (
     fetched_at TEXT,
     opening_spread REAL,
     opening_moneyline INTEGER,
+    spread_home_public INTEGER,
+    spread_away_public INTEGER,
+    spread_home_money INTEGER,
+    spread_away_money INTEGER,
+    ml_home_public INTEGER,
+    ml_away_public INTEGER,
+    ml_home_money INTEGER,
+    ml_away_money INTEGER,
     PRIMARY KEY (game_date, home_team_id, away_team_id),
     FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
     FOREIGN KEY (away_team_id) REFERENCES teams(team_id)
@@ -337,6 +345,14 @@ def init_db():
 def _run_column_migrations():
     """Add columns that may be missing in older databases."""
     _add_column_if_missing("injuries", "expected_return", "TEXT DEFAULT ''")
+    _add_column_if_missing("game_odds", "spread_home_public", "INTEGER")
+    _add_column_if_missing("game_odds", "spread_away_public", "INTEGER")
+    _add_column_if_missing("game_odds", "spread_home_money", "INTEGER")
+    _add_column_if_missing("game_odds", "spread_away_money", "INTEGER")
+    _add_column_if_missing("game_odds", "ml_home_public", "INTEGER")
+    _add_column_if_missing("game_odds", "ml_away_public", "INTEGER")
+    _add_column_if_missing("game_odds", "ml_home_money", "INTEGER")
+    _add_column_if_missing("game_odds", "ml_away_money", "INTEGER")
     _rename_notifications_body_to_message()
     _fix_game_date_formats()
 

@@ -165,6 +165,13 @@ class InfoPanelWidget(QWidget):
         self._odds_away_ml = self.odds_card.add_row("Away ML", "—")
         self._odds_provider = self.odds_card.add_row("Source", "—", "#64748b")
         layout.addWidget(self.odds_card)
+        
+        # Game Flow Stats
+        self.flow_card = _InfoCard("Game Flow Stats")
+        self._flow_drives = self.flow_card.add_row("Drives Scored", "0 - 0")
+        self._flow_poss = self.flow_card.add_row("Poss Scored", "0 - 0")
+        self._flow_run = self.flow_card.add_row("Current Run", "None", "#eab308", bold=True)
+        layout.addWidget(self.flow_card)
 
         layout.addStretch()
 
@@ -208,6 +215,17 @@ class InfoPanelWidget(QWidget):
         self._odds_home_ml.setText(f"{home_ml:+d}" if home_ml else "—")
         self._odds_away_ml.setText(f"{away_ml:+d}" if away_ml else "—")
         self._odds_provider.setText(odds.get("provider", "—"))
+
+    def update_flow_stats(self, home_drives: str, away_drives: str, current_run: str, home_poss: str, away_poss: str):
+        """Update game flow stats display."""
+        self._flow_drives.setText(f"{away_drives} - {home_drives}")
+        self._flow_poss.setText(f"{away_poss} - {home_poss}")
+        if current_run:
+            self._flow_run.setText(current_run)
+            self._flow_run.setStyleSheet("color: #eab308; font-weight: bold; font-size: 12px;")
+        else:
+            self._flow_run.setText("None")
+            self._flow_run.setStyleSheet("color: #94a3b8; font-weight: bold; font-size: 12px;")
 
     def update_win_probability(self, home_pct: float,
                                 home_color: str = "#3b82f6",

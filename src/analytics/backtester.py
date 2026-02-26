@@ -92,6 +92,36 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
         g["winner"] = winner
         results.append(g)
 
+    # Fetch and attach vegas odds
+    try:
+        odds_rows = db.fetch_all("SELECT game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, spread_home_public, spread_home_money FROM game_odds")
+        odds_map = {(r["game_date"], r["home_team_id"], r["away_team_id"]): r for r in odds_rows}
+        for g in results:
+            key = (g["game_date"], g.get("home_team_id"), g.get("away_team_id"))
+            if key in odds_map:
+                g["vegas_spread"] = odds_map[key]["spread"]
+                g["vegas_total"] = odds_map[key]["over_under"]
+                g["vegas_home_ml"] = odds_map[key]["home_moneyline"]
+                g["vegas_away_ml"] = odds_map[key]["away_moneyline"]
+                g["spread_home_public"] = odds_map[key]["spread_home_public"]
+                g["spread_home_money"] = odds_map[key]["spread_home_money"]
+            else:
+                g["vegas_spread"] = None
+                g["vegas_total"] = None
+                g["vegas_home_ml"] = None
+                g["vegas_away_ml"] = None
+                g["spread_home_public"] = None
+                g["spread_home_money"] = None
+    except Exception as e:
+        logger.warning(f"Could not load game_odds for backtest: {e}")
+        for g in results:
+            g["vegas_spread"] = None
+            g["vegas_total"] = None
+            g["vegas_home_ml"] = None
+            g["vegas_away_ml"] = None
+            g["spread_home_public"] = None
+            g["spread_home_money"] = None
+
     results.sort(key=lambda x: x["game_date"])
     return results
 
@@ -143,12 +173,21 @@ def _load_cache() -> Optional[Dict]:
         return None
 
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        import numpy as np
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating): return float(obj)
+        if isinstance(obj, np.bool_): return bool(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        return super().default(obj)
+
 def _save_cache(data: Dict):
     os.makedirs(BACKTEST_CACHE_DIR, exist_ok=True)
     path = _get_cache_path()
     try:
         with open(path, "w") as f:
-            json.dump(data, f)
+            json.dump(data, f, cls=NumpyEncoder)
     except Exception as e:
         logger.warning(f"Failed to save backtest cache: {e}")
 
@@ -162,14 +201,22 @@ def run_backtest(team_id: Optional[int] = None,
         cached = _load_cache()
         if cached:
             # Inject quality metrics if missing from old cache
+            needs_save = False
             if "quality_metrics" not in cached:
-                quality = compute_quality_metrics(cached.get("per_game", []), cached.get("per_team", {}))
-                progression = compute_progression(cached.get("per_game", []))
-                vegas_comparison = compute_vegas_comparison(cached.get("per_game", []))
-                quality["progression"] = progression
-                quality["vegas_comparison"] = vegas_comparison
-                cached["quality_metrics"] = quality
+                cached["quality_metrics"] = compute_quality_metrics(cached.get("per_game", []), cached.get("per_team", {}))
+                needs_save = True
+            
+            if "progression" not in cached["quality_metrics"]:
+                cached["quality_metrics"]["progression"] = compute_progression(cached.get("per_game", []))
+                needs_save = True
+                
+            if "vegas_comparison" not in cached["quality_metrics"]:
+                cached["quality_metrics"]["vegas_comparison"] = compute_vegas_comparison(cached.get("per_game", []))
+                needs_save = True
+
+            if needs_save:
                 _save_cache(cached)
+                
             if callback:
                 callback("Using cached backtest results")
             return cached

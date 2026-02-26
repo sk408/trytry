@@ -28,15 +28,30 @@ def _get_team_players(team_id: int, as_of_date: str = None) -> List[Dict]:
     return [dict(r) for r in rows]
 
 
-def _compute_composite_score(errors: List[float]) -> Dict[str, float]:
-    """Compute composite score from prediction errors."""
+def _compute_composite_score(errors: List[float],
+                             weights: Optional[List[float]] = None) -> Dict[str, float]:
+    """Compute composite score from prediction errors, optionally weighted.
+
+    Args:
+        weights: Per-error recency weights (higher = more recent/important).
+                 If None, all errors weighted equally (backward-compatible).
+    """
     if not errors:
         return {"wrong_rate": 1.0, "mae": 99.0, "p90": 99.0, "composite": 999.0}
 
-    abs_errors = [abs(e) for e in errors]
-    wrong = sum(1 for e in errors if abs(e) > 0.5 and np.sign(e) != 0) 
-    wrong_rate = wrong / len(errors) if errors else 1.0
-    mae = float(np.mean(abs_errors))
+    abs_errors = np.array([abs(e) for e in errors])
+
+    if weights is not None and len(weights) == len(errors):
+        w = np.array(weights)
+        w = w / w.sum()  # normalize to sum to 1
+        wrong = sum(w[i] for i, e in enumerate(errors) if abs(e) > 0.5 and np.sign(e) != 0)
+        wrong_rate = float(wrong)
+        mae = float(np.dot(abs_errors, w))
+    else:
+        wrong = sum(1 for e in errors if abs(e) > 0.5 and np.sign(e) != 0)
+        wrong_rate = wrong / len(errors) if errors else 1.0
+        mae = float(np.mean(abs_errors))
+
     p90 = float(np.percentile(abs_errors, 90)) if len(abs_errors) >= 3 else mae * 1.5
     composite = 3.0 * wrong_rate + 1.0 * mae + 0.25 * p90
 
@@ -67,11 +82,18 @@ def autotune_team(team_id: int, games: List[Dict],
 
     w = get_weight_config()
 
-    # Compute errors for each game
+    # Compute errors for each game with recency decay.
+    # Most recent game gets weight 1.0; older games decay by 0.92x each step.
+    _AUTOTUNE_DECAY = 0.92
+    n_games = len(team_games)
+    decay_weights = [_AUTOTUNE_DECAY ** (n_games - 1 - i) for i in range(n_games)]
+
     home_errors = []  # when team is home: predicted - actual spread (from team's perspective)
     away_errors = []
+    home_weights = []
+    away_weights = []
 
-    for game in team_games:
+    for gi, game in enumerate(team_games):
         try:
             home_tid = game["home_team_id"]
             away_tid = game["away_team_id"]
@@ -101,42 +123,49 @@ def autotune_team(team_id: int, games: List[Dict],
 
             if is_home:
                 home_errors.append(error)
+                home_weights.append(decay_weights[gi])
             else:
                 away_errors.append(error)
+                away_weights.append(decay_weights[gi])
 
         except Exception as e:
             logger.debug(f"Error processing game {game.get('game_id')}: {e}")
             continue
 
-    # Pre-correction baseline
-    pre_home = _compute_composite_score(home_errors)
-    pre_away = _compute_composite_score(away_errors)
+    # Pre-correction baseline (weighted by recency)
+    pre_home = _compute_composite_score(home_errors, home_weights)
+    pre_away = _compute_composite_score(away_errors, away_weights)
 
-    # Grid search for best home correction
+    # Grid search for best home correction (weighted)
     best_home_shift = 0.0
     best_home_score = pre_home["composite"]
 
     for shift in np.arange(-GRID_RANGE, GRID_RANGE + GRID_STEP, GRID_STEP):
         corrected = [e - shift for e in home_errors]
-        score = _compute_composite_score(corrected)
+        score = _compute_composite_score(corrected, home_weights)
         if score["composite"] < best_home_score:
             best_home_score = score["composite"]
             best_home_shift = shift
 
-    # Grid search for best away correction
+    # Grid search for best away correction (weighted)
     best_away_shift = 0.0
     best_away_score = pre_away["composite"]
 
     for shift in np.arange(-GRID_RANGE, GRID_RANGE + GRID_STEP, GRID_STEP):
         corrected = [e - shift for e in away_errors]
-        score = _compute_composite_score(corrected)
+        score = _compute_composite_score(corrected, away_weights)
         if score["composite"] < best_away_score:
             best_away_score = score["composite"]
             best_away_shift = shift
 
-    # Apply confidence
+    # Gradual confidence ramp: conservative early, full confidence only with solid sample
     n = len(team_games)
-    confidence = min(1.0, n / 15.0)
+    if n < 10:
+        confidence = n / 10.0 * 0.5        # 0–50% at 0–10 games
+    elif n < 25:
+        confidence = 0.5 + (n - 10) / 15.0 * 0.5  # 50–100% at 10–25 games
+    else:
+        confidence = 1.0
     home_shift = best_home_shift * strength * confidence
     away_shift = best_away_shift * strength * confidence
 

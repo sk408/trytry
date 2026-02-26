@@ -9,7 +9,19 @@
     <div class="card-header">Backtest Controls</div>
     <div class="btn-group mb-3">
         <button class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
-        <button class="btn btn-outline" onclick="runAction('/api/optimize', 'Optimizing...')">Optimize Weights</button>
+        <div style="display:inline-block; margin-left: 10px; margin-right: 10px; vertical-align: middle;">
+            <select id="optTarget" style="font-size: 0.9em; padding: 2px;">
+                <option value="ats">ATS</option>
+                <option value="roi">ROI</option>
+                <option value="ml">ML</option>
+                <option value="all">All (Cycle)</option>
+            </select>
+        </div>
+        <div style="display:inline-block; margin-right: 10px; vertical-align: middle;">
+            <input type="checkbox" id="continuousOpt" name="continuousOpt" value="true">
+            <label for="continuousOpt" style="margin:0; font-size: 0.9em; user-select: none;">Continuous</label>
+        </div>
+        <button class="btn btn-outline" onclick="runOptimization()">Optimize Weights</button>
         <button class="btn btn-outline" onclick="runAction('/api/calibrate', 'Calibrating...')">Residual Calibration</button>
         <button class="btn btn-outline" onclick="runAction('/api/feature-importance', 'Analyzing...')">Feature Importance</button>
         <button class="btn btn-outline" onclick="runAction('/api/ml-train', 'Training...')">Train ML</button>
@@ -82,6 +94,12 @@ function runBacktest() {
     runAction('/api/backtest', 'Backtesting...', function(results) {
         showResults(results);
     });
+}
+
+function runOptimization() {
+    const isCont = document.getElementById('continuousOpt').checked;
+    const target = document.getElementById('optTarget').value;
+    runAction(`/api/optimize?continuous=${isCont}&target=${target}`, 'Optimizing...');
 }
 
 function runAction(url, label, onResult) {

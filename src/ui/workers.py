@@ -28,6 +28,11 @@ class BaseWorker(QObject):
     def stop(self):
         self._stop_event.set()
 
+    def isRunning(self) -> bool:
+        if hasattr(self, '_thread_ref') and self._thread_ref is not None:
+            return self._thread_ref.isRunning()
+        return False
+
     def _check_stop(self) -> bool:
         return self._stop_event.is_set()
 
@@ -122,20 +127,40 @@ def start_injury_worker(on_progress=None, on_done=None):
 
 class OddsSyncWorker(BaseWorker):
     """Runs odds backfill."""
+    def __init__(self, force: bool = False):
+        super().__init__()
+        self.force = force
+
     def run(self):
         try:
             from src.data.odds_sync import backfill_odds
             cb = lambda msg: self.progress.emit(msg)
-            self.progress.emit("Syncing historical odds...")
-            count = backfill_odds(callback=cb)
+            mode = "force re-fetch ALL dates" if self.force else "missing dates only"
+            self.progress.emit(f"Syncing historical odds ({mode})...")
+            count = backfill_odds(callback=cb, force=self.force)
             self.progress.emit(f"Odds sync complete. Saved odds for {count} games.")
         except Exception as e:
             self.progress.emit(f"Error: {e}")
         self.finished.emit()
 
 
-def start_odds_sync_worker(on_progress=None, on_done=None):
-    return _start_worker(OddsSyncWorker(), on_progress, on_done)
+def start_odds_sync_worker(on_progress=None, on_done=None, force: bool = False):
+    return _start_worker(OddsSyncWorker(force=force), on_progress, on_done)
+
+def start_sensitivity_worker(param: str, steps: int = 100, target: str = "ats",
+                             on_progress=None, on_done=None):
+    return _start_worker(SensitivityWorker(param, steps, target), on_progress, on_done)
+
+
+def start_coordinate_descent_worker(steps: int = 100, max_rounds: int = 10,
+                                    convergence: float = 0.005,
+                                    target: str = "ats",
+                                    apply_results: bool = True,
+                                    on_progress=None, on_done=None):
+    return _start_worker(
+        CoordinateDescentWorker(steps, max_rounds, convergence, target, apply_results),
+        on_progress, on_done
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -158,20 +183,71 @@ class BacktestWorker(BaseWorker):
 
 
 class OptimizerWorker(BaseWorker):
+    def __init__(self, continuous: bool = False, target: str = "ats"):
+        super().__init__()
+        self.continuous = continuous
+        self.target = target
+
     def run(self):
         try:
             from src.analytics.prediction import precompute_game_data
             from src.analytics.weight_optimizer import optimize_weights
+            from src.analytics.weight_config import get_weight_config, save_weight_config, save_snapshot
+            import itertools
+            
             cb = lambda msg: self.progress.emit(msg)
+            is_cancelled = lambda: self._check_stop()
             self.progress.emit("Precomputing game data...")
             games = precompute_game_data(callback=cb)
             if not games:
                 self.progress.emit("No game data available")
+                self.finished.emit()
+                return
+
+            if self.target == "all":
+                targets = ["ats", "roi", "ml"]
             else:
-                self.progress.emit("Optimizing weights (200 trials)...")
-                optimize_weights(games, callback=cb)
-                self.progress.emit("Optimization complete")
+                targets = [self.target]
+
+            if self.continuous:
+                target_iter = itertools.cycle(targets)
+                n_trials = 2000 if self.target == "all" else 1000000 
+            else:
+                target_iter = iter(targets)
+                n_trials = 2000
+
+            saved_weights = {}
+
+            for t in target_iter:
+                if is_cancelled():
+                    break
+                    
+                if t in saved_weights:
+                    save_weight_config(saved_weights[t])
+                    
+                if self.target == "all":
+                    self.progress.emit(f"=== Optimizing target: {t.upper()} ===")
+                self.progress.emit(f"Optimizing weights ({n_trials} trials, target={t})...")
+                
+                result = optimize_weights(games, n_trials=n_trials, callback=cb, is_cancelled=is_cancelled, target=t)
+                
+                saved_weights[t] = get_weight_config()
+                
+                if result.get("improved", False):
+                    snap_name = f"Best_{t.upper()}_Weights"
+                    metrics = {
+                        "ats_rate": result.get("ats_rate", 0),
+                        "ats_roi": result.get("ats_roi", 0),
+                        "ml_roi": result.get("ml_roi", 0),
+                        "loss": result.get("loss", 0),
+                    }
+                    save_snapshot(snap_name, notes=f"Auto-saved by optimizer ({t.upper()})", metrics=metrics)
+                
+            self.progress.emit("Optimization complete")
         except Exception as e:
+            import traceback
+            import logging
+            logging.getLogger(__name__).error("OptimizerWorker failed:\n%s", traceback.format_exc())
             self.progress.emit(f"Error: {e}")
         self.finished.emit()
 
@@ -420,6 +496,187 @@ class DiagnosticCSVWorker(BaseWorker):
         self.finished.emit()
 
 
+class SensitivityWorker(BaseWorker):
+    """Run sensitivity analysis sweep."""
+    def __init__(self, param: str, steps: int = 100, target: str = "ats"):
+        super().__init__()
+        self.param = param
+        self.steps = steps
+        self.target = target
+
+    def run(self):
+        try:
+            from src.analytics.sensitivity import sweep_parameter, EXTREME_RANGES, export_sweep_csv, format_ascii_chart, sweep_all_parameters, run_full_analysis
+            from src.database.db import thread_local_db
+
+            cb = lambda msg: self.progress.emit(msg)
+
+            with thread_local_db():
+                if self.param == "all":
+                    run_full_analysis(steps=self.steps, callback=cb, target=self.target)
+                else:
+                    self.progress.emit(f"Sweeping {self.param} (target={self.target})...")
+                    lo, hi = EXTREME_RANGES.get(self.param, (0, 1))
+                    results = sweep_parameter(self.param, lo, hi, steps=self.steps,
+                                              callback=cb, target=self.target)
+                    path = export_sweep_csv(self.param, results)
+                    self.progress.emit(f"\nSaved CSV: {path}\n")
+
+                    # Chart the target-specific ROI metric
+                    roi_metric = "ml_roi" if self.target == "ml" else "ats_roi"
+                    chart1 = format_ascii_chart(self.param, results, metric=roi_metric)
+                    chart2 = format_ascii_chart(self.param, results, metric="loss")
+                    self.progress.emit(chart1 + "\n\n" + chart2)
+
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
+
+class CoordinateDescentWorker(BaseWorker):
+    """Run iterative coordinate descent optimization."""
+    def __init__(self, steps: int = 100, max_rounds: int = 10,
+                 convergence: float = 0.005, target: str = "ats",
+                 apply_results: bool = True):
+        super().__init__()
+        self.steps = steps
+        self.max_rounds = max_rounds
+        self.convergence = convergence
+        self.target = target
+        self.apply_results = apply_results
+
+    def run(self):
+        try:
+            from src.analytics.sensitivity import coordinate_descent
+            from src.analytics.weight_config import (
+                WeightConfig, save_weight_config, invalidate_weight_cache, save_snapshot,
+            )
+            from src.database.db import thread_local_db
+
+            cb = lambda msg: self.progress.emit(msg)
+
+            with thread_local_db():
+                result = coordinate_descent(
+                    steps=self.steps,
+                    max_rounds=self.max_rounds,
+                    convergence_threshold=self.convergence,
+                    callback=cb,
+                    target=self.target,
+                )
+
+                if self.apply_results and result.get("final_loss", float("inf")) < result.get("initial_loss", 0):
+                    w = WeightConfig.from_dict(result["weights"])
+                    save_weight_config(w)
+                    invalidate_weight_cache()
+                    save_snapshot(
+                        f"coord_descent_{self.target}",
+                        notes=f"Coordinate descent ({self.target}): "
+                              f"loss {result['initial_loss']:.3f} -> {result['final_loss']:.3f}",
+                        metrics={
+                            "ats_rate": result.get("final_ats_rate", 0),
+                            "ats_roi": result.get("final_ats_roi", 0),
+                            "ml_roi": result.get("final_ml_roi", 0),
+                        },
+                    )
+                    self.progress.emit(f"Weights saved & snapshot created. "
+                                       f"Loss: {result['initial_loss']:.3f} -> {result['final_loss']:.3f}")
+                elif self.apply_results:
+                    self.progress.emit("No improvement found — weights unchanged.")
+                else:
+                    self.progress.emit(f"Dry run complete. Best loss: {result['final_loss']:.3f}")
+
+                # Report top parameter changes
+                changes = result.get("changes", {})
+                if changes:
+                    self.progress.emit(f"\nTop parameter changes ({len(changes)} moved):")
+                    sorted_changes = sorted(changes.items(),
+                                            key=lambda x: abs(x[1].get("new", 0) - x[1].get("old", 0)),
+                                            reverse=True)
+                    for name, vals in sorted_changes[:10]:
+                        self.progress.emit(f"  {name}: {vals.get('old', 0):.4f} -> {vals.get('new', 0):.4f}")
+
+        except Exception as e:
+            import traceback
+            self.progress.emit(f"Error: {e}\n{traceback.format_exc()}")
+        self.finished.emit()
+
+
+class OverviewWorker(BaseWorker):
+    """Fetch today's scoreboard, odds, and predictions for an overview."""
+    def run(self):
+        try:
+            from datetime import datetime
+            from src.data.gamecast import fetch_espn_scoreboard, get_actionnetwork_odds
+            from src.analytics.prediction import predict_matchup
+            from src.database.db import thread_local_db
+            from src.database import db
+
+            self.progress.emit("Fetching today's games from ESPN...")
+            games = fetch_espn_scoreboard()
+
+            if not games:
+                self.progress.emit("No games found for today.")
+                self.finished.emit()
+                return
+
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            results = []
+
+            # Use thread_local_db so all db reads (including inside
+            # predict_matchup) use a private in-memory copy — no lock
+            # contention with the main UI thread.
+            with thread_local_db():
+                for i, g in enumerate(games):
+                    if self._check_stop():
+                        break
+
+                    home_abbr = g.get("home_team", "")
+                    away_abbr = g.get("away_team", "")
+                    self.progress.emit(f"Processing {away_abbr} @ {home_abbr} ({i+1}/{len(games)})...")
+
+                    home_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (home_abbr,))
+                    away_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (away_abbr,))
+
+                    pred_data = None
+                    if home_row and away_row:
+                        try:
+                            pred = predict_matchup(home_row["team_id"], away_row["team_id"], today_str,
+                                                   skip_ml=True, skip_espn=True)
+
+                            pred_data = {
+                                "spread": getattr(pred, 'predicted_spread', 0.0),
+                                "total": getattr(pred, 'predicted_total', 0.0),
+                                "winner": pred.winner,
+                                "sharp_money_adj": pred.adjustments.get("sharp_money", 0.0) if hasattr(pred, 'adjustments') else 0.0
+                            }
+                        except Exception as e:
+                            import traceback
+                            logger.warning(f"Prediction failed for {away_abbr} @ {home_abbr}: {e}\n{traceback.format_exc()}")
+
+                    odds = get_actionnetwork_odds(home_abbr, away_abbr)
+
+                    g_data = {
+                        "espn_id": g.get("espn_id"),
+                        "status": g.get("status", ""),
+                        "period": g.get("period", 0),
+                        "clock": g.get("clock", ""),
+                        "home_team": home_abbr,
+                        "away_team": away_abbr,
+                        "home_score": g.get("home_score", 0),
+                        "away_score": g.get("away_score", 0),
+                        "prediction": pred_data,
+                        "odds": odds
+                    }
+                    results.append(g_data)
+
+            self.progress.emit(f"Done. {len(results)} games processed.")
+            self.result.emit({"games": results})
+        except Exception as e:
+            import traceback
+            logger.error(f"OverviewWorker error:\n{traceback.format_exc()}")
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
 # ---------------------------------------------------------------------------
 # Factory functions for accuracy workers
 # ---------------------------------------------------------------------------
@@ -427,8 +684,8 @@ class DiagnosticCSVWorker(BaseWorker):
 def start_backtest_worker(on_progress=None, on_result=None, on_done=None):
     return _start_worker(BacktestWorker(), on_progress, on_done, on_result)
 
-def start_optimizer_worker(on_progress=None, on_done=None):
-    return _start_worker(OptimizerWorker(), on_progress, on_done)
+def start_optimizer_worker(continuous: bool = False, target: str = "ats", on_progress=None, on_done=None):
+    return _start_worker(OptimizerWorker(continuous, target), on_progress, on_done)
 
 def start_calibration_worker(on_progress=None, on_done=None):
     return _start_worker(CalibrationWorker(), on_progress, on_done)
@@ -459,6 +716,9 @@ def start_pipeline_worker(on_progress=None, on_result=None, on_done=None):
 
 def start_ml_train_worker(on_progress=None, on_done=None):
     return _start_worker(MLTrainWorker(), on_progress, on_done)
+
+def start_overview_worker(on_progress=None, on_result=None, on_done=None):
+    return _start_worker(OverviewWorker(), on_progress, on_done, on_result)
 
 def start_diagnostic_csv_worker(backtest_results=None, on_progress=None, on_result=None, on_done=None):
     return _start_worker(DiagnosticCSVWorker(backtest_results), on_progress, on_done, on_result)

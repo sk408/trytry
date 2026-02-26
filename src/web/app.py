@@ -46,6 +46,15 @@ _pipeline_cancel = threading.Event()
 
 
 # ---- Helper: SSE generator ----
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        import numpy as np
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating): return float(obj)
+        if isinstance(obj, np.bool_): return bool(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        return super().default(obj)
+
 def _sse_generator(fn, cancel_event=None):
     """Run fn in a thread, yield SSE events from its callback."""
     import queue
@@ -84,7 +93,7 @@ def _sse_generator(fn, cancel_event=None):
         # Send result as JSON if available
         if result[0] is not None:
             try:
-                yield f"data: [RESULTS_JSON]{json.dumps(result[0])}\n\n"
+                yield f"data: [RESULTS_JSON]{json.dumps(result[0], cls=NumpyEncoder)}\n\n"
             except Exception:
                 pass
         yield "data: [DONE]\n\n"
@@ -140,92 +149,6 @@ async def dashboard_team_metrics():
 @app.post("/dashboard/player-impact")
 async def dashboard_player_impact():
     return RedirectResponse(url="/dashboard", status_code=303)
-
-
-@app.get("/live", response_class=HTMLResponse)
-async def live_page(request: Request):
-    # Merge NBA live scores with ESPN scoreboard for ESPN game IDs
-    from src.data.live_scores import fetch_live_scores
-    from src.data.gamecast import fetch_espn_scoreboard, normalize_espn_abbr
-    try:
-        games = fetch_live_scores()
-    except Exception:
-        games = []
-
-    # Build ESPN ID lookup by team abbreviation pair
-    espn_lookup = {}
-    try:
-        espn_games = fetch_espn_scoreboard()
-        for eg in espn_games:
-            key = (eg.get("away_team", ""), eg.get("home_team", ""))
-            espn_lookup[key] = eg.get("espn_id", "")
-    except Exception:
-        pass
-
-    # Enrich live games with ESPN IDs and recommendations
-    for g in games:
-        away = g.get("away_team", "")
-        home = g.get("home_team", "")
-        g["espn_id"] = espn_lookup.get((away, home), "")
-
-        # Generate recommendations for in-progress games
-        g["spread"] = ""
-        g["over_under"] = ""
-        g["recommendation"] = ""
-        g["rec_confidence"] = ""
-        if g.get("status") == "In Progress" and g.get("home_team_id") and g.get("away_team_id"):
-            try:
-                from src.analytics.live_recommendations import get_live_recommendations
-                period = int(g.get("period", 0) or 0)
-                clock_str = g.get("clock", "12:00")
-                mins_el = 0.0
-                try:
-                    parts = clock_str.split(":")
-                    mins_left = int(parts[0]) if parts else 0
-                    secs_left = int(parts[1]) if len(parts) > 1 else 0
-                    period_len = 12 * 60 if period <= 4 else 5 * 60
-                    mins_el = ((period - 1) * 12.0 if period <= 4
-                               else 48.0 + (period - 5) * 5.0)
-                    elapsed_in_q = period_len - (mins_left * 60 + secs_left)
-                    mins_el += max(0, elapsed_in_q) / 60.0
-                except Exception:
-                    mins_el = min(period, 4) * 12.0
-
-                recs = get_live_recommendations(
-                    home_team_id=g["home_team_id"],
-                    away_team_id=g["away_team_id"],
-                    home_score=float(g.get("home_score", 0) or 0),
-                    away_score=float(g.get("away_score", 0) or 0),
-                    minutes_elapsed=mins_el,
-                    quarter=min(max(0, period - 1), 4),
-                )
-                pred = recs.get("prediction", {})
-                g["spread"] = f"{pred.get('spread', 0):+.1f}" if pred.get("spread") else ""
-                g["over_under"] = f"{pred.get('total', 0):.1f}" if pred.get("total") else ""
-                rec_list = recs.get("recommendations", [])
-                if rec_list:
-                    texts = []
-                    for r in rec_list[:2]:
-                        side = r.get("side", "")
-                        rtype = r.get("type", "")
-                        edge = r.get("edge", 0)
-                        if rtype == "spread":
-                            texts.append(f"{side} {edge:+.1f}pts")
-                        elif rtype == "total":
-                            texts.append(f"{side} {edge:.1f}pts")
-                        elif rtype == "moneyline":
-                            texts.append(f"ML {side} {edge:.0f}%")
-                        else:
-                            texts.append(r.get("reasoning", side))
-                    g["recommendation"] = "; ".join(texts)
-                    g["rec_confidence"] = rec_list[0].get("confidence", "") if rec_list else ""
-            except Exception:
-                pass
-
-    return templates.TemplateResponse("live.html", {
-        "request": request,
-        "games": games,
-    })
 
 
 @app.get("/players", response_class=HTMLResponse)
@@ -668,17 +591,67 @@ async def sse_backtest():
 
 
 @app.get("/api/optimize")
-async def sse_optimize():
+async def sse_optimize(continuous: bool = False, target: str = "ats"):
     _optimize_cancel.clear()
 
     def _run(callback):
         from src.analytics.prediction import precompute_game_data
         from src.analytics.weight_optimizer import optimize_weights
+        from src.analytics.weight_config import get_weight_config, save_weight_config, save_snapshot
+        import itertools
+        
         games = precompute_game_data(callback=callback)
         if not games:
             callback("No precomputed games available")
             return {"error": "no_data"}
-        return optimize_weights(games, n_trials=200, callback=callback)
+        
+        if target == "all":
+            targets = ["ats", "roi", "ml"]
+        else:
+            targets = [target]
+
+        if continuous:
+            target_iter = itertools.cycle(targets)
+            n_trials = 2000 if target == "all" else 1000000 
+        else:
+            target_iter = iter(targets)
+            n_trials = 2000
+
+        saved_weights = {}
+        last_result = None
+
+        for t in target_iter:
+            if _optimize_cancel.is_set():
+                break
+                
+            if t in saved_weights:
+                save_weight_config(saved_weights[t])
+                
+            if target == "all":
+                callback(f"=== Optimizing target: {t.upper()} ===")
+            callback(f"Optimizing weights ({n_trials} trials, target={t})...")
+            
+            last_result = optimize_weights(
+                games, 
+                n_trials=n_trials, 
+                callback=callback, 
+                is_cancelled=lambda: _optimize_cancel.is_set(),
+                target=t
+            )
+            
+            saved_weights[t] = get_weight_config()
+            
+            if last_result.get("improved", False):
+                snap_name = f"Best_{t.upper()}_Weights"
+                metrics = {
+                    "ats_rate": last_result.get("ats_rate", 0),
+                    "ats_roi": last_result.get("ats_roi", 0),
+                    "ml_roi": last_result.get("ml_roi", 0),
+                    "loss": last_result.get("loss", 0),
+                }
+                save_snapshot(snap_name, notes=f"Auto-saved by optimizer ({t.upper()})", metrics=metrics)
+                
+        return last_result
 
     return StreamingResponse(
         _sse_generator(_run, _optimize_cancel),
@@ -1083,6 +1056,112 @@ async def sse_gamecast_stream(game_id: str):
                                     "coordinate": item.get("coordinate"),
                                     "shootingPlay": item.get("shootingPlay", False),
                                 })
+                                
+                # Calculate drives scored and scoring runs
+                home_drives = 0
+                away_drives = 0
+                home_drives_scored = 0
+                away_drives_scored = 0
+                current_run_team = None
+                current_run_pts = 0
+                
+                # play_items are usually chronological, but we reverse them just in case they aren't?
+                # Actually, ESPN summary returns plays chronological.
+                for p in play_items:
+                    team = p.get("team_id")
+                    text = p.get("text", "").lower()
+                    scoring = p.get("scoring", False)
+                    
+                    if "driving" in text:
+                        if team == home_tid:
+                            home_drives += 1
+                            if scoring:
+                                home_drives_scored += 1
+                        elif team == away_tid:
+                            away_drives += 1
+                            if scoring:
+                                away_drives_scored += 1
+                                
+                    if not scoring:
+                        continue
+                        
+                    # Calculate points from this play
+                    pts = 0
+                    if "free throw" in text:
+                        pts = 1
+                    elif "3-pt" in text or "three point" in text:
+                        pts = 3
+                    else:
+                        pts = 2
+                        
+                    # Calculate unanswered run
+                    if team == current_run_team:
+                        current_run_pts += pts
+                    else:
+                        current_run_team = team
+                        current_run_pts = pts
+                        
+                run_text = f"{current_run_pts}-0 run" if current_run_pts >= 5 else ""
+                if current_run_pts >= 5 and current_run_team:
+                    run_team_abbr = home_abbr if current_run_team == home_tid else away_abbr
+                    run_text = f"{run_team_abbr} on a {run_text}"
+                else:
+                    run_text = ""
+                    
+                # Calculate Game Possessions from Team Box Score
+                box_teams = boxscore.get("teams", []) if isinstance(boxscore, dict) else []
+                home_poss = 0
+                away_poss = 0
+                home_poss_scored = 0
+                away_poss_scored = 0
+                for tb in box_teams:
+                    tb_tid = str(tb.get("team", {}).get("id", ""))
+                    side = "home" if tb_tid == home_espn_id else "away"
+                    stats_blocks = tb.get("statistics", [])
+                    if not stats_blocks:
+                        continue
+                    stats_dict = {}
+                    for s in stats_blocks:
+                        if "abbreviation" in s:
+                            stats_dict[s["abbreviation"]] = s.get("displayValue")
+                        elif "label" in s:
+                            stats_dict[s["label"]] = s.get("displayValue")
+                    
+                    try:
+                        fg = stats_dict.get("FG", "0-0").split("-")
+                        fgm = int(fg[0]) if len(fg) > 0 and fg[0].isdigit() else 0
+                        fga = int(fg[1]) if len(fg) > 1 and fg[1].isdigit() else 0
+                        
+                        ft = stats_dict.get("FT", "0-0").split("-")
+                        ftm = int(ft[0]) if len(ft) > 0 and ft[0].isdigit() else 0
+                        fta = int(ft[1]) if len(ft) > 1 and ft[1].isdigit() else 0
+                        
+                        orb = int(stats_dict.get("OR", stats_dict.get("Offensive Rebounds", 0)))
+                        tov = int(stats_dict.get("TO", stats_dict.get("Turnovers", 0)))
+                        
+                        poss = round(fga + 0.44 * fta - orb + tov)
+                        scored = round(fgm + (ftm / 2))  # Proxy for unique scoring possessions
+                        
+                        if side == "home":
+                            home_poss = poss
+                            home_poss_scored = scored
+                        else:
+                            away_poss = poss
+                            away_poss_scored = scored
+                    except Exception:
+                        pass
+                
+                summary.update({
+                    "home_drives": home_drives,
+                    "away_drives": away_drives,
+                    "home_drives_scored": home_drives_scored,
+                    "away_drives_scored": away_drives_scored,
+                    "home_poss": home_poss,
+                    "away_poss": away_poss,
+                    "home_poss_scored": home_poss_scored,
+                    "away_poss_scored": away_poss_scored,
+                    "current_run": run_text,
+                })
 
                 # Parse box score into simple format
                 box_parsed = {"home": [], "away": []}

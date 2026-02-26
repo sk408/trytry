@@ -97,6 +97,11 @@ class PrecomputedGame:
     away_games_played: int = 0
     home_roster_changed: bool = False
     away_roster_changed: bool = False
+    vegas_spread: float = 0.0
+    vegas_home_ml: int = 0
+    vegas_away_ml: int = 0
+    spread_home_public: int = 0
+    spread_home_money: int = 0
 
 
 from src.analytics.cache import team_cache
@@ -219,10 +224,18 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         injured_players = {}
 
     # ── Step 0: Weight Resolution ──
+    # Per-team weights blended proportional to each team's games_analyzed
     home_w = load_team_weights(home_team_id)
     away_w = load_team_weights(away_team_id)
     if home_w and away_w:
-        w = home_w.blend(away_w)
+        # Use games_analyzed from team_tuning as a proxy for per-team data depth
+        home_games = db.fetch_one(
+            "SELECT games_analyzed FROM team_tuning WHERE team_id = ?", (home_team_id,))
+        away_games = db.fetch_one(
+            "SELECT games_analyzed FROM team_tuning WHERE team_id = ?", (away_team_id,))
+        hg = home_games["games_analyzed"] if home_games else 0
+        ag = away_games["games_analyzed"] if away_games else 0
+        w = home_w.blend(away_w, self_games=hg, other_games=ag)
     elif home_w:
         w = home_w
     elif away_w:
@@ -332,6 +345,35 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
               oreb_edge * w.ff_oreb_weight + fta_edge * w.ff_fta_weight) * w.four_factors_scale
     spread += ff_adj
     pred.four_factors_adj = ff_adj
+
+    # Sharp Money
+    sharp_money_adj = 0.0
+    if w.sharp_money_weight != 0.0:
+        odds_row = db.fetch_one("SELECT spread_home_public, spread_home_money FROM game_odds WHERE game_date = ? AND home_team_id = ? AND away_team_id = ?", (game_date, home_team_id, away_team_id))
+        if odds_row and odds_row["spread_home_public"] is not None and odds_row["spread_home_money"] is not None:
+            sh_pub = odds_row["spread_home_public"]
+            sh_mon = odds_row["spread_home_money"]
+            sharp_edge = (sh_mon - sh_pub) / 100.0
+            
+            # Time decay for current day betting (regress influence if far from typical 7 PM ET game time)
+            from datetime import datetime, timedelta
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            decay = 1.0
+            if game_date == today_str:
+                now_et = datetime.utcnow() - timedelta(hours=5) # Approx Eastern Time
+                # Scale from 0.0 at noon ET to 1.0 at 7 PM ET
+                if now_et.hour < 12:
+                    decay = 0.0
+                elif now_et.hour >= 19:
+                    decay = 1.0
+                else:
+                    # Linear scale between 12 and 19 (7 hours)
+                    hours_past_noon = (now_et.hour - 12) + (now_et.minute / 60.0)
+                    decay = hours_past_noon / 7.0
+                    
+            sharp_money_adj = sharp_edge * w.sharp_money_weight * decay
+            spread += sharp_money_adj
+    pred.adjustments["sharp_money"] = sharp_money_adj
 
     # Clutch (only if close game)
     clutch_adj = 0.0
@@ -625,6 +667,11 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
                 away_team_id=atid,
                 actual_home_score=g.get("home_score", 0),
                 actual_away_score=g.get("away_score", 0),
+                vegas_spread=g.get("vegas_spread") or 0.0,
+                vegas_home_ml=g.get("vegas_home_ml") or 0,
+                vegas_away_ml=g.get("vegas_away_ml") or 0,
+                spread_home_public=g.get("spread_home_public") or 0,
+                spread_home_money=g.get("spread_home_money") or 0,
                 home_proj={k: v for k, v in home_proj.items() if not k.startswith("_")},
                 away_proj={k: v for k, v in away_proj.items() if not k.startswith("_")},
                 home_court=home_court,
@@ -750,6 +797,12 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     h_eff = g.home_hustle.get("deflections", 0) + g.home_hustle.get("contested", 0) * w.hustle_contested_wt
     a_eff = g.away_hustle.get("deflections", 0) + g.away_hustle.get("contested", 0) * w.hustle_contested_wt
     spread += (h_eff - a_eff) * w.hustle_effort_mult
+
+    # Sharp Money
+    sh_pub = g.spread_home_public if g.spread_home_public else 50.0
+    sh_mon = g.spread_home_money if g.spread_home_money else 50.0
+    sharp_money_edge = (sh_mon - sh_pub) / 100.0
+    spread += sharp_money_edge * w.sharp_money_weight
 
     # Total
     total = home_base + away_base
