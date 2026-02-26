@@ -3,7 +3,11 @@
     "allow": [
       "Bash(wc:*)",
       "Bash(find:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git add src/analytics/autotune.py src/analytics/backtester.py src/analytics/pipeline.py src/analytics/prediction.py src/analytics/prediction_quality.py src/analytics/sensitivity.py src/analytics/stats_engine.py src/analytics/weight_config.py src/analytics/weight_optimizer.py src/data/gamecast.py src/data/image_cache.py src/data/odds_sync.py src/database/migrations.py src/ui/main_window.py src/ui/notification_widget.py src/ui/views/accuracy_view.py src/ui/views/gamecast_view.py src/ui/views/overview_view.py src/ui/views/sensitivity_view.py src/ui/widgets/info_panel_widget.py src/ui/workers.py src/web/app.py src/web/templates/accuracy.html src/web/templates/base.html src/web/templates/dashboard.html src/web/templates/gamecast.html data/ml_models/model_meta.json data/ml_models/spread_model.json data/ml_models/total_model.json data/pipeline_state.json)",
+      "Bash(git rm --cached src/analytics/live_recommendations.py src/data/live_scores.py src/ui/views/live_view.py src/web/templates/live.html)",
+      "Bash(git commit:*)",
+      "Bash(git push origin expiremental)"
     ]
   }
 }
