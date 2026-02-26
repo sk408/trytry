@@ -8,7 +8,8 @@
       "Bash(git rm --cached src/analytics/live_recommendations.py src/data/live_scores.py src/ui/views/live_view.py src/web/templates/live.html)",
       "Bash(git commit:*)",
       "Bash(git push origin expiremental)",
-      "Bash(git add -A)"
+      "Bash(git add -A)",
+      "Bash(git push)"
     ]
   }
 }
