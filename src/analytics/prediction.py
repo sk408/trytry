@@ -1,7 +1,10 @@
 """Core prediction engine: predict_matchup(), MatchupPrediction, PrecomputedGame."""
 
+import hashlib
 import logging
-from dataclasses import dataclass, field
+import os
+import pickle
+from dataclasses import dataclass, field, fields as dc_fields
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.database import db
@@ -102,6 +105,85 @@ class PrecomputedGame:
     vegas_away_ml: int = 0
     spread_home_public: int = 0
     spread_home_money: int = 0
+
+
+# ──────────────────────────────────────────────────────────────
+# Precompute disk + memory cache
+# ──────────────────────────────────────────────────────────────
+
+_PRECOMPUTE_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "cache")
+_PRECOMPUTE_CACHE_FILE = os.path.join(_PRECOMPUTE_CACHE_DIR, "precomputed_games.pkl")
+
+# In-memory cache (persists across calls within the same process)
+_mem_pc_cache: Optional[Dict[str, "PrecomputedGame"]] = None
+_mem_pc_schema: Optional[str] = None
+
+
+def _precompute_schema_version() -> str:
+    """Hash of PrecomputedGame field names — auto-invalidates when fields change."""
+    names = tuple(f.name for f in dc_fields(PrecomputedGame))
+    return hashlib.md5(str(names).encode()).hexdigest()[:12]
+
+
+def _game_cache_key(home_team_id: int, away_team_id: int, game_date: str) -> str:
+    """Unique key for a game (NBA teams can't play twice on the same date)."""
+    return f"{home_team_id}_{away_team_id}_{game_date}"
+
+
+def _load_pc_cache() -> Dict[str, "PrecomputedGame"]:
+    """Load precompute cache from memory or disk. Returns empty dict on miss."""
+    global _mem_pc_cache, _mem_pc_schema
+    schema = _precompute_schema_version()
+
+    # In-memory hit
+    if _mem_pc_cache is not None and _mem_pc_schema == schema:
+        return _mem_pc_cache
+
+    # Disk hit
+    try:
+        if os.path.exists(_PRECOMPUTE_CACHE_FILE):
+            with open(_PRECOMPUTE_CACHE_FILE, "rb") as f:
+                data = pickle.load(f)
+            if data.get("schema") == schema:
+                _mem_pc_cache = data["games"]
+                _mem_pc_schema = schema
+                logger.info("Loaded precompute cache from disk (%d games)", len(_mem_pc_cache))
+                return _mem_pc_cache
+            else:
+                logger.info("Precompute cache schema mismatch — will rebuild")
+    except Exception as e:
+        logger.warning("Failed to load precompute cache: %s", e)
+
+    return {}
+
+
+def _save_pc_cache(cache: Dict[str, "PrecomputedGame"]):
+    """Persist precompute cache to disk and update in-memory copy."""
+    global _mem_pc_cache, _mem_pc_schema
+    schema = _precompute_schema_version()
+    os.makedirs(_PRECOMPUTE_CACHE_DIR, exist_ok=True)
+    try:
+        with open(_PRECOMPUTE_CACHE_FILE, "wb") as f:
+            pickle.dump({"schema": schema, "games": cache}, f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info("Saved precompute cache to disk (%d games)", len(cache))
+    except Exception as e:
+        logger.warning("Failed to save precompute cache: %s", e)
+    _mem_pc_cache = cache
+    _mem_pc_schema = schema
+
+
+def invalidate_precompute_cache():
+    """Clear precompute cache (memory + disk). Call on force-refresh."""
+    global _mem_pc_cache, _mem_pc_schema
+    _mem_pc_cache = None
+    _mem_pc_schema = None
+    try:
+        if os.path.exists(_PRECOMPUTE_CACHE_FILE):
+            os.remove(_PRECOMPUTE_CACHE_FILE)
+            logger.info("Deleted precompute cache file")
+    except Exception:
+        pass
 
 
 from src.analytics.cache import team_cache
@@ -529,20 +611,23 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     return pred
 
 
-def precompute_game_data(callback=None) -> List[PrecomputedGame]:
+def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     """Build a list of PrecomputedGame objects for optimization/backtest.
 
-    Loads actual game results, fetches team data with as_of_date to prevent
-    lookahead bias, and packages everything into zero-DB PrecomputedGame structs.
+    Uses a persistent disk + memory cache so that already-computed historical
+    games are never reprocessed.  Only truly new games (added since last run)
+    go through the expensive per-game projection pipeline.
 
-    Uses thread pool with per-thread in-memory DB copies to parallelise the
-    heavy per-game projection work.
+    Pass ``force=True`` to discard the cache and recompute everything.
     """
     from src.analytics.backtester import get_actual_game_results
     from src.database.db import thread_local_db
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from src.config import get_config
     import threading
+
+    # ── Load cache ──
+    cache = {} if force else _load_pc_cache()
 
     games = get_actual_game_results()
     if not games:
@@ -560,8 +645,26 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
     games = [g for g in games
              if g.get("home_team_id") in valid_teams and g.get("away_team_id") in valid_teams]
 
+    # ── Determine which games still need computing ──
+    valid_keys = set()
+    new_games = []
+    for g in games:
+        key = _game_cache_key(g["home_team_id"], g["away_team_id"], g["game_date"])
+        valid_keys.add(key)
+        if key not in cache:
+            new_games.append(g)
+
+    if not new_games:
+        # Everything cached — fast path
+        result = [cache[k] for k in valid_keys if k in cache]
+        result.sort(key=lambda pg: pg.game_date)
+        if callback:
+            callback(f"Loaded {len(result)} precomputed games from cache (0 new)")
+        return result
+
+    cached_count = len(valid_keys) - len(new_games)
     if callback:
-        callback(f"Precomputing {len(games)} games...")
+        callback(f"Precomputing {len(new_games)} new games ({cached_count} cached)...")
 
     cfg = get_config()
     max_workers = cfg.get("worker_threads", 4)
@@ -705,15 +808,16 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
                 away_games_played=am.get("gp", 0) or 0,
             )
 
-    result = []
+    # ── Only compute new games ──
+    new_results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_precompute_one, g): g for g in games}
+        futures = {executor.submit(_precompute_one, g): g for g in new_games}
         for future in as_completed(futures):
             game = futures[future]
             try:
                 pg = future.result()
                 if pg is not None:
-                    result.append(pg)
+                    new_results.append(pg)
             except Exception as e:
                 logger.warning("Skipping game %s: %s", game.get("game_id"), e)
 
@@ -721,13 +825,22 @@ def precompute_game_data(callback=None) -> List[PrecomputedGame]:
                 completed_count[0] += 1
                 c = completed_count[0]
                 if callback and c % 25 == 0:
-                    callback(f"Precomputed {c}/{len(games)} games")
+                    callback(f"Precomputed {c}/{len(new_games)} games")
 
-    # Sort by date for deterministic output
+    # ── Merge new results into cache and persist ──
+    for pg in new_results:
+        key = _game_cache_key(pg.home_team_id, pg.away_team_id, pg.game_date)
+        cache[key] = pg
+
+    if new_results:
+        _save_pc_cache(cache)
+
+    # Return only the games that are currently valid
+    result = [cache[k] for k in valid_keys if k in cache]
     result.sort(key=lambda pg: pg.game_date)
 
     if callback:
-        callback(f"Precomputed {len(result)} games total")
+        callback(f"Precomputed {len(result)} games total ({len(new_results)} new, {cached_count} cached)")
     return result
 
 

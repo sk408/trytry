@@ -324,7 +324,7 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
             trial.set_user_attr("result", result)
             return result["loss"]
 
-        sampler = optuna.samplers.TPESampler(seed=42)
+        sampler = optuna.samplers.TPESampler()
         study = optuna.create_study(direction="minimize", sampler=sampler)
 
         def trial_callback(study, trial):

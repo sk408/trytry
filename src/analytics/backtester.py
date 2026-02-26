@@ -135,6 +135,10 @@ def _get_cache_hash() -> str:
     rows = db.fetch_all("SELECT * FROM team_tuning ORDER BY team_id")
     parts.append(json.dumps([dict(r) for r in rows], sort_keys=True))
 
+    # Per-team weight overrides (from refinement step)
+    team_wts = db.fetch_all("SELECT * FROM team_weight_overrides ORDER BY team_id, key")
+    parts.append(json.dumps([dict(r) for r in team_wts], sort_keys=True))
+
     # ML model meta
     meta_path = os.path.join("data", "ml_models", "model_meta.json")
     if os.path.exists(meta_path):

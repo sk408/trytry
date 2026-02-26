@@ -4,12 +4,12 @@ import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QFrame, QCheckBox, QScrollArea, QProgressBar,
-    QGridLayout
+    QGridLayout, QDoubleSpinBox
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QTextCursor
 
-from src.ui.workers import start_pipeline_worker
+from src.ui.workers import start_pipeline_worker, start_overnight_worker
 from src.analytics.pipeline import request_cancel
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,15 @@ class AutomaticView(QWidget):
         header_layout.addWidget(self.force_cb)
         layout.addLayout(header_layout)
 
+        # Weight reset option
+        reset_layout = QHBoxLayout()
+        self.reset_weights_cb = QCheckBox("Reset Weights to Defaults (clears saved global + per-team weights before optimizer runs)")
+        self.reset_weights_cb.setStyleSheet("color: #fbbf24; font-size: 13px;")
+        self.reset_weights_cb.setToolTip("Use this if the optimizer says 'no improvement' — existing weights may be a local minimum from old narrow ranges")
+        reset_layout.addWidget(self.reset_weights_cb)
+        reset_layout.addStretch()
+        layout.addLayout(reset_layout)
+
         # Action Buttons
         controls_layout = QHBoxLayout()
         
@@ -146,8 +155,40 @@ class AutomaticView(QWidget):
         self.cancel_btn.clicked.connect(self._stop_pipeline)
         self.cancel_btn.setEnabled(False)
         controls_layout.addWidget(self.cancel_btn)
+
+        # Separator
+        sep = QLabel("│")
+        sep.setStyleSheet("color: #475569; font-size: 20px; padding: 0 8px;")
+        controls_layout.addWidget(sep)
+
+        # Overnight optimization
+        self.overnight_btn = QPushButton("🌙 Run Overnight")
+        self.overnight_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6366f1;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 12px 24px;
+                border-radius: 6px;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:disabled { background-color: #312e81; color: #94a3b8; }
+        """)
+        self.overnight_btn.setToolTip("Run full pipeline once, then loop optimization steps until time runs out")
+        self.overnight_btn.clicked.connect(self._start_overnight)
+        controls_layout.addWidget(self.overnight_btn)
+
+        self.hours_spin = QDoubleSpinBox()
+        self.hours_spin.setRange(0.5, 24.0)
+        self.hours_spin.setValue(8.0)
+        self.hours_spin.setSingleStep(0.5)
+        self.hours_spin.setSuffix(" hrs")
+        self.hours_spin.setStyleSheet("color: #e2e8f0; font-size: 13px; padding: 4px;")
+        controls_layout.addWidget(self.hours_spin)
+
         controls_layout.addStretch()
-        
+
         layout.addLayout(controls_layout)
 
         # Visual Steps Grid
@@ -249,8 +290,11 @@ class AutomaticView(QWidget):
     def _on_done(self):
         """Worker thread finished."""
         self.run_btn.setEnabled(True)
+        self.overnight_btn.setEnabled(True)
+        self.hours_spin.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.force_cb.setEnabled(True)
+        self.reset_weights_cb.setEnabled(True)
         if self.main_window:
             self.main_window.set_status("Pipeline execution finished")
 
@@ -258,21 +302,57 @@ class AutomaticView(QWidget):
         self.terminal.clear()
         self._reset_steps()
         self.run_btn.setEnabled(False)
+        self.overnight_btn.setEnabled(False)
+        self.hours_spin.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.force_cb.setEnabled(False)
+        self.reset_weights_cb.setEnabled(False)
         
         self._append_log("Starting automatic pipeline initialization...")
         
-        # If force is checked, we should probably clear caches. 
-        # The pipeline currently doesn't natively accept a "force" arg directly to run_full_pipeline, 
+        # If force is checked, we should probably clear caches.
+        # The pipeline currently doesn't natively accept a "force" arg directly to run_full_pipeline,
         # so we will use the data sync force mechanism and clear sync_meta.
         if self.force_cb.isChecked():
             from src.data.sync_service import clear_sync_cache
             clear_sync_cache()
             self._append_log("Force mode enabled: Caches cleared.")
 
+        if self.reset_weights_cb.isChecked():
+            from src.analytics.weight_config import clear_all_weights
+            clear_all_weights()
+            self._append_log("Weights reset to defaults. Optimizer will explore fresh.")
+
         # Start the worker
         self._current_worker = start_pipeline_worker(
+            on_progress=self._append_log,
+            on_result=self._on_results,
+            on_done=self._on_done
+        )
+
+    def _start_overnight(self):
+        self.terminal.clear()
+        self._reset_steps()
+        self.run_btn.setEnabled(False)
+        self.overnight_btn.setEnabled(False)
+        self.hours_spin.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+        self.force_cb.setEnabled(False)
+        self.reset_weights_cb.setEnabled(False)
+
+        max_hours = self.hours_spin.value()
+        reset = self.reset_weights_cb.isChecked()
+
+        if self.force_cb.isChecked():
+            from src.data.sync_service import clear_sync_cache
+            clear_sync_cache()
+            self._append_log("Force mode enabled: Caches cleared.")
+
+        self._append_log(f"Starting overnight optimization ({max_hours}h budget)...")
+
+        self._current_worker = start_overnight_worker(
+            max_hours=max_hours,
+            reset_weights=reset,
             on_progress=self._append_log,
             on_result=self._on_results,
             on_done=self._on_done

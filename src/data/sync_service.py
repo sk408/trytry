@@ -61,7 +61,10 @@ def clear_sync_cache():
     """Delete all freshness metadata so next sync re-fetches everything."""
     db.execute("DELETE FROM sync_meta")
     db.execute("DELETE FROM player_sync_cache")
-    logger.info("Cleared all sync freshness caches")
+    # Also invalidate the precompute disk cache so games are rebuilt from fresh data
+    from src.analytics.prediction import invalidate_precompute_cache
+    invalidate_precompute_cache()
+    logger.info("Cleared all sync freshness caches (including precompute cache)")
 
 
 def sync_reference_data(callback: Optional[Callable] = None, force: bool = False):

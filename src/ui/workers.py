@@ -450,6 +450,31 @@ class PipelineWorker(BaseWorker):
         self.finished.emit()
 
 
+class OvernightWorker(BaseWorker):
+    """Runs full pipeline then loops optimization until time runs out."""
+    def __init__(self, max_hours: float = 8.0, reset_weights: bool = False):
+        super().__init__()
+        self.max_hours = max_hours
+        self.reset_weights = reset_weights
+
+    def run(self):
+        try:
+            from src.database.db import thread_local_db
+            thread_local_db()
+            from src.analytics.pipeline import run_overnight, is_cancelled
+            results = run_overnight(
+                max_hours=self.max_hours,
+                reset_weights=self.reset_weights,
+                callback=lambda msg: self.progress.emit(msg)
+            )
+            bt = results.get("backtest", {})
+            if bt and bt.get("total_games", 0) > 0:
+                self.result.emit(bt)
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
+
 class MLTrainWorker(BaseWorker):
     def run(self):
         try:
@@ -713,6 +738,9 @@ def start_continuous_worker(on_progress=None, on_done=None):
 
 def start_pipeline_worker(on_progress=None, on_result=None, on_done=None):
     return _start_worker(PipelineWorker(), on_progress, on_done, on_result)
+
+def start_overnight_worker(max_hours=8.0, reset_weights=False, on_progress=None, on_result=None, on_done=None):
+    return _start_worker(OvernightWorker(max_hours, reset_weights), on_progress, on_done, on_result)
 
 def start_ml_train_worker(on_progress=None, on_done=None):
     return _start_worker(MLTrainWorker(), on_progress, on_done)
