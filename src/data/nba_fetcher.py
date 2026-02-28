@@ -89,7 +89,7 @@ def fetch_players(team_id: int) -> List[Dict[str, Any]]:
 
 
 def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Fetch game logs for a player using PlayerGameLog."""
+    """Fetch game logs for a single player using PlayerGameLog."""
     try:
         from nba_api.stats.endpoints import PlayerGameLog
         if season is None:
@@ -107,7 +107,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> List
             logs.append({
                 "player_id": player_id,
                 "game_id": str(row.get("Game_ID", "")),
-                "game_date": str(row.get("GAME_DATE", ""))[:10],
+                "game_date": _normalize_game_date(row.get("GAME_DATE", "")),
                 "matchup": matchup,
                 "is_home": is_home,
                 "opponent_abbr": opp_abbr,
@@ -133,6 +133,77 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> List
         return logs
     except Exception as e:
         logger.error(f"Error fetching game logs for player {player_id}: {e}")
+        return []
+
+
+def fetch_bulk_game_logs(date_from: Optional[str] = None,
+                         date_to: Optional[str] = None,
+                         season: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch ALL player game logs in one API call using LeagueGameLog.
+
+    Args:
+        date_from: Start date in MM/DD/YYYY format (inclusive). None = season start.
+        date_to: End date in MM/DD/YYYY format (inclusive). None = today.
+        season: NBA season string (e.g. '2025-26'). None = current season.
+
+    Returns:
+        List of game log dicts in the same format as fetch_player_game_logs().
+    """
+    try:
+        from nba_api.stats.endpoints import LeagueGameLog
+        if season is None:
+            season = get_season()
+        kwargs = {
+            "season": season,
+            "player_or_team_abbreviation": "P",
+            "season_type_all_star": "Regular Season",
+        }
+        if date_from:
+            kwargs["date_from_nullable"] = date_from
+        if date_to:
+            kwargs["date_to_nullable"] = date_to
+
+        result = _safe_get(LeagueGameLog, **kwargs)
+        if result is None:
+            return []
+        df = result.get_data_frames()[0]
+        if df.empty:
+            return []
+
+        logs = []
+        for _, row in df.iterrows():
+            matchup = str(row.get("MATCHUP", ""))
+            is_home = 1 if "vs." in matchup else 0
+            opp_abbr = matchup.split(" ")[-1] if matchup else ""
+            logs.append({
+                "player_id": int(row["PLAYER_ID"]),
+                "game_id": str(row.get("GAME_ID", "")),
+                "game_date": _normalize_game_date(row.get("GAME_DATE", "")),
+                "matchup": matchup,
+                "is_home": is_home,
+                "opponent_abbr": opp_abbr,
+                "win_loss": str(row.get("WL", "")),
+                "minutes": float(row.get("MIN", 0) or 0),
+                "points": float(row.get("PTS", 0) or 0),
+                "rebounds": float(row.get("REB", 0) or 0),
+                "assists": float(row.get("AST", 0) or 0),
+                "steals": float(row.get("STL", 0) or 0),
+                "blocks": float(row.get("BLK", 0) or 0),
+                "turnovers": float(row.get("TOV", 0) or 0),
+                "fg_made": int(row.get("FGM", 0) or 0),
+                "fg_attempted": int(row.get("FGA", 0) or 0),
+                "fg3_made": int(row.get("FG3M", 0) or 0),
+                "fg3_attempted": int(row.get("FG3A", 0) or 0),
+                "ft_made": int(row.get("FTM", 0) or 0),
+                "ft_attempted": int(row.get("FTA", 0) or 0),
+                "oreb": float(row.get("OREB", 0) or 0),
+                "dreb": float(row.get("DREB", 0) or 0),
+                "plus_minus": float(row.get("PLUS_MINUS", 0) or 0),
+                "personal_fouls": float(row.get("PF", 0) or 0),
+            })
+        return logs
+    except Exception as e:
+        logger.error(f"Error fetching bulk game logs: {e}")
         return []
 
 

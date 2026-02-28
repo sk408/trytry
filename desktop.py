@@ -1,7 +1,12 @@
 """Entry point — PySide6 Desktop GUI launcher."""
 
+import faulthandler
 import logging
 import sys
+import traceback
+
+# Enable faulthandler early — prints a traceback on SIGSEGV / SIGABRT
+faulthandler.enable()
 
 # Load initial config to set correct log level
 import src.config
@@ -14,6 +19,17 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
+
+# Global exception hook — prevents PySide6 from crashing on unhandled
+# exceptions in signal slots (which propagate to C++ and terminate).
+_original_excepthook = sys.excepthook
+
+def _gui_excepthook(exc_type, exc_value, exc_tb):
+    """Log unhandled exceptions instead of crashing the app."""
+    logger.error("Unhandled exception:\n%s",
+                 "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+
+sys.excepthook = _gui_excepthook
 
 
 def main():

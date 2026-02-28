@@ -283,24 +283,46 @@ class MatchupView(QWidget):
         self.winner_card.set_value(winner if winner else "—")
         self.confidence_card.set_value(f"{confidence * 100:.0f}%")
 
-        # Breakdown from adjustments
-        adjustments = {
-            "Home Court": result.get("home_court_advantage", 0),
-            "Fatigue": result.get("fatigue_adj", 0),
-            "Turnover": result.get("turnover_adj", 0),
-            "Rebound": result.get("rebound_adj", 0),
-            "Rating Matchup": result.get("rating_matchup_adj", 0),
-            "Four Factors": result.get("four_factors_adj", 0),
-            "Clutch": result.get("clutch_adj", 0),
-            "Hustle": result.get("hustle_adj", 0),
-            "ESPN Blend": result.get("espn_blend_adj", 0),
-            "ML Blend": result.get("ml_blend_adj", 0),
-        }
-        non_zero = {k: v for k, v in adjustments.items() if abs(v) > 0.01}
-        self.breakdown_table.setRowCount(len(non_zero))
-        for row, (factor, val) in enumerate(non_zero.items()):
+        # Breakdown — show all non-zero parameters
+        all_adjustments = [
+            ("Home Court", result.get("home_court_advantage", 0)),
+            ("Fatigue", result.get("fatigue_adj", 0)),
+            ("Turnover", result.get("turnover_adj", 0)),
+            ("Rebound", result.get("rebound_adj", 0)),
+            ("Rating Matchup", result.get("rating_matchup_adj", 0)),
+            ("Four Factors", result.get("four_factors_adj", 0)),
+            ("Clutch", result.get("clutch_adj", 0)),
+            ("Hustle (Spread)", result.get("hustle_adj", 0)),
+            ("Pace (Total)", result.get("pace_adj", 0)),
+            ("Def. Disruption (Total)", result.get("defensive_disruption", 0)),
+            ("OREB Boost (Total)", result.get("oreb_boost", 0)),
+            ("Hustle (Total)", result.get("hustle_total_adj", 0)),
+            ("Sharp Money", result.get("adjustments", {}).get("sharp_money", 0)),
+            ("ESPN Blend", result.get("espn_blend_adj", 0)),
+            ("ML Blend", result.get("ml_blend_adj", 0)),
+        ]
+        visible = [(k, v) for k, v in all_adjustments if abs(v) > 0.01]
+
+        # Add sharp money raw info row if data exists
+        sh_pub = result.get("sharp_home_public", 0)
+        sh_mon = result.get("sharp_home_money", 0)
+        if sh_pub > 0 or sh_mon > 0:
+            visible.append(("Sharp: Public/Money", None))  # sentinel for special formatting
+
+        self.breakdown_table.setRowCount(len(visible))
+        for row, (factor, val) in enumerate(visible):
             self.breakdown_table.setItem(row, 0, QTableWidgetItem(factor))
-            self.breakdown_table.setItem(row, 1, QTableWidgetItem(f"{val:+.2f}"))
+            if val is None:
+                # Special row: show raw sharp money percentages
+                item = QTableWidgetItem(f"H {sh_pub}%/{sh_mon}%  A {100-sh_pub}%/{100-sh_mon}%")
+                if abs(sh_mon - sh_pub) >= 10:
+                    item.setForeground(QColor("#2196F3"))  # blue for big divergence
+                self.breakdown_table.setItem(row, 1, item)
+            else:
+                item = QTableWidgetItem(f"{val:+.2f}")
+                if abs(val) > 10.0:
+                    item.setForeground(Qt.red)
+                self.breakdown_table.setItem(row, 1, item)
 
         # ── Injury impact + rosters ──
         home_team = result.get("home_team", "HOME")

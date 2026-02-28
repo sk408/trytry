@@ -124,6 +124,51 @@ class AdminView(QWidget):
         log_row.addStretch()
         perf_layout.addLayout(log_row)
 
+        # Sync freshness
+        fresh_row = QHBoxLayout()
+        fresh_label = QLabel("Sync Freshness:")
+        fresh_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        fresh_row.addWidget(fresh_label)
+
+        self.freshness_spin = QSpinBox()
+        self.freshness_spin.setMinimum(1)
+        self.freshness_spin.setMaximum(168)
+        self.freshness_spin.setSuffix(" hrs")
+        self.freshness_spin.setFixedWidth(90)
+        self.freshness_spin.setStyleSheet(
+            "QSpinBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
+            "border-radius: 4px; padding: 4px; font-size: 13px; }"
+        )
+        fresh_row.addWidget(self.freshness_spin)
+
+        fresh_desc = QLabel("Hours before game logs re-fetch (lower = fresher, more API calls)")
+        fresh_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        fresh_row.addWidget(fresh_desc)
+        fresh_row.addStretch()
+        perf_layout.addLayout(fresh_row)
+
+        # Optimizer log interval
+        optlog_row = QHBoxLayout()
+        optlog_label = QLabel("Optimizer Log Interval:")
+        optlog_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        optlog_row.addWidget(optlog_label)
+
+        self.optlog_spin = QSpinBox()
+        self.optlog_spin.setMinimum(1)
+        self.optlog_spin.setMaximum(3000)
+        self.optlog_spin.setFixedWidth(90)
+        self.optlog_spin.setStyleSheet(
+            "QSpinBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
+            "border-radius: 4px; padding: 4px; font-size: 13px; }"
+        )
+        optlog_row.addWidget(self.optlog_spin)
+
+        optlog_desc = QLabel("Log every N trials during optimization (+ new bests always logged)")
+        optlog_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        optlog_row.addWidget(optlog_desc)
+        optlog_row.addStretch()
+        perf_layout.addLayout(optlog_row)
+
         self.oled_checkbox = QCheckBox("OLED Dark Mode (Pure Black Backgrounds)")
         self.oled_checkbox.setStyleSheet(
             "QCheckBox { color: #e2e8f0; font-size: 13px; spacing: 8px; }"
@@ -229,6 +274,10 @@ class AdminView(QWidget):
                 self.log_combo.setCurrentIndex(idx)
             oled_mode = get_setting("oled_mode", False)
             self.oled_checkbox.setChecked(bool(oled_mode))
+            freshness = get_setting("sync_freshness_hours", 4)
+            self.freshness_spin.setValue(int(freshness))
+            optlog = get_setting("optimizer_log_interval", 300)
+            self.optlog_spin.setValue(int(optlog))
         except Exception:
             pass
 
@@ -243,6 +292,10 @@ class AdminView(QWidget):
             
             oled_mode = self.oled_checkbox.isChecked()
             set_value("oled_mode", oled_mode)
+            freshness = self.freshness_spin.value()
+            set_value("sync_freshness_hours", freshness)
+            optlog = self.optlog_spin.value()
+            set_value("optimizer_log_interval", optlog)
 
             # Apply log level immediately
             import logging as _logging
@@ -253,7 +306,7 @@ class AdminView(QWidget):
             from src.ui.theme import setup_theme
             if self.main_window:
                 setup_theme(self.main_window)
-                self.main_window.set_status(f"Settings saved: {threads} threads, log level {log_level}, OLED {'On' if oled_mode else 'Off'}")
+                self.main_window.set_status(f"Settings saved: {threads} threads, log {log_level}, freshness {freshness}h, log interval {optlog}")
                 
                 # Iterate through all widgets and force style update
                 for widget in self.main_window.findChildren(QWidget):
@@ -298,11 +351,10 @@ class AdminView(QWidget):
             return
 
         try:
-            from src.analytics.weight_config import WeightConfig, save_weight_config
-            wc = WeightConfig()  # Defaults
-            save_weight_config(wc)
+            from src.analytics.weight_config import clear_all_weights
+            clear_all_weights()
             self._refresh()
             if self.main_window:
-                self.main_window.set_status("Weights cleared")
+                self.main_window.set_status("Weights reset to defaults (optimizer will re-run)")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Clear failed: {e}")

@@ -58,7 +58,9 @@ def _start_worker(worker: BaseWorker, on_progress=None, on_done=None, on_result=
     if on_done:
         worker.finished.connect(on_done, _QC)
     worker.finished.connect(thread.quit)
-    # prevent GC
+    # Schedule C++ cleanup only after thread has fully stopped
+    thread.finished.connect(thread.deleteLater)
+    # prevent GC until thread is done
     worker._thread_ref = thread
     thread.start()
     return worker
@@ -144,17 +146,36 @@ class OddsSyncWorker(BaseWorker):
         self.finished.emit()
 
 
+class NukeResyncWorker(BaseWorker):
+    """Nuke all synced data, then run a full force sync from scratch."""
+    def run(self):
+        try:
+            from src.data.sync_service import nuke_synced_data, full_sync
+            cb = lambda msg: self.progress.emit(msg)
+            nuke_synced_data(callback=cb)
+            self.progress.emit("\nStarting full force resync from scratch...")
+            full_sync(callback=cb, force=True)
+            self.progress.emit("Nuke & Resync complete!")
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
+
 def start_odds_sync_worker(on_progress=None, on_done=None, force: bool = False):
     return _start_worker(OddsSyncWorker(force=force), on_progress, on_done)
 
-def start_sensitivity_worker(param: str, steps: int = 100, target: str = "ats",
+
+def start_nuke_resync_worker(on_progress=None, on_done=None):
+    return _start_worker(NukeResyncWorker(), on_progress, on_done)
+
+def start_sensitivity_worker(param: str, steps: int = 100, target: str = "ml",
                              on_progress=None, on_done=None):
     return _start_worker(SensitivityWorker(param, steps, target), on_progress, on_done)
 
 
 def start_coordinate_descent_worker(steps: int = 100, max_rounds: int = 10,
                                     convergence: float = 0.005,
-                                    target: str = "ats",
+                                    target: str = "ml",
                                     apply_results: bool = True,
                                     on_progress=None, on_done=None):
     return _start_worker(
@@ -450,6 +471,26 @@ class PipelineWorker(BaseWorker):
         self.finished.emit()
 
 
+class RetuneWorker(BaseWorker):
+    """Skip data sync, force-run autotune + ML + optimize + backtest."""
+    def run(self):
+        try:
+            from src.database.db import thread_local_db
+            thread_local_db()
+            from src.analytics.pipeline import run_retune
+            self.progress.emit("Starting retune (no data sync)...")
+            results = run_retune(
+                callback=lambda msg: self.progress.emit(msg)
+            )
+            bt = results.get("backtest", {})
+            if bt and bt.get("total_games", 0) > 0:
+                self.result.emit(bt)
+            self.progress.emit("Retune complete")
+        except Exception as e:
+            self.progress.emit(f"Error: {e}")
+        self.finished.emit()
+
+
 class OvernightWorker(BaseWorker):
     """Runs full pipeline then loops optimization until time runs out."""
     def __init__(self, max_hours: float = 8.0, reset_weights: bool = False):
@@ -672,13 +713,19 @@ class OverviewWorker(BaseWorker):
                                 "spread": getattr(pred, 'predicted_spread', 0.0),
                                 "total": getattr(pred, 'predicted_total', 0.0),
                                 "winner": pred.winner,
-                                "sharp_money_adj": pred.adjustments.get("sharp_money", 0.0) if hasattr(pred, 'adjustments') else 0.0
+                                "sharp_money_adj": pred.adjustments.get("sharp_money", 0.0) if hasattr(pred, 'adjustments') else 0.0,
+                                "sharp_home_public": getattr(pred, 'sharp_home_public', 0),
+                                "sharp_home_money": getattr(pred, 'sharp_home_money', 0),
                             }
                         except Exception as e:
                             import traceback
                             logger.warning(f"Prediction failed for {away_abbr} @ {home_abbr}: {e}\n{traceback.format_exc()}")
 
-                    odds = get_actionnetwork_odds(home_abbr, away_abbr)
+                    try:
+                        odds = get_actionnetwork_odds(home_abbr, away_abbr)
+                    except Exception as oe:
+                        logger.warning(f"Odds fetch failed for {away_abbr} @ {home_abbr}: {oe}")
+                        odds = {}
 
                     g_data = {
                         "espn_id": g.get("espn_id"),
@@ -738,6 +785,9 @@ def start_continuous_worker(on_progress=None, on_done=None):
 
 def start_pipeline_worker(on_progress=None, on_result=None, on_done=None):
     return _start_worker(PipelineWorker(), on_progress, on_done, on_result)
+
+def start_retune_worker(on_progress=None, on_result=None, on_done=None):
+    return _start_worker(RetuneWorker(), on_progress, on_done, on_result)
 
 def start_overnight_worker(max_hours=8.0, reset_weights=False, on_progress=None, on_result=None, on_done=None):
     return _start_worker(OvernightWorker(max_hours, reset_weights), on_progress, on_done, on_result)

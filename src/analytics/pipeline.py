@@ -224,13 +224,18 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Reload memory after autotune writes new team corrections to DB,
-        # so precomputed games below reflect the updated tuning values.
+        # Reload memory after autotune and invalidate tuning cache so
+        # VectorizedGames and predict_from_precomputed pick up new corrections
         if results.get("autotune"):
             store.reload()
+            from src.analytics.prediction import invalidate_tuning_cache
+            invalidate_tuning_cache()
             emit("  Memory reloaded with autotune corrections")
 
-        # --- Pre-compute game data once for steps 9-12 ---
+        # --- Pre-compute game data (only when new games exist) ---
+        # Precomputed games contain raw stats only — tuning corrections are loaded
+        # fresh at evaluation time by VectorizedGames, so these only need rebuilding
+        # when the actual game data changes (new games added).
         _needs_9 = not _is_fresh("ml_train", 168) or _has_new_data("ml_train")
         _needs_10 = not _is_fresh("weight_optimize", 168) or _has_new_data("weight_optimize")
         _needs_11 = not _is_fresh("team_refine", 168) or _has_new_data("team_refine")
@@ -238,13 +243,12 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
 
         _precomputed_cache = None
         if _needs_9 or _needs_10 or _needs_11 or _needs_12:
-            emit("  Precomputing game data (shared by steps 9-12)...")
+            emit("  Loading precomputed game data...")
             from src.analytics.prediction import precompute_game_data
             _precomputed_cache = precompute_game_data(
                 callback=lambda msg: emit(f"  {msg}")
             )
-            emit(f"  Precomputed {len(_precomputed_cache) if _precomputed_cache else 0} games (cached)")
-            # Stash for callers (e.g. run_overnight) to avoid re-precomputing
+            emit(f"  {len(_precomputed_cache) if _precomputed_cache else 0} games ready (disk-cached, only new games recomputed)")
             results["_precomputed_cache"] = _precomputed_cache
 
         if is_cancelled():
@@ -269,8 +273,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 10: Global weight optimization
-        emit("[Step 10/13] Optimizing weights (3000 Optuna trials)...")
+        # Step 10: Global weight optimization (moneyline target)
+        emit("[Step 10/13] Optimizing weights — ML target (3000 Optuna trials)...")
         if _needs_10:
             from src.analytics.weight_optimizer import optimize_weights
             if _precomputed_cache and len(_precomputed_cache) >= 20:
@@ -296,7 +300,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
             if _precomputed_cache and len(_precomputed_cache) >= 20:
                 refine_result = per_team_refinement(
                     _precomputed_cache, n_trials=500,
-                    callback=lambda msg: emit(f"  {msg}")
+                    callback=lambda msg: emit(f"  {msg}"),
+                    is_cancelled=is_cancelled
                 )
                 results["refinement"] = refine_result
             _mark_step_done("team_refine")
@@ -363,13 +368,164 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         return results
 
 
+def run_retune(callback: Optional[Callable] = None) -> Dict[str, Any]:
+    """Retune pipeline: skip data sync, force-run autotune + ML + optimize + backtest.
+
+    Use this after editing code/weights/config — when the raw data hasn't changed
+    but you want to re-run all the tuning and optimization steps.
+
+    Steps: snapshot -> memory load -> autotune -> precompute load ->
+           ML train -> optimize (3000) -> per-team refine (500) ->
+           residual cal -> backtest
+    """
+    clear_cancel()
+    start_time = time.time()
+    results = {}
+
+    def emit(msg: str):
+        if callback:
+            callback(msg)
+        logger.info(msg)
+
+    try:
+        # Snapshot
+        emit("[Retune 1/8] Creating snapshot backup...")
+        from src.analytics.snapshots import create_snapshot
+        snapshot_path = create_snapshot("retune")
+        if snapshot_path:
+            emit(f"  Backup saved to {os.path.basename(snapshot_path)}")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Load memory
+        emit("[Retune 2/8] Loading data into memory...")
+        from src.analytics.memory_store import InMemoryDataStore
+        store = InMemoryDataStore()
+        store.reload()
+        emit(f"  Loaded {len(store.player_stats)} player stats, {len(store.teams)} teams")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Autotune (always run, ignore freshness)
+        emit("[Retune 3/8] Autotuning teams...")
+        from src.analytics.autotune import autotune_all
+        at_result = autotune_all(
+            strength=0.75, mode="classic",
+            callback=lambda msg: emit(f"  {msg}")
+        )
+        results["autotune"] = {"teams_tuned": at_result.get("teams_tuned", 0)}
+        _mark_step_done("autotune")
+
+        store.reload()
+        from src.analytics.prediction import invalidate_tuning_cache
+        invalidate_tuning_cache()
+        emit("  Memory reloaded with autotune corrections")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Load precomputed games (from disk cache — no rebuild unless new games)
+        emit("  Loading precomputed game data...")
+        from src.analytics.prediction import precompute_game_data
+        precomputed = precompute_game_data(
+            callback=lambda msg: emit(f"  {msg}")
+        )
+        if not precomputed or len(precomputed) < 20:
+            emit("  Not enough precomputed games. Run Full Pipeline first.")
+            return {"error": "Not enough precomputed games", **results}
+        emit(f"  {len(precomputed)} games ready")
+        results["_precomputed_cache"] = precomputed
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # ML train (always run)
+        emit("[Retune 4/8] Training ML models...")
+        from src.analytics.ml_model import train_models
+        if len(precomputed) >= 50:
+            ml_result = train_models(
+                precomputed,
+                callback=lambda msg: emit(f"  {msg}")
+            )
+            results["ml_train"] = ml_result
+        _mark_step_done("ml_train")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Optimize weights (always run)
+        emit("[Retune 5/8] Optimizing weights — ML target (3000 trials)...")
+        from src.analytics.weight_optimizer import optimize_weights
+        opt_result = optimize_weights(
+            precomputed, n_trials=3000,
+            callback=lambda msg: emit(f"  {msg}"),
+            is_cancelled=is_cancelled
+        )
+        results["optimize"] = opt_result
+        _mark_step_done("weight_optimize")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Per-team refinement (always run)
+        emit("[Retune 6/8] Per-team weight refinement...")
+        from src.analytics.weight_optimizer import per_team_refinement
+        refine_result = per_team_refinement(
+            precomputed, n_trials=500,
+            callback=lambda msg: emit(f"  {msg}"),
+            is_cancelled=is_cancelled
+        )
+        results["refinement"] = refine_result
+        _mark_step_done("team_refine")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Residual calibration (always run)
+        emit("[Retune 7/8] Building residual calibration...")
+        from src.analytics.weight_optimizer import build_residual_calibration
+        cal_result = build_residual_calibration(
+            precomputed,
+            callback=lambda msg: emit(f"  {msg}")
+        )
+        results["calibration"] = cal_result
+        _mark_step_done("residual_cal")
+
+        if is_cancelled():
+            return {"cancelled": True, **results}
+
+        # Backtest
+        emit("[Retune 8/8] Running validation backtest...")
+        from src.analytics.backtester import run_backtest
+        from src.analytics.weight_config import invalidate_weight_cache
+        invalidate_weight_cache()
+        bt_result = run_backtest(
+            use_cache=False,
+            callback=lambda msg: emit(f"  {msg}")
+        )
+        results["backtest"] = bt_result
+
+        elapsed = time.time() - start_time
+        emit(f"\nRetune complete in {elapsed:.0f}s")
+        results["elapsed_seconds"] = round(elapsed, 1)
+        return results
+
+    except Exception as e:
+        logger.exception(f"Retune error: {e}")
+        emit(f"Retune error: {e}")
+        results["error"] = str(e)
+        return results
+
+
 def run_overnight(max_hours: float = 8.0,
                   reset_weights: bool = False,
                   callback: Optional[Callable] = None) -> Dict[str, Any]:
     """Run full pipeline once, then loop optimization steps until time runs out.
 
     Pass 1: full 13-step pipeline (data sync, autotune, ML, optimize, backtest)
-    Pass 2+: optimize weights (3000) → per-team refine (500) → residual cal → backtest
+    Pass 2+: optimize weights (3000) -> per-team refine (500) -> residual cal -> backtest
     Each pass uses fresh random seeds. Precomputed game data is reused across passes.
     """
     clear_cancel()
@@ -442,8 +598,8 @@ def run_overnight(max_hours: float = 8.0,
         emit(f"\n--- Pass {pass_num}: Optimization Loop ({fmt_elapsed(time_left())} remaining) ---")
 
         try:
-            # Step A: Global weight optimization
-            emit(f"[Loop {pass_num}] Optimizing weights (3000 trials)...")
+            # Step A: Global weight optimization (moneyline target)
+            emit(f"[Loop {pass_num}] Optimizing weights — ML target (3000 trials)...")
             from src.analytics.weight_optimizer import optimize_weights
             opt_result = optimize_weights(
                 precomputed, n_trials=3000,
@@ -454,14 +610,15 @@ def run_overnight(max_hours: float = 8.0,
                 break
 
             improved_str = "IMPROVED" if opt_result.get("improved") else "no change"
-            emit(f"  Global: {improved_str} (loss {opt_result.get('baseline_loss', 0):.3f} → {opt_result.get('best_loss', 0):.3f})")
+            emit(f"  Global: {improved_str} (loss {opt_result.get('baseline_loss', 0):.3f} -> {opt_result.get('best_loss', 0):.3f})")
 
             # Step B: Per-team refinement
             emit(f"[Loop {pass_num}] Per-team refinement (500 trials)...")
             from src.analytics.weight_optimizer import per_team_refinement
             refine_result = per_team_refinement(
                 precomputed, n_trials=500,
-                callback=lambda msg: emit(f"  {msg}")
+                callback=lambda msg: emit(f"  {msg}"),
+                is_cancelled=is_cancelled
             )
             if is_cancelled():
                 break
@@ -489,15 +646,22 @@ def run_overnight(max_hours: float = 8.0,
             loop_elapsed = time.time() - loop_start
             loop_times.append(loop_elapsed)
 
-            # Compare to best
-            cur_loss = bt.get("spread_mae", 999) + bt.get("total_mae", 999) * 0.3
-            best_loss = best_overall.get("spread_mae", 999) + best_overall.get("total_mae", 999) * 0.3
-            if cur_loss < best_loss:
+            # Compare to best using dog-first metrics
+            dog_cur = bt.get("dog_metrics", {})
+            dog_best = best_overall.get("dog_metrics", {})
+            cur_dog_roi = dog_cur.get("dog_roi", -999)
+            best_dog_roi = dog_best.get("dog_roi", -999)
+            # Primary: dog ROI. Tiebreak: dog hit rate.
+            cur_score = cur_dog_roi + dog_cur.get("dog_hit_rate", 0) * 0.01
+            best_score = best_dog_roi + dog_best.get("dog_hit_rate", 0) * 0.01
+            if cur_score > best_score:
                 best_overall = bt
-                emit(f"  NEW BEST! MAE={bt.get('spread_mae', 0):.2f}, "
-                     f"Win={bt.get('winner_pct', 0):.1f}%, ATS={bt.get('ats_rate', 0):.1f}%")
+                emit(f"  NEW BEST! DogROI={cur_dog_roi:+.0f}%, "
+                     f"DogHit={dog_cur.get('dog_hit_rate', 0):.0f}%, "
+                     f"Win={bt.get('winner_pct', 0):.1f}%, "
+                     f"MAE={bt.get('spread_mae', 0):.2f}")
             else:
-                emit(f"  No improvement (MAE={bt.get('spread_mae', 0):.2f} vs best {best_overall.get('spread_mae', 0):.2f})")
+                emit(f"  No improvement (DogROI={cur_dog_roi:+.0f}% vs best {best_dog_roi:+.0f}%)")
 
             emit(f"  Pass {pass_num} took {fmt_elapsed(loop_elapsed)} | "
                  f"avg {fmt_elapsed(sum(loop_times)/len(loop_times))}/pass")
@@ -512,10 +676,16 @@ def run_overnight(max_hours: float = 8.0,
     emit(f"\n{'='*60}")
     emit(f"Overnight complete: {pass_num} passes in {fmt_elapsed(total_elapsed)}")
     if best_overall:
-        emit(f"Best result: MAE={best_overall.get('spread_mae', 0):.2f}, "
-             f"Winner={best_overall.get('winner_pct', 0):.1f}%, "
-             f"ATS={best_overall.get('ats_rate', 0):.1f}%, "
-             f"ATS ROI={best_overall.get('ats_roi', 0):.1f}%")
+        dog = best_overall.get("dog_metrics", {})
+        dog_str = "No dog data"
+        if dog.get("dog_picks"):
+            dog_str = (f"DogROI={dog['dog_roi']:+.0f}%, "
+                       f"DogHit={dog['dog_hit_rate']:.0f}% "
+                       f"({dog['dog_picks']}/{dog['value_zone_games']} picks)")
+        emit(f"Best result: {dog_str}, "
+             f"Win={best_overall.get('winner_pct', 0):.1f}%, "
+             f"ML ROI={best_overall.get('ml_roi', 0):+.1f}%, "
+             f"MAE={best_overall.get('spread_mae', 0):.2f}")
     emit(f"{'='*60}")
 
     return {

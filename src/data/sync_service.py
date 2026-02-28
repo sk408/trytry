@@ -72,6 +72,86 @@ def clear_sync_cache():
     logger.info("Cleared all sync freshness caches (including all compute caches)")
 
 
+def nuke_synced_data(callback: Optional[Callable] = None):
+    """Delete ALL synced data from the database and disk caches.
+
+    This wipes every table populated by the sync pipeline so that a
+    subsequent full_sync(force=True) re-fetches everything from scratch.
+    Preserves the database schema (tables/indexes remain).
+    """
+    import os, glob, shutil
+
+    def emit(msg):
+        if callback:
+            callback(msg)
+        logger.info(msg)
+
+    emit("Nuking all synced data...")
+
+    # 1. Clear all DB tables populated by sync
+    tables = [
+        "player_stats", "player_sync_cache", "players", "teams",
+        "team_metrics", "player_impact", "injuries", "injury_history",
+        "game_odds", "game_quarter_scores", "sync_meta",
+        # Also clear derived/tuning tables so they rebuild cleanly
+        "team_tuning", "model_weights", "team_weight_overrides",
+        "residual_calibration", "predictions",
+    ]
+    for table in tables:
+        try:
+            db.execute(f"DELETE FROM {table}")
+            emit(f"  Cleared table: {table}")
+        except Exception as e:
+            emit(f"  Skipped table {table}: {e}")
+
+    # 2. Delete disk caches
+    cache_paths = [
+        os.path.join("data", "cache", "precomputed_games.pkl"),
+        os.path.join("data", "pipeline_state.json"),
+    ]
+    for path in cache_paths:
+        if os.path.exists(path):
+            os.remove(path)
+            emit(f"  Deleted: {path}")
+
+    # Backtest cache directory
+    bt_cache_dir = os.path.join("data", "backtest_cache")
+    if os.path.isdir(bt_cache_dir):
+        shutil.rmtree(bt_cache_dir)
+        emit(f"  Deleted: {bt_cache_dir}/")
+
+    # ML model files
+    ml_dir = os.path.join("data", "ml_models")
+    if os.path.isdir(ml_dir):
+        for f in glob.glob(os.path.join(ml_dir, "*")):
+            os.remove(f)
+        emit(f"  Cleared: {ml_dir}/")
+
+    # Sensitivity CSVs
+    for csv in glob.glob(os.path.join("data", "sensitivity_*.csv")):
+        os.remove(csv)
+        emit(f"  Deleted: {csv}")
+
+    # 3. Invalidate all in-memory caches
+    try:
+        from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache, invalidate_tuning_cache
+        from src.analytics.stats_engine import invalidate_stats_caches
+        from src.analytics.prediction_quality import invalidate_odds_cache
+        from src.analytics.weight_config import invalidate_weight_cache
+        from src.analytics.backtester import invalidate_actual_results_cache
+        invalidate_precompute_cache()
+        invalidate_residual_cache()
+        invalidate_tuning_cache()
+        invalidate_stats_caches()
+        invalidate_odds_cache()
+        invalidate_weight_cache()
+        invalidate_actual_results_cache()
+    except Exception as e:
+        emit(f"  Cache invalidation warning: {e}")
+
+    emit("Nuke complete! All synced data cleared. Run Force Full Sync to re-fetch.")
+
+
 def sync_reference_data(callback: Optional[Callable] = None, force: bool = False):
     """Step 1: Sync teams and players."""
     if not force and _is_fresh("reference_data", 24):
@@ -103,65 +183,76 @@ def sync_reference_data(callback: Optional[Callable] = None, force: bool = False
 
 
 def sync_player_game_logs(callback: Optional[Callable] = None, force: bool = False):
-    """Step 2: Sync player game logs with per-player caching."""
+    """Step 2: Sync player game logs using bulk fetch (1 API call).
+
+    Uses LeagueGameLog to fetch ALL player logs in a single request
+    instead of 320+ individual PlayerGameLog calls.
+    """
     if callback:
         callback("Syncing player game logs...")
 
-    players = db.fetch_all("SELECT player_id, name FROM players")
     now = datetime.now()
-    total = len(players)
 
-    for i, p in enumerate(players):
-        pid = p["player_id"]
+    # Step-level freshness: skip if synced within configured hours (unless force)
+    from src.config import get as get_setting
+    freshness_hours = int(get_setting("sync_freshness_hours", 4))
+    if not force and _is_fresh("player_game_logs", freshness_hours):
+        if callback:
+            callback(f"Game logs are fresh (synced < {freshness_hours}h ago), skipping...")
+        return
 
-        # Check per-player cache (skip if force)
-        if not force:
-          cache_row = db.fetch_one(
-              "SELECT last_synced_at, latest_game_date FROM player_sync_cache WHERE player_id = ?",
-              (pid,)
-          )
-        else:
-          cache_row = None
-        if cache_row and cache_row["last_synced_at"]:
-            try:
-                last_sync = datetime.fromisoformat(cache_row["last_synced_at"])
-                hours_ago = (now - last_sync).total_seconds() / 3600
-                # Skip if synced within 24h, unless game was recent (3 days)
-                if hours_ago < 24:
-                    latest = cache_row["latest_game_date"] or ""
-                    if latest:
-                        try:
-                            game_dt = datetime.strptime(latest, "%Y-%m-%d")
-                            if (now - game_dt).days > 3:
-                                continue
-                        except ValueError:
-                            continue
-                    else:
-                        continue
-            except (ValueError, TypeError):
-                pass
+    # Determine incremental date range
+    date_from_str = None
+    if not force:
+        last_date = _get_last_game_date()
+        if last_date:
+            # Fetch from 1 day before last known game to catch stragglers
+            fetch_from = datetime.strptime(last_date, "%Y-%m-%d") - timedelta(days=1)
+            date_from_str = fetch_from.strftime("%m/%d/%Y")  # API expects MM/DD/YYYY
 
-        logs = nba_fetcher.fetch_player_game_logs(pid)
+    if date_from_str:
+        if callback:
+            callback(f"Bulk fetch: game logs from {date_from_str}...")
+    else:
+        if callback:
+            callback("Bulk fetch: all game logs for the season...")
+
+    logs = nba_fetcher.fetch_bulk_game_logs(date_from=date_from_str)
+
+    if logs:
         nba_fetcher.save_game_logs(logs)
 
-        # Update sync cache
-        latest_date = logs[0]["game_date"] if logs else ""
-        db.execute(
-            """INSERT INTO player_sync_cache (player_id, last_synced_at, games_synced, latest_game_date)
-               VALUES (?,?,?,?)
-               ON CONFLICT(player_id) DO UPDATE SET
-                 last_synced_at=excluded.last_synced_at,
-                 games_synced=excluded.games_synced,
-                 latest_game_date=excluded.latest_game_date""",
-            (pid, now.isoformat(), len(logs), latest_date)
-        )
+        # Update player_sync_cache for all players in the bulk fetch
+        from collections import defaultdict
+        player_info = defaultdict(lambda: {"latest": "", "count": 0})
+        for log in logs:
+            pid = log["player_id"]
+            player_info[pid]["count"] += 1
+            if log["game_date"] > player_info[pid]["latest"]:
+                player_info[pid]["latest"] = log["game_date"]
 
-        if callback and (i + 1) % 25 == 0:
-            callback(f"Game logs: {i + 1}/{total} players...")
+        now_iso = now.isoformat()
+        for pid, info in player_info.items():
+            db.execute(
+                """INSERT INTO player_sync_cache (player_id, last_synced_at, games_synced, latest_game_date)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(player_id) DO UPDATE SET
+                     last_synced_at=excluded.last_synced_at,
+                     games_synced=excluded.games_synced,
+                     latest_game_date=MAX(excluded.latest_game_date,
+                         COALESCE(player_sync_cache.latest_game_date, ''))""",
+                (pid, now_iso, info["count"], info["latest"])
+            )
+
+        if callback:
+            callback(f"Saved {len(logs)} game log entries for {len(player_info)} players")
+    else:
+        if callback:
+            callback("No new game logs found")
 
     _set_sync_meta("player_game_logs", _get_game_count(), _get_last_game_date())
     if callback:
-        callback(f"Player game logs sync complete ({total} players)")
+        callback("Player game logs sync complete")
 
 
 def sync_injuries_step(callback: Optional[Callable] = None, force: bool = False):

@@ -27,7 +27,7 @@
         <!-- Entering Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#22c55e; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">IN</span>
-            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'inline-block', 100);">
+            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.style.display='none';">
             <span id="subInName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subInStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -39,7 +39,7 @@
         <!-- Leaving Player -->
         <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
             <span style="color:#ef4444; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">OUT</span>
-            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.src='/images/players/fallback.png'; setTimeout(()=>this.style.display=this.src.includes('fallback')?'none':'inline-block', 100);">
+            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.style.display='none';">
             <span id="subOutName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
             <span id="subOutStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
         </div>
@@ -599,6 +599,7 @@ let gameES = null;
 let currentSummary = null;
 let previousHomeScore = null;
 let previousAwayScore = null;
+const _failedImages = new Set();  // track 404'd headshot URLs to avoid re-requesting
 
 function toggleGameSelector() {
     const list = document.getElementById('gameList');
@@ -626,18 +627,19 @@ async function loadGames() {
             const id = g.espn_id || g.id || g.game_id;
             
             let statusHtml = '';
-            if (g.status_state === 'in') {
+            const state = g.state || g.status_state || '';
+            if (state === 'in') {
                 statusHtml = `
                     <span class="text-success" style="animation:pulse 2s infinite;">LIVE Q${g.period || '?'} ${g.clock || ''}</span>
                     <span style="margin-left: 8px;">${g.away_score || 0} - ${g.home_score || 0}</span>
                 `;
-            } else if (g.status_state === 'post') {
+            } else if (state === 'post') {
                 statusHtml = `
                     <span class="text-muted">FINAL</span>
                     <span style="margin-left: 8px;">${g.away_score || 0} - ${g.home_score || 0}</span>
                 `;
             } else {
-                statusHtml = `<span class="text-muted">${g.status || 'Upcoming'}</span>`;
+                statusHtml = `<span class="text-muted">${g.short_detail || g.status || 'Upcoming'}</span>`;
             }
             
             return `
@@ -926,6 +928,48 @@ function updateOdds(odds) {
         el.innerHTML = '<div class="text-muted text-sm" style="grid-column: 1 / -1;">No live odds available right now.</div>';
         return;
     }
+
+    // Sharp money signal
+    let sharpHtml = '';
+    const spPub = odds.spread_home_public;
+    const spMon = odds.spread_home_money;
+    const mlPub = odds.ml_home_public;
+    const mlMon = odds.ml_home_money;
+    if (spPub != null && spMon != null) {
+        const edge = spMon - spPub;
+        let signalText = 'No strong signal';
+        let signalColor = 'var(--text-muted)';
+        if (Math.abs(edge) >= 5) {
+            const side = edge > 0 ? 'HOME' : 'AWAY';
+            signalText = `Sharps on ${side} (${Math.abs(edge)}pp)`;
+            signalColor = Math.abs(edge) >= 10 ? '#22c55e' : '#eab308';
+        }
+        sharpHtml = `
+        <div style="grid-column: 1 / -1; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px;">Sharp Money</div>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                <div class="odds-item">
+                    <span class="odds-label">Spread Public</span>
+                    <span class="odds-value">H ${spPub}% / A ${100 - spPub}%</span>
+                </div>
+                <div class="odds-item">
+                    <span class="odds-label">Spread Money</span>
+                    <span class="odds-value">H ${spMon}% / A ${100 - spMon}%</span>
+                </div>
+                ${mlPub != null ? `
+                <div class="odds-item">
+                    <span class="odds-label">ML Public</span>
+                    <span class="odds-value">H ${mlPub}% / A ${100 - mlPub}%</span>
+                </div>
+                <div class="odds-item">
+                    <span class="odds-label">ML Money</span>
+                    <span class="odds-value">H ${mlMon}% / A ${100 - mlMon}%</span>
+                </div>` : ''}
+            </div>
+            <div style="text-align: center; margin-top: 8px; font-weight: 700; font-size: 13px; color: ${signalColor};">${signalText}</div>
+        </div>`;
+    }
+
     el.innerHTML = `
         <div class="odds-item">
             <span class="odds-label">Spread</span>
@@ -944,6 +988,7 @@ function updateOdds(odds) {
             <span class="odds-value">${odds.home_moneyline || 'N/A'}</span>
         </div>
         ${odds.provider ? `<div class="text-xs text-muted" style="grid-column: 1 / -1; text-align: right; margin-top: 8px;">Via ${odds.provider}</div>` : ''}
+        ${sharpHtml}
     `;
 }
 
@@ -971,9 +1016,10 @@ function fillBoxTable(tableId, players) {
     const tbody = document.querySelector('#' + tableId + ' tbody');
     if (!tbody) return;
     tbody.innerHTML = players.map(function(p) {
-        const photo = p.headshot ?
-            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.onerror=null; this.src=\'/images/players/fallback.png\'; setTimeout(()=>this.style.display=this.src.includes(\'fallback\') ? \'none\' : \'inline-block\', 100);">' :
-            '<div style="width:30px;height:30px;border-radius:50%;background-color:#1e293b;box-shadow:0 2px 4px rgba(0,0,0,0.3); display:inline-block; vertical-align:middle;"></div>';
+        const placeholder = '<div style="width:30px;height:30px;border-radius:50%;background-color:#1e293b;box-shadow:0 2px 4px rgba(0,0,0,0.3); display:inline-block; vertical-align:middle;"></div>';
+        const photo = (p.headshot && !_failedImages.has(p.headshot)) ?
+            '<img src="' + p.headshot + '" style="width:30px;height:30px;border-radius:50%;object-fit:cover;box-shadow:0 2px 4px rgba(0,0,0,0.3);" onerror="this.onerror=null; _failedImages.add(this.src); this.style.display=\'none\';">' :
+            placeholder;
         const activeDot = p.active ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background-color:#22c55e;box-shadow:0 0 6px #22c55e;margin-right:6px;vertical-align:middle;"></span>' : '';
         return '<tr>' +
             '<td style="width:32px;">' + photo + '</td>' +

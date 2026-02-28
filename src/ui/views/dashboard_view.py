@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from src.ui.workers import start_sync_worker, start_injury_worker
+from src.ui.workers import start_sync_worker, start_injury_worker, start_nuke_resync_worker
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class DashboardView(QWidget):
         btns = [
             ("Full Sync", self._on_full_sync),
             ("Force Full Sync", self._on_force_sync),
+            ("Nuke & Resync", self._on_nuke_resync),
             ("Injuries", self._on_injuries),
             ("Injury History", self._on_injury_history),
             ("Team Metrics", self._on_team_metrics),
@@ -87,6 +88,9 @@ class DashboardView(QWidget):
         for text, handler in btns:
             btn = QPushButton(text)
             btn.clicked.connect(handler)
+            if text == "Nuke & Resync":
+                btn.setProperty("class", "danger")
+                btn.setToolTip("Delete ALL synced data and re-fetch everything from scratch")
             btn_layout.addWidget(btn)
 
         self.stop_btn = QPushButton("Stop")
@@ -157,6 +161,11 @@ class DashboardView(QWidget):
         self._worker = start_sync_worker(
             "full", self._append_log, self._on_sync_done, force=True
         )
+
+    def _on_nuke_resync(self):
+        self.log.clear()
+        self._append_log("NUKING all synced data and re-fetching from scratch...")
+        self._worker = start_nuke_resync_worker(self._append_log, self._on_sync_done)
 
     def _on_injuries(self):
         self.log.clear()

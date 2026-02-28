@@ -56,9 +56,10 @@ class SensitivityView(QWidget):
 
         ctrl.addWidget(QLabel("Target:"))
         self.target_combo = QComboBox()
+        self.target_combo.addItem("Moneyline", "ml")
+        self.target_combo.addItem("Value (underdog)", "value")
         self.target_combo.addItem("ATS (spread betting)", "ats")
         self.target_combo.addItem("ROI (max return)", "roi")
-        self.target_combo.addItem("Moneyline", "ml")
         ctrl.addWidget(self.target_combo)
 
         ctrl.addWidget(QLabel("Steps:"))

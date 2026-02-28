@@ -66,15 +66,15 @@ class WeightConfig:
     ml_disagree_damp: float = 0.5
     ml_disagree_threshold: float = 6.0
 
-    # Sharp Money
-    sharp_money_weight: float = 0.0
+    # Sharp Money — edge = (money% - public%) / 100; typically ±0.05 to ±0.15
+    sharp_money_weight: float = 1.5
 
     # Betting edge filter — minimum spread edge (in points) to qualify as a
     # "high-confidence" ATS pick for edge_rate / edge_roi evaluation.
     ats_edge_threshold: float = 3.0
 
     # Clamps
-    spread_clamp: float = 25.0
+    spread_clamp: float = 30.0
     total_min: float = 140.0
     total_max: float = 280.0
 
@@ -194,11 +194,14 @@ def save_team_weights(team_id: int, w: WeightConfig):
 
 
 def clear_all_weights():
-    """Clear global and per-team weights, reset cache."""
+    """Clear global and per-team weights, reset cache and freshness."""
     global _cached_global
     db.execute("DELETE FROM model_weights")
     db.execute("DELETE FROM team_weight_overrides")
     _cached_global = None
+    # Invalidate freshness so the pipeline re-runs weight-related steps
+    for step in ("weight_optimize", "team_refine", "residual_cal"):
+        db.execute("DELETE FROM sync_meta WHERE step_name = ?", (step,))
 
 
 def invalidate_weight_cache():
@@ -212,29 +215,30 @@ def invalidate_weight_cache():
 # Parameters that should always be positive have floor >= 0.
 # spread_clamp must stay large enough to distinguish blowouts from close games.
 OPTIMIZER_RANGES = {
-    "def_factor_dampening": (0.1, 3.0),      # sensitivity: optimal ~1.5, was capped at 2.0
-    "turnover_margin_mult": (-1.0, 3.0),     # sweeps showed value outside original bounds
-    "rebound_diff_mult": (-2.0, 2.0),        # sensitivity: optimal ~-1.0, sign can reverse
-    "rating_matchup_mult": (-2.0, 2.0),      # sensitivity: optimal ~-1.1, sign can reverse
+    # Signs are locked to match basketball logic — no sign flips allowed.
+    # spread_clamp is NOT tunable; it's fixed at 30 to prevent compression cheating.
+    "def_factor_dampening": (0.1, 3.0),      # defense dampening (always positive)
+    "turnover_margin_mult": (0.0, 3.0),      # turnovers are bad (positive = penalizes TOs)
+    "rebound_diff_mult": (0.0, 2.0),         # more rebounds = good (always positive)
+    "rating_matchup_mult": (0.0, 2.0),       # matchup edge = good (always positive)
     "four_factors_scale": (50.0, 1500.0),    # scales weighted FF edge into spread points
-    "clutch_scale": (0.01, 2.0),             # clutch rating impact
-    "hustle_effort_mult": (-1.0, 5.0),       # sensitivity: optimal ~3.0, was capped at 2.0
-    "pace_mult": (-2.0, 1.0),
-    "fatigue_total_mult": (-1.0, 2.0),
+    "clutch_scale": (0.01, 2.0),             # clutch rating impact (always positive)
+    "hustle_effort_mult": (0.0, 5.0),        # hustle effort helps (always positive)
+    "pace_mult": (0.0, 1.0),                 # pace adjustment (always positive)
+    "fatigue_total_mult": (0.0, 2.0),        # fatigue hurts (positive = penalizes tired teams)
     "espn_model_weight": (0.0, 1.0),         # model weight in ESPN blend
-    "ml_ensemble_weight": (-2.0, 2.0),       # ML blend weight
-    "ml_disagree_damp": (0.0, 2.0),
-    "spread_clamp": (5.0, 40.0),             # hard cap on spreads (keep wide — big games matter)
-    "ff_efg_weight": (0.0, 3.0),             # sensitivity: optimal ~1.85, was capped at 2.0
-    "ff_tov_weight": (0.0, 2.0),             # relative weight of TOV% in FF composite
-    "ff_oreb_weight": (0.0, 2.0),            # sensitivity: optimal ~1.2, was capped at 1.5
-    "ff_fta_weight": (0.0, 2.0),             # relative weight of FTA rate in FF composite
-    "blocks_penalty": (-1.0, 2.0),
-    "steals_penalty": (-1.0, 2.0),
-    "oreb_mult": (-1.0, 1.0),
+    "ml_ensemble_weight": (0.0, 2.0),        # ML blend weight (always positive)
+    "ml_disagree_damp": (0.0, 2.0),          # dampening factor (always positive)
+    "ff_efg_weight": (0.0, 3.0),             # four factors sub-weights (always positive)
+    "ff_tov_weight": (0.0, 2.0),
+    "ff_oreb_weight": (0.0, 2.0),
+    "ff_fta_weight": (0.0, 2.0),
+    "blocks_penalty": (0.0, 2.0),            # blocks contribute positively (always positive)
+    "steals_penalty": (0.0, 2.0),            # steals contribute positively (always positive)
+    "oreb_mult": (0.0, 1.0),                 # offensive rebounds help (always positive)
     "pace_baseline": (80.0, 115.0),          # league-average pace reference point
-    "sharp_money_weight": (-2.0, 5.0),       # influence of sharp money vs public
-    "ats_edge_threshold": (1.0, 6.0),         # min spread edge for "confident" pick
+    "sharp_money_weight": (0.0, 5.0),        # sharp money influence (always positive)
+    "ats_edge_threshold": (1.0, 6.0),        # min spread edge for "confident" pick
 }
 
 

@@ -19,6 +19,8 @@ _DEFAULTS: Dict[str, Any] = {
     "log_level": "INFO",
     "worker_threads": max(1, (os.cpu_count() or 4) - 2),
     "oled_mode": False,
+    "sync_freshness_hours": 4,
+    "optimizer_log_interval": 300,
 }
 
 _cache: Dict[str, Any] | None = None

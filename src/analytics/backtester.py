@@ -17,6 +17,7 @@ from src.analytics.cache import start_session_caches, stop_session_caches
 from src.analytics.prediction import predict_matchup
 from src.analytics.prediction_quality import compute_quality_metrics, compute_progression, compute_vegas_comparison
 from src.analytics.weight_config import get_weight_config
+from src.analytics.weight_optimizer import VALUE_ZONE_MIN, VALUE_ZONE_MAX
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,17 @@ _progress_lock = threading.Lock()
 BACKTEST_CACHE_DIR = os.path.join("data", "backtest_cache")
 BACKTEST_CACHE_TTL = 3600  # 60 minutes
 
+# Module-level cache for actual game results (facts that only change on new data sync)
+_actual_results_cache: Optional[List[Dict[str, Any]]] = None
+_actual_results_game_count: int = 0
+
+
+def invalidate_actual_results_cache():
+    """Call after syncing new game data so backtest picks up new games."""
+    global _actual_results_cache, _actual_results_game_count
+    _actual_results_cache = None
+    _actual_results_game_count = 0
+
 
 def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """Aggregate player_stats by (game_id, is_home) to reconstruct game scores.
@@ -33,7 +45,22 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
     Uses is_home + opponent_team_id (recorded at game time) instead of
     current team_id from players table, so traded players are attributed
     correctly to the team they played for at the time.
+
+    Results are cached at module level — only rebuilt when game count changes.
     """
+    global _actual_results_cache, _actual_results_game_count
+
+    # Check if cache is still valid (same number of games in DB)
+    current_count_row = db.fetch_one("SELECT COUNT(*) as c FROM player_stats")
+    current_count = current_count_row["c"] if current_count_row else 0
+
+    if _actual_results_cache is not None and current_count == _actual_results_game_count:
+        # Cache hit — apply team filter and return
+        if team_id:
+            return [g for g in _actual_results_cache
+                    if g["home_team_id"] == team_id or g["away_team_id"] == team_id]
+        return list(_actual_results_cache)
+
     query = """
         SELECT ps.game_id, ps.game_date, ps.is_home,
                ps.opponent_team_id,
@@ -72,9 +99,6 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
         if g.get("home_count", 0) < 4 or g.get("away_count", 0) < 4:
             continue
         if "home_team_id" not in g or "away_team_id" not in g:
-            continue
-
-        if team_id and g["home_team_id"] != team_id and g["away_team_id"] != team_id:
             continue
 
         spread = home_score - away_score
@@ -123,7 +147,17 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
             g["spread_home_money"] = None
 
     results.sort(key=lambda x: x["game_date"])
-    return results
+
+    # Store in module-level cache (unfiltered)
+    _actual_results_cache = results
+    _actual_results_game_count = current_count
+    logger.info("Cached %d actual game results (game_count=%d)", len(results), current_count)
+
+    # Apply team filter if requested
+    if team_id:
+        return [g for g in results
+                if g["home_team_id"] == team_id or g["away_team_id"] == team_id]
+    return list(results)
 
 
 def _get_cache_hash() -> str:
@@ -199,7 +233,12 @@ def _save_cache(data: Dict):
 def run_backtest(team_id: Optional[int] = None,
                  use_cache: bool = True,
                  callback: Optional[Callable] = None) -> Dict[str, Any]:
-    """Run backtest on historical games. Returns per-game and aggregate metrics."""
+    """Run backtest on historical games. Returns per-game and aggregate metrics.
+
+    Uses predict_from_precomputed (same path as optimizer) when precomputed
+    games are available, ensuring backtest metrics match optimizer metrics.
+    Falls back to predict_matchup when precomputed data is not available.
+    """
     # Check cache
     if use_cache and team_id is None:
         cached = _load_cache()
@@ -209,44 +248,146 @@ def run_backtest(team_id: Optional[int] = None,
             if "quality_metrics" not in cached:
                 cached["quality_metrics"] = compute_quality_metrics(cached.get("per_game", []), cached.get("per_team", {}))
                 needs_save = True
-            
+
             if "progression" not in cached["quality_metrics"]:
                 cached["quality_metrics"]["progression"] = compute_progression(cached.get("per_game", []))
                 needs_save = True
-                
+
             if "vegas_comparison" not in cached["quality_metrics"]:
                 cached["quality_metrics"]["vegas_comparison"] = compute_vegas_comparison(cached.get("per_game", []))
                 needs_save = True
 
             if needs_save:
                 _save_cache(cached)
-                
+
             if callback:
                 callback("Using cached backtest results")
             return cached
 
+    # Try the fast/aligned path: precomputed games + predict_from_precomputed
+    # This uses the SAME prediction logic as the optimizer (VectorizedGames)
+    from src.analytics.prediction import (
+        predict_from_precomputed, _load_pc_cache,
+    )
+    pc_cache = _load_pc_cache()
+    if pc_cache and not team_id:
+        return _run_backtest_precomputed(pc_cache, callback)
+
+    # Fallback: full predict_matchup path (slower, may diverge from optimizer)
+    if callback:
+        callback("No precomputed games — using full predict_matchup path")
+    return _run_backtest_matchup(team_id, callback)
+
+
+def _run_backtest_precomputed(pc_cache, callback=None):
+    """Fast backtest using precomputed games + predict_from_precomputed.
+
+    Uses the same prediction path as VectorizedGames.evaluate(), ensuring
+    backtest metrics align with optimizer metrics.
+    """
+    from src.analytics.prediction import predict_from_precomputed
+    w = get_weight_config()
+
+    pc_games = list(pc_cache.values())
+    # Filter to games with actual scores
+    pc_games = [g for g in pc_games if g.actual_home_score > 0 and g.actual_away_score > 0]
+    if not pc_games:
+        return {"error": "No precomputed games with scores", "total_games": 0}
+
+    if callback:
+        callback(f"Backtesting {len(pc_games)} precomputed games (aligned with optimizer)...")
+
+    per_game = []
+    for i, g in enumerate(pc_games):
+        try:
+            result = predict_from_precomputed(g, w, skip_residual=True)
+            pred_spread = result["spread"]
+            pred_total = result["total"]
+            pred_home = result["home_score"]
+            pred_away = result["away_score"]
+
+            actual_spread = g.actual_home_score - g.actual_away_score
+            actual_total = g.actual_home_score + g.actual_away_score
+            actual_winner = "HOME" if actual_spread > 0.5 else ("AWAY" if actual_spread < -0.5 else "PUSH")
+
+            spread_error = abs(pred_spread - actual_spread)
+            total_error = abs(pred_total - actual_total)
+            home_error = abs(pred_home - g.actual_home_score)
+            away_error = abs(pred_away - g.actual_away_score)
+
+            pred_winner = "HOME" if pred_spread > 0.5 else ("AWAY" if pred_spread < -0.5 else "PUSH")
+            winner_correct = (pred_winner == actual_winner or
+                              (actual_winner == "PUSH" and abs(pred_spread) <= 3))
+
+            # Underdog value metrics — aligned with VectorizedGames value zone
+            vs = g.vegas_spread if g.vegas_spread != 0 else None
+            is_value_zone = vs is not None and VALUE_ZONE_MIN <= abs(vs) <= VALUE_ZONE_MAX
+            model_picks_dog = False
+            dog_correct = False
+            if is_value_zone:
+                model_picks_dog = (vs * pred_spread > 0) and abs(pred_spread) > 0.5
+                if model_picks_dog:
+                    dog_correct = (vs * actual_spread > 0)
+
+            per_game.append({
+                "game_id": f"{g.home_team_id}_{g.away_team_id}_{g.game_date}",
+                "game_date": g.game_date,
+                "home_team_id": g.home_team_id,
+                "away_team_id": g.away_team_id,
+                "pred_spread": round(pred_spread, 2),
+                "actual_spread": actual_spread,
+                "spread_error": round(spread_error, 2),
+                "pred_total": round(pred_total, 1),
+                "actual_total": actual_total,
+                "total_error": round(total_error, 1),
+                "home_score_error": round(home_error, 1),
+                "away_score_error": round(away_error, 1),
+                "winner_correct": winner_correct,
+                "spread_within_5": spread_error <= 5,
+                "total_within_10": total_error <= 10,
+                "fatigue_adj": 0,
+                "rest_adv": g.home_fatigue_penalty - g.away_fatigue_penalty,
+                "rating_matchup_adj": 0,
+                "clutch_adj": 0,
+                "ml_blend_adj": 0,
+                "is_value_zone": is_value_zone,
+                "model_picks_dog": model_picks_dog,
+                "dog_correct": dog_correct,
+                "vegas_spread": vs,
+                "vegas_home_ml": g.vegas_home_ml if g.vegas_home_ml != 0 else None,
+                "vegas_away_ml": g.vegas_away_ml if g.vegas_away_ml != 0 else None,
+            })
+        except Exception as e:
+            logger.warning("Precomputed backtest skip %s vs %s on %s: %s",
+                           g.home_team_id, g.away_team_id, g.game_date, e)
+
+        if callback and (i + 1) % 100 == 0:
+            callback(f"Progress: {i + 1}/{len(pc_games)} games")
+
+    return _aggregate_backtest(per_game, callback)
+
+
+def _run_backtest_matchup(team_id=None, callback=None):
+    """Original backtest using predict_matchup (full pipeline per game)."""
     games = get_actual_game_results(team_id)
     if not games:
         return {"error": "No games found", "total_games": 0}
 
     if callback:
-        callback(f"Backtesting {len(games)} games...")
+        callback(f"Backtesting {len(games)} games (full predict_matchup path)...")
 
     start_session_caches()
 
-    # Per-game results
     per_game = []
     completed = 0
     error_counts: Dict[str, int] = {}
     _error_lock = threading.Lock()
 
-    # Configurable thread count from settings
     cfg = get_config()
     max_workers = cfg.get("worker_threads", 4)
 
     def process_game(game):
         nonlocal completed
-        # Each thread gets its own in-memory DB copy — no lock contention
         with thread_local_db():
             try:
                 home_tid = game["home_team_id"]
@@ -277,10 +418,18 @@ def run_backtest(team_id: Optional[int] = None,
                 home_error = abs(pred_home - game["home_score"])
                 away_error = abs(pred_away - game["away_score"])
 
-                # Winner check
                 pred_winner = "HOME" if pred_spread > 0.5 else ("AWAY" if pred_spread < -0.5 else "PUSH")
                 winner_correct = (pred_winner == game["winner"] or
                                   (game["winner"] == "PUSH" and abs(pred_spread) <= 3))
+
+                vs = game.get("vegas_spread")
+                is_value_zone = vs is not None and VALUE_ZONE_MIN <= abs(vs) <= VALUE_ZONE_MAX
+                model_picks_dog = False
+                dog_correct = False
+                if is_value_zone:
+                    model_picks_dog = (vs * pred_spread > 0) and abs(pred_spread) > 0.5
+                    if model_picks_dog:
+                        dog_correct = (vs * actual_spread > 0)
 
                 return {
                     "game_id": game["game_id"],
@@ -298,16 +447,20 @@ def run_backtest(team_id: Optional[int] = None,
                     "winner_correct": winner_correct,
                     "spread_within_5": spread_error <= 5,
                     "total_within_10": total_error <= 10,
-                    # Adjs for feature attribution
                     "fatigue_adj": getattr(result, "fatigue_adj", 0),
                     "rest_adv": getattr(result, "home_fatigue", 0) - getattr(result, "away_fatigue", 0),
                     "rating_matchup_adj": getattr(result, "rating_matchup_adj", 0),
                     "clutch_adj": getattr(result, "clutch_adj", 0),
                     "ml_blend_adj": getattr(result, "ml_blend_adj", 0),
+                    "is_value_zone": is_value_zone,
+                    "model_picks_dog": model_picks_dog,
+                    "dog_correct": dog_correct,
+                    "vegas_spread": vs,
+                    "vegas_home_ml": game.get("vegas_home_ml"),
+                    "vegas_away_ml": game.get("vegas_away_ml"),
                 }
             except Exception as e:
                 error_msg = str(e)
-                # Classify and count errors, always print full traceback
                 logger.error("Backtest error for game %s:\n%s",
                              game.get("game_id"), traceback.format_exc())
                 with _error_lock:
@@ -327,17 +480,20 @@ def run_backtest(team_id: Optional[int] = None,
 
     stop_session_caches()
 
-    # Log error summary
     if error_counts:
         total_errors = sum(error_counts.values())
         logger.error("Backtest: %d/%d games failed. Error breakdown:", total_errors, len(games))
         for msg, count in sorted(error_counts.items(), key=lambda x: -x[1]):
             logger.error("  [%d×] %s", count, msg)
 
-    # Sort by date
+    return _aggregate_backtest(per_game, callback, cache_results=(team_id is None))
+
+
+def _aggregate_backtest(per_game: List[Dict], callback=None,
+                        cache_results: bool = True) -> Dict[str, Any]:
+    """Shared aggregation logic for both backtest paths."""
     per_game.sort(key=lambda x: x["game_date"])
 
-    # Aggregate
     if not per_game:
         return {"error": "No valid results", "total_games": 0}
 
@@ -349,7 +505,6 @@ def run_backtest(team_id: Optional[int] = None,
     avg_spread_err = sum(g["spread_error"] for g in per_game) / total
     avg_total_err = sum(g["total_error"] for g in per_game) / total
 
-    # ---- Team abbreviation lookup (cached singleton) ---
     from src.analytics.stats_engine import get_team_abbreviations
     team_abbrev = get_team_abbreviations()
 
@@ -398,15 +553,8 @@ def run_backtest(team_id: Optional[int] = None,
         }
 
     # ---- Home vs Away global breakdown ---
-    home_games = [g for g in per_game]
-    home_correct = sum(1 for g in per_game
-                       if g["winner_correct"] and g.get("pred_spread", 0) > 0)
-    away_correct = sum(1 for g in per_game
-                       if g["winner_correct"] and g.get("pred_spread", 0) < 0)
     home_predicted = sum(1 for g in per_game if g.get("pred_spread", 0) > 0)
     away_predicted = sum(1 for g in per_game if g.get("pred_spread", 0) < 0)
-
-    # Home team won / lost counts
     actual_home_wins = sum(1 for g in per_game if g["actual_spread"] > 0)
     actual_away_wins = total - actual_home_wins
     pred_home_wins_correct = sum(1 for g in per_game
@@ -467,7 +615,7 @@ def run_backtest(team_id: Optional[int] = None,
                 "avg_error": round(avg_err, 1),
             })
 
-    # ---- Bias check: do we systematically over/under predict? ---
+    # ---- Bias check ---
     avg_pred_spread = sum(g["pred_spread"] for g in per_game) / total
     avg_actual_spread = sum(g["actual_spread"] for g in per_game) / total
     avg_pred_total = sum(g["pred_total"] for g in per_game) / total
@@ -488,6 +636,37 @@ def run_backtest(team_id: Optional[int] = None,
     quality["progression"] = progression
     quality["vegas_comparison"] = vegas_comparison
 
+    # ---- Underdog value metrics ---
+    value_zone_games = [g for g in per_game if g.get("is_value_zone")]
+    dog_picks = [g for g in per_game if g.get("model_picks_dog")]
+    dog_correct_count = sum(1 for g in dog_picks if g.get("dog_correct"))
+    dog_pick_rate = round(len(dog_picks) / len(value_zone_games) * 100, 1) if value_zone_games else 0.0
+    dog_hit_rate = round(dog_correct_count / len(dog_picks) * 100, 1) if dog_picks else 0.0
+    if dog_picks:
+        total_profit = 0.0
+        for g in dog_picks:
+            gvs = g.get("vegas_spread")
+            h_ml = g.get("vegas_home_ml")
+            a_ml = g.get("vegas_away_ml")
+            if gvs and h_ml and a_ml:
+                dog_ml = a_ml if gvs < 0 else h_ml
+                mult = (1.0 + 100.0 / abs(dog_ml)) if dog_ml < 0 else (1.0 + dog_ml / 100.0)
+                total_profit += (mult - 1.0) if g.get("dog_correct") else -1.0
+            else:
+                total_profit += 1.5 if g.get("dog_correct") else -1.0
+        dog_roi = round(total_profit / len(dog_picks) * 100, 1)
+    else:
+        dog_roi = 0.0
+
+    dog_metrics = {
+        "value_zone_games": len(value_zone_games),
+        "dog_picks": len(dog_picks),
+        "dog_correct": dog_correct_count,
+        "dog_pick_rate": dog_pick_rate,
+        "dog_hit_rate": dog_hit_rate,
+        "dog_roi": dog_roi,
+    }
+
     summary = {
         "total_games": total,
         "overall_spread_accuracy": round(correct / total * 100, 1),
@@ -503,15 +682,19 @@ def run_backtest(team_id: Optional[int] = None,
         "total_ranges": total_range_analysis,
         "bias": bias,
         "quality_metrics": quality,
+        "dog_metrics": dog_metrics,
     }
 
-    # Cache (global only)
-    if team_id is None:
+    if cache_results:
         _save_cache(summary)
 
     if callback:
-        callback(f"Backtest complete: {total} games, Winner={correct / total * 100:.1f}%, "
-                 f"Spread MAE={avg_spread_err:.2f}, Total MAE={avg_total_err:.1f}")
+        dog_summary = (f"DogROI={dog_roi:+.0f}%, DogHit={dog_hit_rate:.0f}% "
+                       f"({len(dog_picks)}/{len(value_zone_games)} picks), "
+                       if dog_picks else "")
+        callback(f"Backtest complete: {total} games, {dog_summary}"
+                 f"Winner={correct / total * 100:.1f}%, "
+                 f"Spread MAE={avg_spread_err:.2f}")
 
     return summary
 

@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
 from src.ui.workers import start_overview_worker
 
@@ -66,7 +67,10 @@ class OverviewView(QWidget):
         )
 
     def _on_progress(self, msg: str):
-        self.status_lbl.setText(msg)
+        try:
+            self.status_lbl.setText(str(msg))
+        except RuntimeError:
+            pass  # widget deleted
 
     def _on_result(self, data: dict):
         try:
@@ -103,11 +107,14 @@ class OverviewView(QWidget):
                 v_tot = odds.get('over_under')
                 v_tot_str = str(v_tot) if v_tot is not None else "-"
 
-                sharp_adj = pred.get('sharp_money_adj', 0.0) or 0.0
-                try:
-                    sharp_adj = float(sharp_adj)
-                    sharp_str = f"{sharp_adj:+.2f} pts" if sharp_adj else "-"
-                except (TypeError, ValueError):
+                # Sharp money: show public vs money divergence
+                sh_pub = pred.get('sharp_home_public', 0) or 0
+                sh_mon = pred.get('sharp_home_money', 0) or 0
+                if sh_pub > 0 and sh_mon > 0:
+                    edge = sh_mon - sh_pub
+                    sharp_str = f"P:{sh_pub}% M:{sh_mon}%"
+                    sharp_adj = float(edge)
+                else:
                     sharp_adj = 0.0
                     sharp_str = "-"
 
@@ -133,10 +140,10 @@ class OverviewView(QWidget):
 
                 item_sh = QTableWidgetItem(sharp_str)
                 item_sh.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if sharp_adj > 0.5:
-                    item_sh.setForeground(Qt.GlobalColor.darkGreen)
-                elif sharp_adj < -0.5:
-                    item_sh.setForeground(Qt.GlobalColor.darkRed)
+                if sharp_adj >= 5:
+                    item_sh.setForeground(QColor("#22c55e"))  # green: sharps on home
+                elif sharp_adj <= -5:
+                    item_sh.setForeground(QColor("#ef4444"))  # red: sharps on away
                 self.table.setItem(r, 7, item_sh)
         except Exception as e:
             logger.error(f"Overview result display failed: {e}", exc_info=True)

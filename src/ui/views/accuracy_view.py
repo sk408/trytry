@@ -14,7 +14,7 @@ from src.ui.workers import (
     start_calibration_worker, start_feature_importance_worker,
     start_ml_train_worker, start_team_refine_worker,
     start_fft_worker, start_combo_worker,
-    start_continuous_worker, start_pipeline_worker,
+    start_continuous_worker, start_pipeline_worker, start_retune_worker,
     start_ml_feature_worker, start_grouped_feature_worker,
     start_diagnostic_csv_worker, start_odds_sync_worker,
 )
@@ -54,7 +54,7 @@ class AccuracyView(QWidget):
         opt_layout.addWidget(btn_opt, stretch=1)
         
         self.opt_target_cb = QComboBox()
-        self.opt_target_cb.addItems(["ATS", "ROI", "ML", "All (Cycle)"])
+        self.opt_target_cb.addItems(["ML", "Value", "ROI", "ATS", "All (Cycle)"])
         self.opt_target_cb.setToolTip("Optimization Target")
         opt_layout.addWidget(self.opt_target_cb, stretch=0)
         
@@ -81,6 +81,7 @@ class AccuracyView(QWidget):
             ("Team Refinement", self._on_team_refine),
             ("FFT Analysis", self._on_fft),
             ("Full Pipeline", self._on_pipeline),
+            ("Retune", self._on_retune),
             ("Sync Odds", self._on_sync_odds),
             ("Force Resync Odds", self._on_force_sync_odds),
         ]
@@ -100,21 +101,21 @@ class AccuracyView(QWidget):
         btn_row2.addWidget(self.stop_btn)
         layout.addLayout(btn_row2)
 
-        # Summary cards (row 1)
+        # Summary cards (row 1) — dog metrics first
         cards_layout = QGridLayout()
+        self.dog_roi_card = self._make_card("Dog ROI", "—")
+        self.dog_hit_card = self._make_card("Dog Hit Rate", "—")
+        self.dog_picks_card = self._make_card("Dog Picks", "—")
         self.winner_card = self._make_card("Winner Accuracy", "—")
-        self.spread5_card = self._make_card("Spread ≤5", "—")
-        self.total10_card = self._make_card("Total ≤10", "—")
         self.games_card = self._make_card("Games Tested", "—")
         self.mae_card = self._make_card("Spread MAE", "—")
-        self.total_mae_card = self._make_card("Total MAE", "—")
 
-        cards_layout.addWidget(self.winner_card, 0, 0)
-        cards_layout.addWidget(self.spread5_card, 0, 1)
-        cards_layout.addWidget(self.total10_card, 0, 2)
-        cards_layout.addWidget(self.games_card, 0, 3)
-        cards_layout.addWidget(self.mae_card, 0, 4)
-        cards_layout.addWidget(self.total_mae_card, 0, 5)
+        cards_layout.addWidget(self.dog_roi_card, 0, 0)
+        cards_layout.addWidget(self.dog_hit_card, 0, 1)
+        cards_layout.addWidget(self.dog_picks_card, 0, 2)
+        cards_layout.addWidget(self.winner_card, 0, 3)
+        cards_layout.addWidget(self.games_card, 0, 4)
+        cards_layout.addWidget(self.mae_card, 0, 5)
         layout.addLayout(cards_layout)
 
         # Bias / Home-Away cards (row 2)
@@ -241,18 +242,18 @@ class AccuracyView(QWidget):
     def _on_results(self, results: dict):
         """Handle backtest results (full dict from run_backtest)."""
         self._last_backtest_results = results
-        # ---------- Summary cards ----------
+        # ---------- Summary cards (dog metrics first) ----------
+        dog = results.get("dog_metrics", {})
+        dog_roi = dog.get("dog_roi", 0)
+        dog_hit = dog.get("dog_hit_rate", 0)
+        dog_picks = dog.get("dog_picks", 0)
+        dog_total = dog.get("value_zone_games", 0)
+        self._update_card(self.dog_roi_card, f"{dog_roi:+.0f}%")
+        self._update_card(self.dog_hit_card, f"{dog_hit:.0f}%")
+        self._update_card(self.dog_picks_card, f"{dog_picks}/{dog_total}")
         self._update_card(
             self.winner_card,
             f"{results.get('overall_spread_accuracy', 0):.1f}%"
-        )
-        self._update_card(
-            self.spread5_card,
-            f"{results.get('spread_within_5_pct', 0):.1f}%"
-        )
-        self._update_card(
-            self.total10_card,
-            f"{results.get('total_within_10_pct', 0):.1f}%"
         )
         self._update_card(
             self.games_card,
@@ -262,10 +263,11 @@ class AccuracyView(QWidget):
             self.mae_card,
             f"{results.get('avg_spread_error', 0):.2f}"
         )
-        self._update_card(
-            self.total_mae_card,
-            f"{results.get('avg_total_error', 0):.1f}"
-        )
+        # Color dog ROI card
+        roi_color = "#22c55e" if dog_roi > 0 else ("#f59e0b" if dog_roi > -20 else "#ef4444")
+        roi_label = self.dog_roi_card.findChildren(QLabel)[0]
+        if roi_label:
+            roi_label.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {roi_color};")
 
         # ---------- Bias / Home-Away cards ----------
         ha = results.get("home_away", {})
@@ -357,20 +359,19 @@ class AccuracyView(QWidget):
             self.home_away_table.setItem(row, 0, QTableWidgetItem(metric))
             self.home_away_table.setItem(row, 1, QTableWidgetItem(val))
 
-        # ---------- Vegas Comparison table ----------
+        # ---------- Vegas Comparison table (dog-first) ----------
         q_metrics = results.get("quality_metrics", {})
         vegas = q_metrics.get("vegas_comparison", {})
         if vegas and not vegas.get("error"):
             feat = vegas.get("feature_attribution", {})
             v_rows = [
-                ("ATS Hit Rate", f"{vegas.get('ats_rate', 0)}%"),
-                ("CLV Win Rate", f"{vegas.get('clv_rate', 0)}%"),
+                ("Dog ROI", f"{dog_roi:+.0f}%"),
+                ("Dog Hit Rate", f"{dog_hit:.0f}% ({dog_picks} picks)"),
+                ("ML Win Rate", f"{results.get('overall_spread_accuracy', 0)}%"),
                 ("Edge Hit Rate", f"{vegas.get('edge_hit_rate', 0)}%"),
+                ("ATS Hit Rate", f"{vegas.get('ats_rate', 0)}%"),
                 ("Bankroll Sim ($1000 start)", f"${vegas.get('final_bankroll', 0)}"),
                 ("Simulated ROI", f"{vegas.get('roi_pct', 0)}%"),
-                ("Feature: Avg Fatigue/Rest", str(feat.get("avg_fatigue_adj", 0))),
-                ("Feature: Avg Rating Matchup", str(feat.get("avg_rating_adj", 0))),
-                ("Feature: Avg ML Blend", str(feat.get("avg_ml_adj", 0))),
             ]
             self.vegas_table.setRowCount(len(v_rows))
             for row, (metric, val) in enumerate(v_rows):
@@ -423,6 +424,12 @@ class AccuracyView(QWidget):
     def _on_pipeline(self):
         self.log.clear()
         self._current_worker = start_pipeline_worker(
+            self._append_log, self._on_results, self._on_done
+        )
+
+    def _on_retune(self):
+        self.log.clear()
+        self._current_worker = start_retune_worker(
             self._append_log, self._on_results, self._on_done
         )
 

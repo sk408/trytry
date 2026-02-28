@@ -112,6 +112,33 @@
     </div>
     {% endif %}
 
+    <!-- Sharp Money -->
+    {% if prediction.get('sharp_money_info') %}
+    {% set sm = prediction['sharp_money_info'] %}
+    <div class="card mb-4">
+        <div class="card-header">Sharp Money (Live)</div>
+        <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+                <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Spread Public</div>
+                <div class="font-mono" style="font-size: 14px;">{{ sm.spread_public }}</div>
+            </div>
+            <div>
+                <div style="color: var(--text-muted); font-size: 12px; margin-bottom: 4px;">Spread Money</div>
+                <div class="font-mono" style="font-size: 14px;">{{ sm.spread_money }}</div>
+            </div>
+        </div>
+        {% set edge = sm.edge %}
+        <div style="text-align: center; padding: 8px 16px 16px; font-weight: 700; font-size: 14px;
+             color: {% if edge|abs >= 10 %}#22c55e{% elif edge|abs >= 5 %}#eab308{% else %}var(--text-muted){% endif %};">
+            {% if edge|abs >= 5 %}
+                Sharps on {{ 'HOME' if edge > 0 else 'AWAY' }} ({{ edge|abs }}pp divergence)
+            {% else %}
+                No strong sharp money signal
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Player Rosters -->
     {% for side_label, side_key in [('Away', 'away'), ('Home', 'home')] %}
     {% set roster = rosters.get(side_key, []) %}

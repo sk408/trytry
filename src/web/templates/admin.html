@@ -20,6 +20,25 @@
 </div>
 
 <div class="card mb-4">
+    <div class="card-header">Pipeline Settings</div>
+    <div class="grid-2" style="gap: 1rem;">
+        <div>
+            <label class="text-sm text-secondary" for="syncFreshness">Sync Freshness (hours)</label>
+            <input type="number" id="syncFreshness" min="1" max="168" value="{{ sync_freshness_hours }}"
+                   class="form-input" style="width: 80px; margin-left: 8px;">
+            <p class="text-sm text-secondary" style="margin-top: 4px;">Hours before game logs re-fetch</p>
+        </div>
+        <div>
+            <label class="text-sm text-secondary" for="optLogInterval">Optimizer Log Interval</label>
+            <input type="number" id="optLogInterval" min="1" max="3000" value="{{ optimizer_log_interval }}"
+                   class="form-input" style="width: 80px; margin-left: 8px;">
+            <p class="text-sm text-secondary" style="margin-top: 4px;">Log every N trials (new bests always logged)</p>
+        </div>
+    </div>
+    <button class="btn btn-primary mt-3" onclick="saveSettings()">Save Settings</button>
+</div>
+
+<div class="card mb-4">
     <div class="card-header">Weights</div>
     <div class="btn-group">
         <button class="btn btn-outline" onclick="viewWeights()">View Current Weights</button>
@@ -55,6 +74,24 @@ async function clearWeights() {
     if (!confirm('Clear all global and per-team weights?')) return;
     await fetch('/api/weights/clear', {method: 'POST'});
     alert('Weights cleared');
+}
+
+async function saveSettings() {
+    const data = {
+        sync_freshness_hours: parseInt(document.getElementById('syncFreshness').value),
+        optimizer_log_interval: parseInt(document.getElementById('optLogInterval').value),
+    };
+    try {
+        const r = await fetch('/admin/settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        });
+        if (r.ok) alert('Settings saved');
+        else alert('Error saving settings');
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
 }
 </script>
 {% endblock %}

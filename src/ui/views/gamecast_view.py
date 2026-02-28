@@ -15,7 +15,7 @@ from typing import Dict, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSplitter, QFrame, QTabWidget,
+    QSplitter, QFrame, QTabWidget, QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject, QRunnable, QThreadPool
 from PySide6.QtGui import QColor, QImage, QPixmap
@@ -23,7 +23,7 @@ from PySide6.QtGui import QColor, QImage, QPixmap
 from src.ui.widgets.scoreboard_widget import ScoreboardWidget
 from src.ui.widgets.court_widget import CourtWidget
 from src.ui.widgets.play_feed_widget import PlayFeedWidget
-from src.ui.widgets.info_panel_widget import InfoPanelWidget
+from src.ui.widgets.info_panel_widget import InfoPanelWidget, _CollapsibleSection
 from src.ui.widgets.nba_colors import get_team_colors
 from src.ui.widgets.image_utils import get_team_logo, get_player_photo
 
@@ -39,7 +39,7 @@ from src.data.gamecast import normalize_espn_abbr  # noqa: E402
 _espn_headshot_cache: Dict[tuple, QPixmap] = {}   # (url, size) → QPixmap
 _espn_headshot_data: Dict[str, bytes] = {}            # url → raw image bytes (thread-safe)
 
-_CACHE_TTL_LIVE = 12        # seconds — live games refresh often
+_CACHE_TTL_LIVE = 8         # seconds — live games refresh often
 _CACHE_TTL_PRE = 55         # seconds — pre-game (odds may update)
 _CACHE_TTL_FINAL = 86400    # seconds — final games almost never change
 
@@ -259,6 +259,10 @@ class GamecastView(QWidget):
         self.live_timer = QTimer(self)
         self.live_timer.timeout.connect(self._poll)
 
+        # Scoreboard refresh timer — keeps dropdown labels (scores) up to date
+        self._scoreboard_timer = QTimer(self)
+        self._scoreboard_timer.timeout.connect(self._load_games)
+
         # Deferred initial load (let UI render first)
         QTimer.singleShot(100, self._load_games)
 
@@ -305,61 +309,54 @@ class GamecastView(QWidget):
         self.scoreboard = ScoreboardWidget()
         root.addWidget(self.scoreboard)
 
-        # ── Middle: Court + Info | Box Score ──
-        mid_splitter = QSplitter(Qt.Orientation.Horizontal)
+        # ── Middle: Info Cards | Box Score ──
+        self._mid_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left: Court + Info stacked vertically
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(4)
-
-        self.court = CourtWidget()
-        self.court.setMinimumHeight(200)
-        left_layout.addWidget(self.court, 3)
-
+        # Left: Info Cards in scroll area (full height, no court)
         self.info_panel = InfoPanelWidget()
-        left_layout.addWidget(self.info_panel, 2)
+        self._info_scroll = QScrollArea()
+        self._info_scroll.setWidget(self.info_panel)
+        self._info_scroll.setWidgetResizable(True)
+        self._info_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._info_scroll.setStyleSheet("QScrollArea { background: transparent; }"
+                                  "QScrollBar:vertical { width: 6px; background: transparent; }"
+                                  "QScrollBar::handle:vertical { background: rgba(255,255,255,0.2); border-radius: 3px; }"
+                                  "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }")
+        self._mid_splitter.addWidget(self._info_scroll)
 
-        mid_splitter.addWidget(left_panel)
-
-        # Right: Box score with team tabs
-        box_panel = QWidget()
-        box_layout = QVBoxLayout(box_panel)
-        box_layout.setContentsMargins(0, 0, 0, 0)
-        box_layout.setSpacing(0)
-
-        box_header = QLabel("  BOX SCORE")
-        box_header.setStyleSheet("""
-            background: rgba(20, 30, 45, 0.8);
-            color: #00e5ff; font-size: 12px; font-weight: 700;
-            letter-spacing: 1px; padding: 4px 8px;
-            text-transform: uppercase;
-            font-family: 'Oswald', sans-serif;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        """)
-        box_header.setFixedHeight(28)
-        box_layout.addWidget(box_header)
-
+        # Right: Box score (collapsible) with team tabs
+        self._box_section = _CollapsibleSection("Box Score")
         self.box_tabs = QTabWidget()
         self.box_tabs.setDocumentMode(True)
         self._away_box = self._make_box_table()
         self._home_box = self._make_box_table()
         self.box_tabs.addTab(self._away_box, "AWAY")
         self.box_tabs.addTab(self._home_box, "HOME")
-        box_layout.addWidget(self.box_tabs)
+        self._box_section.add_widget(self.box_tabs, 1)
 
-        mid_splitter.addWidget(box_panel)
-        mid_splitter.setStretchFactor(0, 2)
-        mid_splitter.setStretchFactor(1, 3)
-        root.addWidget(mid_splitter, 3)
+        self._mid_splitter.addWidget(self._box_section)
+        self._mid_splitter.setStretchFactor(0, 2)
+        self._mid_splitter.setStretchFactor(1, 3)
+        self._box_section.toggled.connect(self._on_box_toggled)
+        self._box_expanded_sizes = None
+        root.addWidget(self._mid_splitter, 3)
 
-        # ── Bottom: Play-by-play feed ──
+        # ── Bottom: Shot Chart + Play-by-play side by side ──
+        self._bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        self._court_section = _CollapsibleSection("Shot Chart")
+        self.court = CourtWidget()
+        self.court.setFixedHeight(220)
+        self._court_section.add_widget(self.court, 0)
+        self._bottom_splitter.addWidget(self._court_section)
+
         self.play_feed = PlayFeedWidget()
         self.play_feed.setMinimumHeight(120)
-        self.play_feed.setMaximumHeight(260)
-        root.addWidget(self.play_feed, 2)
+        self._bottom_splitter.addWidget(self.play_feed)
+        self._bottom_splitter.setStretchFactor(0, 0)
+        self._bottom_splitter.setStretchFactor(1, 1)
+        root.addWidget(self._bottom_splitter, 2)
 
     def _make_box_table(self) -> QTableWidget:
         """Create a box score table with player photo column."""
@@ -382,6 +379,21 @@ class GamecastView(QWidget):
         table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
         return table
+
+    def _on_box_toggled(self, collapsed: bool):
+        """Handle box score collapse/expand — switch info cards to 2x2 grid."""
+        if collapsed:
+            self._box_expanded_sizes = self._mid_splitter.sizes()
+            self._box_section.setMaximumWidth(24)
+            self.info_panel.set_grid_mode(True)
+        else:
+            self._box_section.setMaximumWidth(16777215)
+            self.info_panel.set_grid_mode(False)
+            if self._box_expanded_sizes:
+                self._mid_splitter.setSizes(self._box_expanded_sizes)
+            else:
+                total = sum(self._mid_splitter.sizes())
+                self._mid_splitter.setSizes([int(total * 0.4), int(total * 0.6)])
 
     # ──────────────────────── SCOREBOARD LOADING ────────────────────
 
@@ -416,6 +428,7 @@ class GamecastView(QWidget):
         # Add an initial "Select Game" to prevent it from automatically triggering the first item
         self.game_combo.addItem("— Select Game —", None)
 
+        game_states = []
         for g in games:
             status = g.get("status", "")
             short_detail = g.get("short_detail", "") or status
@@ -424,6 +437,7 @@ class GamecastView(QWidget):
             a_score = g.get("away_score", 0)
             h_score = g.get("home_score", 0)
             state = g.get("state", "")
+            game_states.append(state)
 
             # Convert ET times to local for scheduled games
             display_detail = short_detail
@@ -467,6 +481,14 @@ class GamecastView(QWidget):
 
         # ── Preload all games in background ──
         self._preload_all_games()
+
+        # ── Manage scoreboard refresh timer based on game states ──
+        if any(s == "in" for s in game_states):
+            self._scoreboard_timer.start(20_000)   # 20s when live games
+        elif any(s == "pre" for s in game_states):
+            self._scoreboard_timer.start(120_000)  # 2min when all pre-game
+        else:
+            self._scoreboard_timer.stop()           # all final, stop
 
     def _on_scoreboard_error(self, msg: str):
         self.refresh_btn.setEnabled(True)
@@ -609,7 +631,7 @@ class GamecastView(QWidget):
             return
             
         if state == "in":
-            self.live_timer.start(15_000)
+            self.live_timer.start(10_000)
         elif state == "pre":
             self.live_timer.start(60_000)
         else:
@@ -974,7 +996,7 @@ class GamecastView(QWidget):
 
         # ── Update timer based on actual state ──
         if status_state == "in":
-            self.live_timer.start(15_000)
+            self.live_timer.start(10_000)
         elif status_state == "post":
             self.live_timer.stop()
             self._status_hint.setText("Final")

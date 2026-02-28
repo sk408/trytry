@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import pickle
+import threading
 from dataclasses import dataclass, field, fields as dc_fields
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -56,6 +57,8 @@ class MatchupPrediction:
     ml_spread: float = 0.0
     ml_total: float = 0.0
     espn_home_pct: float = 50.0
+    sharp_home_public: int = 0    # % of public bets on home spread
+    sharp_home_money: int = 0     # % of money wagered on home spread
     injury_impact: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -396,19 +399,23 @@ def _get_team_metrics(team_id: int) -> Dict[str, float]:
     if cached is not None:
         return cached
 
-    # Try memory store first (already loaded as DataFrame)
-    from src.analytics.memory_store import get_store
-    store = get_store()
-    season = get_season()
-    if store.team_metrics is not None and not store.team_metrics.empty:
-        rows = store.team_metrics[
-            (store.team_metrics["team_id"] == team_id) &
-            (store.team_metrics["season"] == season)
-        ]
-        if not rows.empty:
-            result = rows.iloc[0].to_dict()
-            team_cache.set(team_id, "metrics", result)
-            return result
+    try:
+        # Try memory store first (already loaded as DataFrame)
+        from src.analytics.memory_store import get_store
+        store = get_store()
+        season = get_season()
+        if store.team_metrics is not None and not store.team_metrics.empty:
+            rows = store.team_metrics[
+                (store.team_metrics["team_id"] == team_id) &
+                (store.team_metrics["season"] == season)
+            ]
+            if not rows.empty:
+                result = {str(k): (float(v) if isinstance(v, (int, float)) else v)
+                          for k, v in rows.iloc[0].to_dict().items()}
+                team_cache.set(team_id, "metrics", result)
+                return result
+    except Exception:
+        pass  # fall through to DB
 
     row = db.fetch_one(
         "SELECT * FROM team_metrics WHERE team_id = ? AND season = ?",
@@ -425,27 +432,30 @@ def _get_tuning(team_id: int) -> Dict[str, float]:
     if cached is not None:
         return cached
 
-    # Try memory store first
-    from src.analytics.memory_store import get_store
-    store = get_store()
-    if store.team_tuning is not None and not store.team_tuning.empty:
-        rows = store.team_tuning[store.team_tuning["team_id"] == team_id]
-        if not rows.empty:
-            r = rows.iloc[0]
-            result = {
-                "home_pts_correction": r.get("home_pts_correction", 0.0),
-                "away_pts_correction": r.get("away_pts_correction", 0.0),
-            }
-            team_cache.set(team_id, "tuning", result)
-            return result
+    try:
+        # Try memory store first
+        from src.analytics.memory_store import get_store
+        store = get_store()
+        if store.team_tuning is not None and not store.team_tuning.empty:
+            rows = store.team_tuning[store.team_tuning["team_id"] == team_id]
+            if not rows.empty:
+                r = rows.iloc[0]
+                result = {
+                    "home_pts_correction": float(r.get("home_pts_correction", 0.0) or 0.0),
+                    "away_pts_correction": float(r.get("away_pts_correction", 0.0) or 0.0),
+                }
+                team_cache.set(team_id, "tuning", result)
+                return result
+    except Exception:
+        pass  # fall through to DB
 
     row = db.fetch_one(
         "SELECT home_pts_correction, away_pts_correction FROM team_tuning WHERE team_id = ?",
         (team_id,)
     )
     if row:
-        result = {"home_pts_correction": row["home_pts_correction"],
-                  "away_pts_correction": row["away_pts_correction"]}
+        result = {"home_pts_correction": float(row["home_pts_correction"] or 0.0),
+                  "away_pts_correction": float(row["away_pts_correction"] or 0.0)}
     else:
         result = {"home_pts_correction": 0.0, "away_pts_correction": 0.0}
     team_cache.set(team_id, "tuning", result)
@@ -474,40 +484,60 @@ def _get_espn_predictor(home_abbr: str, away_abbr: str) -> Dict[str, float]:
 # ── Residual calibration in-memory cache ──
 _residual_spread_cache: Optional[Dict[str, float]] = None
 _residual_total_cache: Optional[Dict[str, float]] = None
+_residual_lock = threading.Lock()
 
 
 def _load_residual_tables():
-    """Load both residual calibration tables into memory (once)."""
+    """Load both residual calibration tables into memory (thread-safe, once)."""
     global _residual_spread_cache, _residual_total_cache
     if _residual_spread_cache is not None:
         return
 
-    _residual_spread_cache = {}
-    rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration")
-    for r in rows:
-        if r["avg_residual"] is not None:
-            _residual_spread_cache[r["bin_label"]] = r["avg_residual"]
+    with _residual_lock:
+        if _residual_spread_cache is not None:
+            return  # another thread beat us
 
-    _residual_total_cache = {}
-    rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration_total")
-    for r in rows:
-        if r["avg_residual"] is not None:
-            _residual_total_cache[r["bin_label"]] = r["avg_residual"]
+        spread = {}
+        try:
+            rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration")
+            for r in rows:
+                if r["avg_residual"] is not None:
+                    spread[r["bin_label"]] = float(r["avg_residual"])
+        except Exception as e:
+            logger.warning("Could not load residual_calibration: %s", e)
 
-    logger.info("Loaded residual calibration tables (%d spread, %d total bins)",
-                len(_residual_spread_cache), len(_residual_total_cache))
+        total = {}
+        try:
+            rows = db.fetch_all("SELECT bin_label, avg_residual FROM residual_calibration_total")
+            for r in rows:
+                if r["avg_residual"] is not None:
+                    total[r["bin_label"]] = float(r["avg_residual"])
+        except Exception as e:
+            logger.warning("Could not load residual_calibration_total: %s", e)
+
+        # Assign both atomically (publish only when fully loaded)
+        _residual_total_cache = total
+        _residual_spread_cache = spread
+        logger.info("Loaded residual calibration tables (%d spread, %d total bins)",
+                    len(spread), len(total))
 
 
 def invalidate_residual_cache():
     """Clear residual calibration cache (call after optimizer recalibrates)."""
     global _residual_spread_cache, _residual_total_cache
-    _residual_spread_cache = None
-    _residual_total_cache = None
+    with _residual_lock:
+        _residual_spread_cache = None
+        _residual_total_cache = None
 
 
 def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]:
     """Look up residual calibration corrections from in-memory cache."""
     _load_residual_tables()
+    # Grab local references (safe against concurrent invalidation)
+    sc = _residual_spread_cache
+    tc = _residual_total_cache
+    if sc is None or tc is None:
+        return 0.0, 0.0
     spread_corr = 0.0
     total_corr = 0.0
 
@@ -519,7 +549,7 @@ def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]
     ]
     for idx, (label, lo, hi) in enumerate(spread_bins):
         if (lo < spread <= hi) if idx > 0 else (lo <= spread <= hi):
-            spread_corr = _residual_spread_cache.get(label, 0.0)
+            spread_corr = sc.get(label, 0.0)
             break
 
     # Total bins
@@ -530,7 +560,7 @@ def _get_residual_correction(spread: float, total: float) -> Tuple[float, float]
     ]
     for label, lo, hi in total_bins:
         if lo <= total < hi:
-            total_corr = _residual_total_cache.get(label, 0.0)
+            total_corr = tc.get(label, 0.0)
             break
 
     return spread_corr, total_corr
@@ -683,31 +713,53 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     spread += ff_adj
     pred.four_factors_adj = ff_adj
 
-    # Sharp Money
+    # Sharp Money — try live data first, fallback to DB
     sharp_money_adj = 0.0
-    if w.sharp_money_weight != 0.0:
-        odds_row = db.fetch_one("SELECT spread_home_public, spread_home_money FROM game_odds WHERE game_date = ? AND home_team_id = ? AND away_team_id = ?", (game_date, home_team_id, away_team_id))
-        if odds_row and odds_row["spread_home_public"] is not None and odds_row["spread_home_money"] is not None:
+    sh_pub = None
+    sh_mon = None
+
+    # Try live fetch from Action Network (most current data)
+    from datetime import datetime, timedelta
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if game_date >= today_str:
+        try:
+            from src.data.gamecast import get_actionnetwork_odds
+            live_odds = get_actionnetwork_odds(pred.home_team, pred.away_team)
+            if live_odds and live_odds.get("spread_home_public") is not None:
+                sh_pub = live_odds["spread_home_public"]
+                sh_mon = live_odds.get("spread_home_money")
+        except Exception:
+            pass
+
+    # Fallback to DB (historical games or if live fetch failed)
+    if sh_pub is None:
+        odds_row = db.fetch_one(
+            "SELECT spread_home_public, spread_home_money "
+            "FROM game_odds WHERE game_date = ? AND home_team_id = ? AND away_team_id = ?",
+            (game_date, home_team_id, away_team_id))
+        if odds_row and odds_row["spread_home_public"] is not None:
             sh_pub = odds_row["spread_home_public"]
             sh_mon = odds_row["spread_home_money"]
+
+    if sh_pub is not None and sh_mon is not None:
+        pred.sharp_home_public = sh_pub
+        pred.sharp_home_money = sh_mon
+
+        if w.sharp_money_weight != 0.0:
             sharp_edge = (sh_mon - sh_pub) / 100.0
-            
-            # Time decay for current day betting (regress influence if far from typical 7 PM ET game time)
-            from datetime import datetime, timedelta
-            today_str = datetime.now().strftime("%Y-%m-%d")
+
+            # Time decay for current day betting
             decay = 1.0
             if game_date == today_str:
-                now_et = datetime.utcnow() - timedelta(hours=5) # Approx Eastern Time
-                # Scale from 0.0 at noon ET to 1.0 at 7 PM ET
+                now_et = datetime.utcnow() - timedelta(hours=5)  # Approx Eastern Time
                 if now_et.hour < 12:
                     decay = 0.0
                 elif now_et.hour >= 19:
                     decay = 1.0
                 else:
-                    # Linear scale between 12 and 19 (7 hours)
                     hours_past_noon = (now_et.hour - 12) + (now_et.minute / 60.0)
                     decay = hours_past_noon / 7.0
-                    
+
             sharp_money_adj = sharp_edge * w.sharp_money_weight * decay
             spread += sharp_money_adj
     pred.adjustments["sharp_money"] = sharp_money_adj
@@ -1060,8 +1112,8 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 home_court=home_court,
                 away_def_factor_raw=away_def_raw,
                 home_def_factor_raw=home_def_raw,
-                home_tuning_home_corr=ht["home_pts_correction"],
-                away_tuning_away_corr=at["away_pts_correction"],
+                home_tuning_home_corr=0.0,   # tuning applied at eval time, not baked in
+                away_tuning_away_corr=0.0,   # tuning applied at eval time, not baked in
                 home_fatigue_penalty=hfat["penalty"],
                 away_fatigue_penalty=afat["penalty"],
                 home_off=home_off,
@@ -1124,6 +1176,29 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     return result
 
 
+_tuning_cache: Optional[Dict[int, tuple]] = None
+
+def _get_tuning_map() -> Dict[int, tuple]:
+    """Load all team tuning corrections from DB (cached in-memory)."""
+    global _tuning_cache
+    if _tuning_cache is not None:
+        return _tuning_cache
+    from src.database import db
+    rows = db.fetch_all("SELECT team_id, home_pts_correction, away_pts_correction FROM team_tuning")
+    _tuning_cache = {}
+    for r in rows:
+        _tuning_cache[r["team_id"]] = (
+            float(r.get("home_pts_correction") or 0.0),
+            float(r.get("away_pts_correction") or 0.0),
+        )
+    return _tuning_cache
+
+def invalidate_tuning_cache():
+    """Call after autotune to force reload of tuning corrections."""
+    global _tuning_cache
+    _tuning_cache = None
+
+
 def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
                              skip_residual: bool = True) -> Dict[str, float]:
     """Identical logic to predict_matchup() but on PrecomputedGame.
@@ -1137,10 +1212,11 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     home_base = g.home_proj.get("points", 0) * away_def_f
     away_base = g.away_proj.get("points", 0) * home_def_f
 
-    # Autotune corrections (individual ±8, net spread ±8, matching predict_matchup)
+    # Autotune corrections — loaded from DB, not baked into PrecomputedGame
     _TUNE_CAP_OPT = 8.0
-    ht_c = _clamp(-_TUNE_CAP_OPT, g.home_tuning_home_corr, _TUNE_CAP_OPT)
-    at_c = _clamp(-_TUNE_CAP_OPT, g.away_tuning_away_corr, _TUNE_CAP_OPT)
+    tmap = _get_tuning_map()
+    ht_c = _clamp(-_TUNE_CAP_OPT, tmap.get(g.home_team_id, (0.0, 0.0))[0], _TUNE_CAP_OPT)
+    at_c = _clamp(-_TUNE_CAP_OPT, tmap.get(g.away_team_id, (0.0, 0.0))[1], _TUNE_CAP_OPT)
     net_t = ht_c - at_c
     if abs(net_t) > _TUNE_CAP_OPT:
         sc = _TUNE_CAP_OPT / abs(net_t)

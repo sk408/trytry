@@ -54,6 +54,8 @@ def fetch_espn_scoreboard() -> List[Dict[str, Any]]:
                 "state": event.get("status", {}).get("type", {}).get("state", ""),
                 "home_team": normalize_espn_abbr(home.get("team", {}).get("abbreviation", "")),
                 "away_team": normalize_espn_abbr(away.get("team", {}).get("abbreviation", "")),
+                "home_team_id": home.get("team", {}).get("id", ""),
+                "away_team_id": away.get("team", {}).get("id", ""),
                 "home_score": int(home.get("score", 0) or 0),
                 "away_score": int(away.get("score", 0) or 0),
             })
@@ -206,7 +208,7 @@ def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
     away_query = an_mapper.get(away_abbr, away_abbr)
     
     now = time.time()
-    if not _an_odds_cache or (now - _an_last_fetch) > 15.0:
+    if not _an_odds_cache or (now - _an_last_fetch) > 10.0:
         try:
             resp = requests.get(
                 "https://api.actionnetwork.com/web/v1/scoreboard/nba", 
@@ -254,12 +256,24 @@ def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
                 spread_val = o.get("spread_home")
                 spread_str = f"{spread_val:+.1f}" if spread_val is not None else ""
                 
+                # Sharp money: public bet % vs actual money %
+                # Use pre-game odds for sharp money (not live in-game)
+                sharp_src = game_odds[0] if game_odds else o
                 return {
                     "spread": spread_str,
                     "over_under": o.get("total"),
                     "home_moneyline": o.get("ml_home"),
                     "away_moneyline": o.get("ml_away"),
                     "provider": "Action Network" + (" (Live)" if live_odds else ""),
+                    # Sharp money data
+                    "spread_home_public": sharp_src.get("spread_home_public"),
+                    "spread_away_public": sharp_src.get("spread_away_public"),
+                    "spread_home_money": sharp_src.get("spread_home_money"),
+                    "spread_away_money": sharp_src.get("spread_away_money"),
+                    "ml_home_public": sharp_src.get("ml_home_public"),
+                    "ml_away_public": sharp_src.get("ml_away_public"),
+                    "ml_home_money": sharp_src.get("ml_home_money"),
+                    "ml_away_money": sharp_src.get("ml_away_money"),
                 }
             
     return {}

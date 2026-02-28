@@ -11,9 +11,10 @@
         <button class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
         <div style="display:inline-block; margin-left: 10px; margin-right: 10px; vertical-align: middle;">
             <select id="optTarget" style="font-size: 0.9em; padding: 2px;">
-                <option value="ats">ATS</option>
-                <option value="roi">ROI</option>
                 <option value="ml">ML</option>
+                <option value="value">Value</option>
+                <option value="roi">ROI</option>
+                <option value="ats">ATS</option>
                 <option value="all">All (Cycle)</option>
             </select>
         </div>
@@ -25,6 +26,7 @@
         <button class="btn btn-outline" onclick="runAction('/api/calibrate', 'Calibrating...')">Residual Calibration</button>
         <button class="btn btn-outline" onclick="runAction('/api/feature-importance', 'Analyzing...')">Feature Importance</button>
         <button class="btn btn-outline" onclick="runAction('/api/ml-train', 'Training...')">Train ML</button>
+        <button class="btn btn-outline" onclick="runAction('/api/retune', 'Retuning (no sync)...')">Retune</button>
         <button class="btn btn-outline" onclick="runAction('/api/team-refinement', 'Refining...')">Team Refinement</button>
         <button class="btn btn-outline" onclick="runAction('/api/fft-analysis', 'FFT...')">FFT Analysis</button>
         <button class="btn btn-outline" onclick="runAction('/api/odds/sync', 'Syncing Odds...')">Sync Odds</button>
@@ -113,15 +115,21 @@ function showResults(r) {
     if (!r || r.error) return;
     document.getElementById('resultsSection').classList.remove('hidden');
 
-    // Summary cards
+    // Summary cards — dog metrics first
+    const dog = r.dog_metrics || {};
+    const dogRoi = dog.dog_roi || 0;
+    const dogHit = dog.dog_hit_rate || 0;
+    const dogPicks = dog.dog_picks || 0;
+    const dogTotal = dog.value_zone_games || 0;
+    const roiClass = dogRoi > 0 ? 'val-good' : '';
     const cards = document.getElementById('summaryCards');
     cards.innerHTML = `
-        <div class="accuracy-metric"><div class="value">${r.total_games}</div><div class="label">Games</div></div>
+        <div class="accuracy-metric"><div class="value ${roiClass}">${dogRoi > 0 ? '+' : ''}${dogRoi}%</div><div class="label">Dog ROI</div></div>
+        <div class="accuracy-metric"><div class="value">${dogHit}%</div><div class="label">Dog Hit Rate</div></div>
+        <div class="accuracy-metric"><div class="value">${dogPicks}/${dogTotal}</div><div class="label">Dog Picks</div></div>
         <div class="accuracy-metric"><div class="value val-good">${r.overall_spread_accuracy}%</div><div class="label">Winner Pick %</div></div>
+        <div class="accuracy-metric"><div class="value">${r.total_games}</div><div class="label">Games</div></div>
         <div class="accuracy-metric"><div class="value">${r.avg_spread_error}</div><div class="label">Spread MAE</div></div>
-        <div class="accuracy-metric"><div class="value">${r.avg_total_error}</div><div class="label">Total MAE</div></div>
-        <div class="accuracy-metric"><div class="value">${r.spread_within_5_pct}%</div><div class="label">Spread ≤5</div></div>
-        <div class="accuracy-metric"><div class="value">${r.total_within_10_pct}%</div><div class="label">Total ≤10</div></div>
     `;
 
     if (r.quality_metrics) {
@@ -137,9 +145,10 @@ function showResults(r) {
             document.getElementById('vegasCard').style.display = 'block';
             const v = q.vegas_comparison;
             document.getElementById('vegasCards').innerHTML = `
-                <div class="accuracy-metric"><div class="value">${v.ats_rate}%</div><div class="label">ATS Hit Rate</div></div>
-                <div class="accuracy-metric"><div class="value">${v.clv_rate}%</div><div class="label">CLV Win Rate</div></div>
+                <div class="accuracy-metric"><div class="value ${roiClass}">${dogRoi > 0 ? '+' : ''}${dogRoi}%</div><div class="label">Dog ROI</div></div>
+                <div class="accuracy-metric"><div class="value">${dogHit}% (${dogPicks} picks)</div><div class="label">Dog Hit Rate</div></div>
                 <div class="accuracy-metric"><div class="value">${v.edge_hit_rate}%</div><div class="label">Edge Hit Rate</div></div>
+                <div class="accuracy-metric"><div class="value">${v.ats_rate}%</div><div class="label">ATS Hit Rate</div></div>
                 <div class="accuracy-metric"><div class="value">$${v.final_bankroll}</div><div class="label">Bankroll Sim</div></div>
                 <div class="accuracy-metric"><div class="value">${v.roi_pct}%</div><div class="label">Simulated ROI</div></div>
             `;

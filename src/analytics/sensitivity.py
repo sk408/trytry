@@ -33,33 +33,34 @@ _OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sensi
 # Default extreme sweep ranges per parameter type
 # These intentionally go WAY beyond optimizer bounds to find hidden value
 EXTREME_RANGES = {
-    "def_factor_dampening":  (-2.0,   5.0),
-    "turnover_margin_mult":  (-5.0,  10.0),
-    "rebound_diff_mult":     (-5.0,  10.0),
-    "rating_matchup_mult":   (-5.0,  20.0),
-    "four_factors_scale":    (-500.0, 1000.0),
-    "clutch_scale":          (-2.0,  5.0),
-    "hustle_effort_mult":    (-2.0,  5.0),
-    "pace_mult":             (-5.0,  10.0),
-    "fatigue_total_mult":    (-2.0,  5.0),
-    "espn_model_weight":     (0.0,   1.0),
-    "espn_weight":           (0.0,   1.0),
-    "ml_ensemble_weight":    (-2.0,  5.0),
-    "ml_disagree_damp":      (0.0,   3.0),
-    "spread_clamp":          (3.0, 100.0),
-    "ff_efg_weight":         (-2.0,  5.0),
-    "ff_tov_weight":         (-2.0,  8.0),
-    "ff_oreb_weight":        (-2.0,  5.0),
-    "ff_fta_weight":         (-2.0,  5.0),
-    "fatigue_b2b":           (-5.0,  15.0),
-    "fatigue_3in4":          (-5.0,  10.0),
-    "fatigue_4in6":          (-5.0,  10.0),
+    # Signs locked to match basketball logic — no sign flips allowed.
+    # spread_clamp is fixed at 30 — not tunable (prevents compression cheating).
+    "def_factor_dampening":  (0.1,    5.0),
+    "turnover_margin_mult":  (0.0,   10.0),
+    "rebound_diff_mult":     (0.0,   10.0),
+    "rating_matchup_mult":   (0.0,   20.0),
+    "four_factors_scale":    (10.0, 1500.0),
+    "clutch_scale":          (0.0,    5.0),
+    "hustle_effort_mult":    (0.0,    5.0),
+    "pace_mult":             (0.0,   10.0),
+    "fatigue_total_mult":    (0.0,    5.0),
+    "espn_model_weight":     (0.0,    1.0),
+    "espn_weight":           (0.0,    1.0),
+    "ml_ensemble_weight":    (0.0,    5.0),
+    "ml_disagree_damp":      (0.0,    3.0),
+    "ff_efg_weight":         (0.0,    5.0),
+    "ff_tov_weight":         (0.0,    8.0),
+    "ff_oreb_weight":        (0.0,    5.0),
+    "ff_fta_weight":         (0.0,    5.0),
+    "fatigue_b2b":           (0.0,   15.0),
+    "fatigue_3in4":          (0.0,   10.0),
+    "fatigue_4in6":          (0.0,   10.0),
     "pace_baseline":         (85.0, 110.0),
-    "steals_penalty":        (-1.0,  3.0),
-    "blocks_penalty":        (-1.0,  3.0),
-    "oreb_mult":             (-2.0,  5.0),
-    "sharp_money_weight":    (-5.0, 10.0),
-    "ats_edge_threshold":    (0.5,  8.0),
+    "steals_penalty":        (0.0,    3.0),
+    "blocks_penalty":        (0.0,    3.0),
+    "oreb_mult":             (0.0,    5.0),
+    "sharp_money_weight":    (0.0,   10.0),
+    "ats_edge_threshold":    (0.5,    8.0),
 }
 
 # Parameters NOT used by VectorizedGames.evaluate()
@@ -95,11 +96,11 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
                     steps: int = 200, games: Optional[List[PrecomputedGame]] = None,
                     vg: Optional[VectorizedGames] = None,
                     callback: Optional[Callable] = None,
-                    target: str = "ats") -> List[Dict]:
+                    target: str = "ml") -> List[Dict]:
     """Sweep a single parameter through [min_val, max_val] in `steps` increments.
 
     Args:
-        target: Optimization target for loss calculation — "ats", "roi", or "ml".
+        target: Optimization target for loss calculation — "ml", "value", "ats", or "roi".
 
     Returns a list of dicts with columns:
         param_value, spread_mae, total_mae, winner_pct, ats_rate, edge_rate,
@@ -133,21 +134,24 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
             "edge_roi": round(metrics.get("edge_roi", 0), 2),
             "ml_win_rate": round(metrics.get("ml_win_rate", 0), 2),
             "ml_roi": round(metrics.get("ml_roi", 0), 2),
+            "dog_pick_rate": round(metrics.get("dog_pick_rate", 0), 2),
+            "dog_hit_rate": round(metrics.get("dog_hit_rate", 0), 2),
+            "dog_roi": round(metrics.get("dog_roi", 0), 2),
             "loss": round(metrics.get("loss", 0), 4),
         })
         if callback and (i + 1) % 50 == 0:
-            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} -> ROI={metrics.get('ats_roi', 0):.2f}%)")
+            callback(f"  {param_name}: {i + 1}/{steps} ({val:.3f} -> ML ROI={metrics.get('ml_roi', 0):.2f}%, DogROI={metrics.get('dog_roi', 0):.1f}%)")
 
     return results
 
 
 def sweep_all_parameters(steps: int = 100,
                          callback: Optional[Callable] = None,
-                         target: str = "ats") -> Dict[str, List[Dict]]:
+                         target: str = "ml") -> Dict[str, List[Dict]]:
     """Sweep every sweepable parameter and return results keyed by param name.
 
     Args:
-        target: Optimization target for loss calculation — "ats", "roi", or "ml".
+        target: Optimization target for loss calculation — "ml", "value", "ats", or "roi".
     """
     games = _load_games(callback)
     vg = VectorizedGames(games)
@@ -178,7 +182,9 @@ def export_sweep_csv(param_name: str, results: List[Dict], output_dir: str = Non
         writer = csv.DictWriter(f, fieldnames=[
             "param_value", "spread_mae", "total_mae", "winner_pct",
             "ats_rate", "edge_rate", "ats_roi", "edge_roi",
-            "ml_win_rate", "ml_roi", "loss"
+            "ml_win_rate", "ml_roi",
+            "dog_pick_rate", "dog_hit_rate", "dog_roi",
+            "loss"
         ])
         writer.writeheader()
         writer.writerows(results)
@@ -240,11 +246,11 @@ def format_ascii_chart(param_name: str, results: List[Dict],
 
 
 def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
-                      target: str = "ats") -> str:
+                      target: str = "ml") -> str:
     """Run sensitivity sweep on all parameters, export CSVs, print summary.
 
     Args:
-        target: Optimization target for loss calculation — "ats", "roi", or "ml".
+        target: Optimization target for loss calculation — "ml", "value", "ats", or "roi".
 
     Returns the output directory path.
     """
@@ -274,6 +280,7 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
         best_loss_idx = np.argmin([r["loss"] for r in results])
         best_roi_idx = np.argmax([r.get("ats_roi", 0) for r in results])
         best_ml_roi_idx = np.argmax([r.get("ml_roi", -100) for r in results])
+        best_dog_roi_idx = np.argmax([r.get("dog_roi", -100) for r in results])
 
         best_mae_val = results[best_mae_idx]["param_value"]
         best_mae = results[best_mae_idx]["spread_mae"]
@@ -285,6 +292,9 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
         best_roi = results[best_roi_idx].get("ats_roi", 0)
         best_ml_roi_val = results[best_ml_roi_idx]["param_value"]
         best_ml_roi = results[best_ml_roi_idx].get("ml_roi", -100)
+        best_dog_roi_val = results[best_dog_roi_idx]["param_value"]
+        best_dog_roi = results[best_dog_roi_idx].get("dog_roi", -100)
+        best_dog_hit = results[best_dog_roi_idx].get("dog_hit_rate", 0)
 
         # Evaluate at current default
         current_idx = np.argmin([abs(r["param_value"] - current_val) for r in results])
@@ -292,25 +302,30 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
         current_win = results[current_idx]["winner_pct"]
         current_roi = results[current_idx].get("ats_roi", 0)
         current_ml_roi = results[current_idx].get("ml_roi", -100)
+        current_dog_roi = results[current_idx].get("dog_roi", -100)
 
-        # Check if optimizer range is too narrow
+        # Check which best values fall outside optimizer range
+        outside_flags = []
         if param_name in OPTIMIZER_RANGES:
             opt_lo, opt_hi = OPTIMIZER_RANGES[param_name]
-            outside = (best_mae_val < opt_lo or best_mae_val > opt_hi or
-                       best_win_val < opt_lo or best_win_val > opt_hi or
-                       best_roi_val < opt_lo or best_roi_val > opt_hi or
-                       best_ml_roi_val < opt_lo or best_ml_roi_val > opt_hi)
-            flag = " ** OUTSIDE OPT RANGE" if outside else ""
-        else:
-            flag = ""
+            if best_loss_val < opt_lo or best_loss_val > opt_hi:
+                outside_flags.append("Loss")
+            if best_ml_roi_val < opt_lo or best_ml_roi_val > opt_hi:
+                outside_flags.append("ML ROI")
+            if best_dog_roi_val < opt_lo or best_dog_roi_val > opt_hi:
+                outside_flags.append("DogROI")
+            if best_win_val < opt_lo or best_win_val > opt_hi:
+                outside_flags.append("Win%")
+        flag = f" ** OUTSIDE OPT RANGE ({', '.join(outside_flags)})" if outside_flags else ""
 
-        summary_lines.append(f"  {param_name}:")
-        summary_lines.append(f"    Current={current_val:.4f} (MAE={current_mae:.2f}, Win={current_win:.1f}%, ATS ROI={current_roi:.1f}%, ML ROI={current_ml_roi:.1f}%)")
-        summary_lines.append(f"    Best MAE={best_mae:.2f} at {best_mae_val:.4f}")
-        summary_lines.append(f"    Best Win={best_win:.1f}% at {best_win_val:.4f}")
-        summary_lines.append(f"    Best ATS ROI={best_roi:.1f}% at {best_roi_val:.4f}")
+        summary_lines.append(f"  {param_name}:{flag}")
+        summary_lines.append(f"    Current={current_val:.4f} (Win={current_win:.1f}%, ML ROI={current_ml_roi:.1f}%, DogROI={current_dog_roi:.1f}%)")
+        summary_lines.append(f"    Best Loss={best_loss:.4f} at {best_loss_val:.4f}")
         summary_lines.append(f"    Best ML ROI={best_ml_roi:.1f}% at {best_ml_roi_val:.4f}")
-        summary_lines.append(f"    Best Loss={best_loss:.4f} at {best_loss_val:.4f}{flag}")
+        summary_lines.append(f"    Best DogROI={best_dog_roi:.1f}% (Hit={best_dog_hit:.1f}%) at {best_dog_roi_val:.4f}")
+        summary_lines.append(f"    Best Win={best_win:.1f}% at {best_win_val:.4f}")
+        if param_name in OPTIMIZER_RANGES:
+            summary_lines.append(f"    Optimizer range: [{opt_lo}, {opt_hi}]")
         summary_lines.append("")
 
     summary = "\n".join(summary_lines)
@@ -336,8 +351,9 @@ def read_sweep_optimals(metric: str = "loss",
     """Read all sweep CSVs and extract the optimal value for each parameter.
 
     Args:
-        metric: Which metric to optimize. One of 'loss' (combined, default),
-                'spread_mae', or 'winner_pct'.
+        metric: Which metric to optimize. Options: 'loss', 'spread_mae',
+                'winner_pct', 'ml_win_rate', 'ml_roi', 'dog_roi',
+                'dog_hit_rate', 'dog_pick_rate', 'ats_rate', etc.
         output_dir: Directory containing sweep CSVs (default: data/sensitivity/).
 
     Returns:
@@ -353,7 +369,9 @@ def read_sweep_optimals(metric: str = "loss",
 
     minimize = metric in ("spread_mae", "total_mae", "loss")
     # For metrics not in every CSV (older sweeps), fall back gracefully
-    betting_metrics = {"ats_rate", "edge_rate", "ats_roi", "edge_roi", "ml_win_rate", "ml_roi"}
+    betting_metrics = {"ats_rate", "edge_rate", "ats_roi", "edge_roi",
+                       "ml_win_rate", "ml_roi",
+                       "dog_pick_rate", "dog_hit_rate", "dog_roi"}
     base_w = WeightConfig()
     optimals = {}
 
@@ -422,7 +440,7 @@ def apply_sweep_optimals(metric: str = "loss",
     4. Saves the new WeightConfig to the database.
 
     Args:
-        metric: Optimize for 'loss' (default), 'spread_mae', or 'winner_pct'.
+        metric: Optimize for 'loss' (default), 'ml_roi', 'dog_roi', etc.
         only_active: If True, skip parameters with no measurable effect.
         snapshot_name: Name for the pre-apply snapshot.
         callback: Progress callback function.
@@ -496,7 +514,7 @@ def coordinate_descent(params: Optional[List[str]] = None,
                        max_rounds: int = 10,
                        convergence_threshold: float = 0.005,
                        callback: Optional[Callable] = None,
-                       target: str = "ats") -> Dict[str, Any]:
+                       target: str = "ml") -> Dict[str, Any]:
     """Iteratively sweep each parameter and lock in the best value.
 
     This is far more effective than individual sweeps because it captures
@@ -1141,9 +1159,9 @@ def main():
                         help="Run 3-parameter triplet interaction analysis")
     parser.add_argument("--anchor", type=str, default="ff_tov_weight",
                         help="Anchor parameter for triplet analysis (default: ff_tov_weight)")
-    parser.add_argument("--target", type=str, default="ats",
-                        choices=["ats", "roi", "ml"],
-                        help="Optimization target for loss calculation (default: ats)")
+    parser.add_argument("--target", type=str, default="ml",
+                        choices=["ml", "value", "ats", "roi"],
+                        help="Optimization target for loss calculation (default: ml)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)

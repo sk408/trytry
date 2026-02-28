@@ -364,10 +364,22 @@ async def matchups_page(request: Request,
                 "Rating Matchup": pred.rating_matchup_adj,
                 "Four Factors": pred.four_factors_adj,
                 "Clutch Factor": pred.clutch_adj,
-                "Hustle Factor": pred.hustle_adj,
+                "Hustle (Spread)": pred.hustle_adj,
+                "Pace (Total)": pred.pace_adj,
+                "Def. Disruption (Total)": pred.defensive_disruption,
+                "OREB Boost (Total)": pred.oreb_boost,
+                "Hustle (Total)": pred.hustle_total_adj,
+                "Sharp Money": pred.adjustments.get("sharp_money", 0),
                 "ESPN Blend": pred.espn_blend_adj,
                 "ML Ensemble": pred.ml_blend_adj,
             }
+            # Sharp money raw data for display
+            if pred.sharp_home_public > 0:
+                prediction["sharp_money_info"] = {
+                    "spread_public": f"H {pred.sharp_home_public}% / A {100 - pred.sharp_home_public}%",
+                    "spread_money": f"H {pred.sharp_home_money}% / A {100 - pred.sharp_home_money}%",
+                    "edge": pred.sharp_home_money - pred.sharp_home_public,
+                }
             # Compute win probability from spread
             import math
             spread = pred.predicted_spread or 0
@@ -482,7 +494,20 @@ async def admin_page(request: Request):
         "request": request,
         "db_path": config.get("db_path", "data/nba.db"),
         "db_size": get_db_size(),
+        "sync_freshness_hours": config.get("sync_freshness_hours", 4),
+        "optimizer_log_interval": config.get("optimizer_log_interval", 300),
     })
+
+
+@app.post("/admin/settings")
+async def admin_save_settings(request: Request):
+    from src.config import set_value
+    data = await request.json()
+    if "sync_freshness_hours" in data:
+        set_value("sync_freshness_hours", max(1, min(168, int(data["sync_freshness_hours"]))))
+    if "optimizer_log_interval" in data:
+        set_value("optimizer_log_interval", max(1, min(3000, int(data["optimizer_log_interval"]))))
+    return {"status": "ok"}
 
 
 @app.post("/admin/reset")
@@ -577,6 +602,24 @@ async def sse_sync_images():
     from src.data.image_cache import preload_images
     return StreamingResponse(
         _sse_generator(preload_images),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/api/sync/nuke-resync")
+async def sse_nuke_resync():
+    """Nuke all synced data then full force resync."""
+    _sync_cancel.clear()
+
+    def _nuke_and_resync(callback=None):
+        from src.data.sync_service import nuke_synced_data, full_sync
+        nuke_synced_data(callback=callback)
+        if callback:
+            callback("\nStarting full force resync from scratch...")
+        full_sync(callback=callback, force=True)
+
+    return StreamingResponse(
+        _sse_generator(_nuke_and_resync, _sync_cancel),
         media_type="text/event-stream",
     )
 
@@ -857,6 +900,16 @@ async def sse_full_pipeline():
     from src.analytics.pipeline import run_full_pipeline
     return StreamingResponse(
         _sse_generator(run_full_pipeline, _pipeline_cancel),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/api/retune")
+async def sse_retune():
+    _pipeline_cancel.clear()
+    from src.analytics.pipeline import run_retune
+    return StreamingResponse(
+        _sse_generator(run_retune, _pipeline_cancel),
         media_type="text/event-stream",
     )
 

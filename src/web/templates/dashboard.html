@@ -45,6 +45,7 @@
     <div class="btn-group mb-3">
         <button class="btn btn-primary" onclick="runSync('/api/sync/data')">Full Sync</button>
         <button class="btn btn-warning" onclick="runSync('/api/sync/data?force=true')" title="Bypass freshness checks">Force Sync</button>
+        <button class="btn btn-danger" onclick="nukeAndResync()" title="Delete ALL synced data and re-fetch from scratch">Nuke & Resync</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/injuries')">Injuries</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/injury-history')">Injury History</button>
         <button class="btn btn-outline" onclick="runSync('/api/sync/team-metrics')">Team Metrics</button>
@@ -216,6 +217,11 @@ function runPipeline() {
         origErr.call(this);
         showToast('Pipeline connection lost', 'error');
     };
+}
+
+function nukeAndResync() {
+    if (!confirm('This will DELETE all synced data (game logs, odds, injuries, metrics, etc.) and re-fetch everything from scratch. Continue?')) return;
+    runSync('/api/sync/nuke-resync');
 }
 
 function cancelSync() {

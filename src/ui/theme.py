@@ -289,6 +289,19 @@ QStatusBar {
     font-family: 'Segoe UI', sans-serif;
 }
 
+/* ---- Info Cards & Collapsible Sections ---- */
+#infoCard {
+    background: rgba(20, 30, 45, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+#collapsibleBar {
+    background: rgba(20, 30, 45, 0.8);
+    border-radius: 4px;
+}
+
 /* ---- Tool Tip ---- */
 QToolTip {
     background-color: rgba(20, 30, 45, 0.95);
