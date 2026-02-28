@@ -226,6 +226,17 @@ class _PreloadRunnable(QRunnable):
 
 
 # ──────────────────────────────────────────────────────────────
+# WebSocket → Qt bridge
+# ──────────────────────────────────────────────────────────────
+
+
+class _WebSocketBridge(QObject):
+    """Thread-safe bridge: FastcastWebSocket thread → Qt main thread signals."""
+    data_changed = Signal()
+    ws_error = Signal(str)
+
+
+# ──────────────────────────────────────────────────────────────
 # Main View
 # ──────────────────────────────────────────────────────────────
 
@@ -252,6 +263,18 @@ class GamecastView(QWidget):
         # Thread pool for preloading (limit concurrency to avoid ESPN rate-limit)
         self._pool = QThreadPool()
         self._pool.setMaxThreadCount(3)
+
+        # WebSocket for real-time live updates
+        self._fastcast_ws = None
+        self._ws_bridge = _WebSocketBridge()
+        self._ws_bridge.data_changed.connect(self._on_ws_data_changed)
+        self._ws_bridge.ws_error.connect(self._on_ws_error)
+
+        # Debounce timer for WebSocket-triggered refetches (avoids hammering ESPN)
+        self._ws_debounce = QTimer(self)
+        self._ws_debounce.setSingleShot(True)
+        self._ws_debounce.setInterval(2000)  # 2s debounce
+        self._ws_debounce.timeout.connect(self._ws_refetch)
 
         self._build_ui()
 
@@ -518,6 +541,7 @@ class GamecastView(QWidget):
             # Selected the empty "Select Game" option
             self._current_game_id = None
             self.live_timer.stop()
+            self._stop_websocket()
             self._status_hint.setText("")
             self.court.clear_shots()
             self.info_panel.update_info(None, "HOME", "AWAY", 0, 0, 50.0, None)
@@ -553,6 +577,7 @@ class GamecastView(QWidget):
             
         self._current_game_id = game_id
         self._known_play_count = 0
+        self._stop_websocket()  # stop WS for previous game
         self.court.clear_shots()
 
         # Try cache first → instant switch
@@ -588,6 +613,8 @@ class GamecastView(QWidget):
             state = data.get("status_state", "")
             if state == "post":
                 self._status_hint.setText("Final")
+            elif state == "in" and self._fastcast_ws and self._fastcast_ws.is_connected:
+                self._status_hint.setText("WS")
             else:
                 self._status_hint.setText("")
             self._apply_data(data)
@@ -618,25 +645,79 @@ class GamecastView(QWidget):
             return
         if _cache.is_final(gid):
             self.live_timer.stop()
+            self._stop_websocket()
             self._status_hint.setText("Final")
             return
-            
+
         cached = _cache.get(gid)
         state = cached.get("status_state", "") if cached else ""
         if state == "post":
-            # If we know it's final now, update cache and stop
             _cache._state[gid] = "post"
             self.live_timer.stop()
+            self._stop_websocket()
             self._status_hint.setText("Final")
             return
-            
+
         if state == "in":
-            self.live_timer.start(10_000)
+            # Start WebSocket for real-time updates
+            self._start_websocket(gid)
+            # Polling is a slow fallback when WS is active (30s)
+            # or fast (10s) if WS failed to connect
+            ws_ok = self._fastcast_ws and self._fastcast_ws.is_connected
+            self.live_timer.start(30_000 if ws_ok else 10_000)
         elif state == "pre":
+            self._stop_websocket()
             self.live_timer.start(60_000)
         else:
-            # Unknown/scheduled — moderate interval
+            self._stop_websocket()
             self.live_timer.start(30_000)
+
+    # ──────────────────────── WEBSOCKET ────────────────────────
+
+    def _start_websocket(self, game_id: str):
+        """Start Fastcast WebSocket for a live game (no-op if already connected)."""
+        if (self._fastcast_ws and self._fastcast_ws.game_id == game_id
+                and self._fastcast_ws.is_connected):
+            return  # already connected to this game
+
+        self._stop_websocket()
+        try:
+            from src.data.gamecast import FastcastWebSocket
+            self._fastcast_ws = FastcastWebSocket(
+                game_id,
+                on_data_changed=lambda: self._ws_bridge.data_changed.emit(),
+                on_error=lambda e: self._ws_bridge.ws_error.emit(e),
+            )
+            self._fastcast_ws.start()
+            logger.info(f"Fastcast WS started for {game_id}")
+        except Exception as e:
+            logger.warning(f"Failed to start Fastcast WS: {e}")
+            self._fastcast_ws = None
+
+    def _stop_websocket(self):
+        """Stop any active WebSocket connection."""
+        if self._fastcast_ws:
+            self._fastcast_ws.stop()
+            self._fastcast_ws = None
+        self._ws_debounce.stop()
+
+    def _on_ws_data_changed(self):
+        """WebSocket detected a change — schedule a debounced refetch."""
+        if not self._ws_debounce.isActive():
+            self._ws_debounce.start()
+
+    def _on_ws_error(self, msg: str):
+        """WebSocket failed — revert to fast polling as fallback."""
+        logger.warning(f"Fastcast WS error, reverting to fast polling: {msg}")
+        gid = self._current_game_id
+        if gid and not _cache.is_final(gid):
+            self.live_timer.start(10_000)
+
+    def _ws_refetch(self):
+        """Debounce timer fired — do the actual refetch now."""
+        gid = self._current_game_id
+        if gid and not _cache.is_final(gid):
+            self._fetch_game(gid)
 
     # ──────────────────────── THREAD MANAGEMENT ────────────────────
 

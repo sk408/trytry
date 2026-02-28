@@ -147,47 +147,147 @@ def get_espn_linescores(game_id: str) -> List[Dict[str, Any]]:
     return scores
 
 
-class ESPNWebSocket:
-    """Optional WebSocket connection for live ESPN data via linedrive."""
+FASTCAST_HOST_URL = "https://fastcast.semfs.engsvc.go.com/public/websockethost"
+FASTCAST_CHANNEL_PREFIX = "gp-basketball-nba-"
 
-    def __init__(self, game_id: str):
+
+class FastcastWebSocket:
+    """Real-time ESPN Fastcast WebSocket for live game updates.
+
+    Connects to ESPN's Fastcast service in a background thread and fires
+    a callback when game data changes.  Consumers should refetch full
+    data when notified — this keeps parsing logic in one place and the
+    WebSocket layer thin.
+
+    Auto-reconnects on disconnect.  Falls back silently if websocket-client
+    is not installed.
+    """
+
+    def __init__(self, game_id: str, on_data_changed=None, on_error=None):
         self.game_id = game_id
-        self.ws = None
+        self._on_data_changed = on_data_changed
+        self._on_error = on_error
+        self._ws = None
+        self._thread = None
         self._running = False
+        self._channel = FASTCAST_CHANNEL_PREFIX + game_id
+        self._last_notify = 0.0
+        self._debounce_sec = 1.5  # min seconds between notifications
+        self._connected = False
 
-    def connect(self):
-        try:
-            import websocket
-            self.ws = websocket.WebSocketApp(
-                f"wss://linedrive.espn.com/v1/nba/game/{self.game_id}",
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close,
-            )
-            self._running = True
-        except ImportError:
-            logger.warning("websocket-client not available for ESPN WebSocket")
+    def start(self):
+        """Connect and start receiving in a daemon background thread."""
+        if self._running:
+            return
+        self._running = True
+        import threading
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"fastcast-{self.game_id}")
+        self._thread.start()
 
-    def _on_message(self, ws, message):
-        try:
-            data = json.loads(message)
-            logger.debug(f"ESPN WS message: {data.get('type', 'unknown')}")
-        except json.JSONDecodeError:
-            pass
-
-    def _on_error(self, ws, error):
-        logger.error(f"ESPN WS error: {error}")
-
-    def _on_close(self, ws, code, reason):
+    def stop(self):
+        """Disconnect and stop the background thread."""
         self._running = False
-
-    def close(self):
-        self._running = False
-        if self.ws:
+        self._connected = False
+        if self._ws:
             try:
-                self.ws.close()
+                self._ws.close()
             except Exception:
                 pass
+
+    @property
+    def is_connected(self):
+        return self._connected
+
+    def _run(self):
+        """Background thread: connect → subscribe → receive → auto-reconnect."""
+        try:
+            import websocket
+        except ImportError:
+            logger.warning("websocket-client not installed — Fastcast unavailable")
+            self._running = False
+            return
+
+        import time as _time
+
+        while self._running:
+            try:
+                resp = requests.get(FASTCAST_HOST_URL, headers=_HEADERS, timeout=10)
+                info = resp.json()
+                ws_url = (
+                    f"wss://{info['ip']}:{info['securePort']}/"
+                    f"FastcastService/pubsub/profiles/12000?"
+                    f"TrafficManager-Token={info['token']}"
+                )
+
+                self._ws = websocket.WebSocketApp(
+                    ws_url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=self._on_ws_error,
+                    on_close=self._on_close,
+                )
+                self._ws.run_forever(ping_interval=30, ping_timeout=10)
+
+            except Exception as e:
+                logger.error(f"Fastcast connect error: {e}")
+                if self._on_error:
+                    try:
+                        self._on_error(str(e))
+                    except Exception:
+                        pass
+
+            self._connected = False
+            if self._running:
+                logger.info("Fastcast reconnecting in 5s...")
+                _time.sleep(5)
+
+    # -- WebSocket callbacks (run on WS background thread) --
+
+    def _on_open(self, ws):
+        logger.info(f"Fastcast connected for game {self.game_id}")
+        ws.send(json.dumps({"op": "C"}))
+
+    def _on_message(self, ws, raw):
+        try:
+            msg = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        op = msg.get("op", "")
+
+        if op == "C":
+            sid = msg.get("sid", "")
+            ws.send(json.dumps({"op": "S", "sid": sid, "tc": self._channel}))
+            logger.info(f"Fastcast subscribed to {self._channel}")
+            self._connected = True
+
+        elif "pl" in msg:
+            tc = msg.get("tc", "")
+            pl = msg.get("pl", "0")
+            if pl == "0" or tc != self._channel:
+                return
+            if isinstance(pl, str) and pl.startswith("http"):
+                return  # checkpoint URL
+
+            # Relevant data arrived — notify consumer (debounced)
+            import time as _time
+            now = _time.time()
+            if now - self._last_notify >= self._debounce_sec:
+                self._last_notify = now
+                if self._on_data_changed:
+                    try:
+                        self._on_data_changed()
+                    except Exception:
+                        pass
+
+    def _on_ws_error(self, ws, error):
+        logger.warning(f"Fastcast WS error: {error}")
+        self._connected = False
+
+    def _on_close(self, ws, code, reason):
+        logger.info(f"Fastcast closed: code={code}, reason={reason}")
+        self._connected = False
 
 _an_odds_cache = {}
 _an_last_fetch = 0.0

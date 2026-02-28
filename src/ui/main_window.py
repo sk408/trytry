@@ -105,4 +105,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Clean up on close."""
         logger.info("Application closing")
+        if hasattr(self, 'gamecast'):
+            self.gamecast._stop_websocket()
         event.accept()

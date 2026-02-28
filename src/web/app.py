@@ -921,7 +921,20 @@ async def sse_gamecast_stream(game_id: str):
             fetch_espn_game_summary, get_espn_odds,
             get_espn_plays, get_espn_boxscore,
             normalize_espn_abbr,
+            FastcastWebSocket,
         )
+        # Start Fastcast WebSocket for real-time change detection
+        ws_event = threading.Event()
+        ws = None
+        try:
+            ws = FastcastWebSocket(
+                game_id,
+                on_data_changed=lambda: ws_event.set(),
+            )
+            ws.start()
+        except Exception:
+            ws = None
+
         # Resolve NBA team IDs once
         _team_cache = {}
         _player_cache = {}
@@ -952,6 +965,7 @@ async def sse_gamecast_stream(game_id: str):
             _player_cache[name] = pid
             return pid
 
+        status_state = "in"  # assume live until proven otherwise
         while True:
             try:
                 raw_summary = fetch_espn_game_summary(game_id)
@@ -1282,8 +1296,20 @@ async def sse_gamecast_stream(game_id: str):
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-            # Poll rate: 10s live, 30s otherwise
-            await asyncio.sleep(10)
+            # Wait for WebSocket change notification or fallback timeout
+            ws_event.clear()
+            fallback_sec = 10 if status_state == "in" else 30
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: ws_event.wait(fallback_sec)
+                )
+            except (GeneratorExit, asyncio.CancelledError):
+                # Client disconnected — clean up WebSocket
+                if ws:
+                    ws.stop()
+                return
+            except Exception:
+                await asyncio.sleep(fallback_sec)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
