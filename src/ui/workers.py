@@ -40,6 +40,9 @@ class BaseWorker(QObject):
         raise NotImplementedError
 
 
+_active_workers = set()  # prevent GC until thread actually stops
+
+
 def _start_worker(worker: BaseWorker, on_progress=None, on_done=None, on_result=None):
     """Launch a worker on a new QThread. Returns the worker for stop().
 
@@ -60,8 +63,16 @@ def _start_worker(worker: BaseWorker, on_progress=None, on_done=None, on_result=
     worker.finished.connect(thread.quit)
     # Schedule C++ cleanup only after thread has fully stopped
     thread.finished.connect(thread.deleteLater)
-    # prevent GC until thread is done
+    # prevent GC until thread is done — _active_workers holds a strong ref
+    # so even if the caller drops its reference (e.g. _on_done sets worker=None),
+    # the worker+thread survive until the OS thread actually exits.
     worker._thread_ref = thread
+    _active_workers.add(worker)
+
+    def _release_worker():
+        _active_workers.discard(worker)
+
+    thread.finished.connect(_release_worker)
     thread.start()
     return worker
 
@@ -502,7 +513,7 @@ class OvernightWorker(BaseWorker):
         try:
             from src.database.db import thread_local_db
             thread_local_db()
-            from src.analytics.pipeline import run_overnight, is_cancelled
+            from src.analytics.pipeline import run_overnight
             results = run_overnight(
                 max_hours=self.max_hours,
                 reset_weights=self.reset_weights,
@@ -689,8 +700,8 @@ class OverviewWorker(BaseWorker):
             results = []
 
             # Use thread_local_db so all db reads (including inside
-            # predict_matchup) use a private in-memory copy — no lock
-            # contention with the main UI thread.
+            # predict_matchup) use a private in-memory copy — no concurrent
+            # cursor operations on the shared connection.
             with thread_local_db():
                 for i, g in enumerate(games):
                     if self._check_stop():
@@ -700,15 +711,15 @@ class OverviewWorker(BaseWorker):
                     away_abbr = g.get("away_team", "")
                     self.progress.emit(f"Processing {away_abbr} @ {home_abbr} ({i+1}/{len(games)})...")
 
-                    home_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (home_abbr,))
-                    away_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (away_abbr,))
-
                     pred_data = None
-                    if home_row and away_row:
-                        try:
+                    odds = {}
+                    try:
+                        home_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (home_abbr,))
+                        away_row = db.fetch_one("SELECT team_id FROM teams WHERE abbreviation = ?", (away_abbr,))
+
+                        if home_row and away_row:
                             pred = predict_matchup(home_row["team_id"], away_row["team_id"], today_str,
                                                    skip_ml=True, skip_espn=True)
-
                             pred_data = {
                                 "spread": getattr(pred, 'predicted_spread', 0.0),
                                 "total": getattr(pred, 'predicted_total', 0.0),
@@ -717,15 +728,13 @@ class OverviewWorker(BaseWorker):
                                 "sharp_home_public": getattr(pred, 'sharp_home_public', 0),
                                 "sharp_home_money": getattr(pred, 'sharp_home_money', 0),
                             }
-                        except Exception as e:
-                            import traceback
-                            logger.warning(f"Prediction failed for {away_abbr} @ {home_abbr}: {e}\n{traceback.format_exc()}")
+                    except Exception as e:
+                        logger.warning(f"Prediction failed for {away_abbr} @ {home_abbr}: {e}")
 
                     try:
                         odds = get_actionnetwork_odds(home_abbr, away_abbr)
                     except Exception as oe:
                         logger.warning(f"Odds fetch failed for {away_abbr} @ {home_abbr}: {oe}")
-                        odds = {}
 
                     g_data = {
                         "espn_id": g.get("espn_id"),
