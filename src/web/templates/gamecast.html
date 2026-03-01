@@ -112,99 +112,122 @@
         <div id="homeFlash" class="score-flash score-flash-home"></div>
     </div>
 
-    <!-- Live Odds & Prediction (Grid) -->
-    <div class="grid-2">
-        <!-- Prediction -->
-        <div class="card">
-            <h2>Model Prediction</h2>
+    <!-- Desktop: sidebar + main layout / Mobile: stacked -->
+    <div class="gamecast-body">
 
-            <!-- Win Probability -->
-            <div class="win-prob-container mt-2 mb-4">
-                <div class="win-prob-labels">
-                    <span><span id="awayLabelWp">AWAY</span> <span id="wpAway">50%</span></span>
-                    <span><span id="wpHome">50%</span> <span id="homeLabelWp">HOME</span></span>
-                </div>
-                <div class="win-prob-bar">
-                    <div class="win-prob-away" id="wpBarAway" style="width: 50%"></div>
-                    <div class="win-prob-home" id="wpBarHome" style="width: 50%"></div>
-                </div>
-            </div>
+        <!-- SIDEBAR: Prediction, Odds, Flow Stats -->
+        <div class="gamecast-sidebar">
+            <!-- Prediction -->
+            <div class="card">
+                <h2>Model Prediction</h2>
 
-            <div id="predictionInfo" class="pred-summary">
-                <div class="text-muted text-sm" style="grid-column: 1 / -1;">Waiting for prediction...</div>
-            </div>
-        </div>
-
-        <!-- Vegas Odds -->
-        <div class="card">
-            <h2>Vegas Odds</h2>
-            <div id="oddsInfo" class="odds-grid mt-2">
-                <div class="text-muted text-sm" style="grid-column: 1 / -1;">Loading...</div>
-            </div>
-        </div>
-
-        <!-- Game Flow Stats -->
-        <div class="card" style="grid-column: 1 / -1;">
-            <h2>Game Flow Stats</h2>
-            <div class="flow-stats">
-                <div class="flow-stat">
-                    <span class="flow-stat-label">Drives Scored</span>
-                    <div class="flow-stat-value">
-                        <span id="awayDrives" style="color: var(--team-away);">0</span> - <span id="homeDrives" style="color: var(--team-home);">0</span>
+                <!-- Win Probability -->
+                <div class="win-prob-container mt-2 mb-4">
+                    <div class="win-prob-labels">
+                        <span><span id="awayLabelWp">AWAY</span> <span id="wpAway">50%</span></span>
+                        <span><span id="wpHome">50%</span> <span id="homeLabelWp">HOME</span></span>
+                    </div>
+                    <div class="win-prob-bar">
+                        <div class="win-prob-away" id="wpBarAway" style="width: 50%"></div>
+                        <div class="win-prob-home" id="wpBarHome" style="width: 50%"></div>
                     </div>
                 </div>
-                <div class="flow-stat">
-                    <span class="flow-stat-label">Poss Scored</span>
-                    <div class="flow-stat-value">
-                        <span id="awayPoss" style="color: var(--team-away);">0</span> - <span id="homePoss" style="color: var(--team-home);">0</span>
+
+                <div id="predictionInfo" class="pred-summary">
+                    <div class="text-muted text-sm" style="grid-column: 1 / -1;">Waiting for prediction...</div>
+                </div>
+            </div>
+
+            <!-- Vegas Odds -->
+            <div class="card">
+                <h2>Vegas Odds</h2>
+                <div id="oddsInfo" class="odds-grid mt-2">
+                    <div class="text-muted text-sm" style="grid-column: 1 / -1;">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Game Flow Stats -->
+            <div class="card">
+                <h2>Game Flow Stats</h2>
+                <div class="flow-stats">
+                    <div class="flow-stat">
+                        <span class="flow-stat-label">Drives Scored</span>
+                        <div class="flow-stat-value">
+                            <span id="awayDrives" style="color: var(--team-away);">0</span> - <span id="homeDrives" style="color: var(--team-home);">0</span>
+                        </div>
+                    </div>
+                    <div class="flow-stat">
+                        <span class="flow-stat-label">Poss Scored</span>
+                        <div class="flow-stat-value">
+                            <span id="awayPoss" style="color: var(--team-away);">0</span> - <span id="homePoss" style="color: var(--team-home);">0</span>
+                        </div>
+                    </div>
+                    <div class="flow-stat">
+                        <span class="flow-stat-label">Current Run</span>
+                        <div id="currentRun" class="flow-stat-value">None</div>
                     </div>
                 </div>
-                <div class="flow-stat">
-                    <span class="flow-stat-label">Current Run</span>
-                    <div id="currentRun" class="flow-stat-value">None</div>
+            </div>
+        </div>
+
+        <!-- MAIN: Shot Chart, Play-by-Play, Box Score -->
+        <div class="gamecast-main">
+            <!-- Play-by-Play & Court Visualization -->
+            <div class="gamecast-court-plays">
+                <div class="card court-card">
+                    <div class="court-header">
+                        <h2>Shot Chart</h2>
+                        <div class="court-toggle" id="courtToggle">
+                            <button class="court-toggle-btn" data-filter="away" onclick="setCourtFilter('away')">
+                                <span class="court-toggle-dot" id="courtDotAway"></span>
+                                <span id="courtLabelAway">Away</span>
+                            </button>
+                            <button class="court-toggle-btn active" data-filter="both" onclick="setCourtFilter('both')">Both</button>
+                            <button class="court-toggle-btn" data-filter="home" onclick="setCourtFilter('home')">
+                                <span id="courtLabelHome">Home</span>
+                                <span class="court-toggle-dot" id="courtDotHome"></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="court-wrap">
+                        <canvas id="courtCanvas" width="600" height="564"></canvas>
+                        <div class="court-stats" id="courtStats"></div>
+                        <div class="court-tooltip" id="courtTooltip"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Play-by-Play</h2>
+                    <div class="play-feed" id="plays"></div>
+                </div>
+            </div>
+
+            <!-- Box Score -->
+            <div class="card">
+                <h2>Box Score</h2>
+                <div class="tabs" id="boxTabs" style="margin-bottom: 12px; display:flex; gap: 8px;">
+                    <button class="btn btn-primary" id="btnBoxAway" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></button>
+                    <button class="btn btn-outline" id="btnBoxHome" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></button>
+                </div>
+                <div id="boxAway" class="tab-content active">
+                    <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
+                        <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
+                            <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id="boxHome" class="tab-content" style="display:none;">
+                    <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
+                        <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
+                            <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Play-by-Play & Court Visualization -->
-    <div class="grid-2 mt-4">
-        <div class="card">
-            <h2>Shot Chart</h2>
-            <div style="position:relative;width:100%;max-width:500px;margin:0 auto;">
-                <canvas id="courtCanvas" width="500" height="470" style="width:100%;background:#1a2744;border-radius:8px;box-shadow:inset 0 2px 10px rgba(0,0,0,0.5);"></canvas>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h2>Play-by-Play</h2>
-            <div class="play-feed" id="plays"></div>
-        </div>
-    </div>
-
-    <!-- Box Score -->
-    <div class="card mt-4">
-        <h2>Box Score</h2>
-        <div class="tabs" id="boxTabs" style="margin-bottom: 12px; display:flex; gap: 8px;">
-            <button class="btn btn-primary" id="btnBoxAway" onclick="switchBoxTab('away')"><span id="boxAwayLabel">Away</span></button>
-            <button class="btn btn-outline" id="btnBoxHome" onclick="switchBoxTab('home')"><span id="boxHomeLabel">Home</span></button>
-        </div>
-        <div id="boxAway" class="tab-content active">
-            <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
-                <table class="box-table" id="boxAwayTable" style="width:100%;text-align:left;">
-                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
-        <div id="boxHome" class="tab-content" style="display:none;">
-            <div class="scroll-x" style="max-height: 400px; overflow-y: auto;">
-                <table class="box-table" id="boxHomeTable" style="width:100%;text-align:left;">
-                    <thead style="position: sticky; top: 0; background: var(--bg-card); z-index: 1;"><tr><th style="width:32px"></th><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>FG</th><th>3PT</th><th>PF</th><th>+/-</th></tr></thead>
-                    <tbody></tbody>
-                </table>
-            </div>
-        </div>
     </div>
 </div>
 {% endblock %}
@@ -552,6 +575,156 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* ---- Shot Chart Court Card ---- */
+.court-card {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.court-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 12px;
+}
+
+.court-header h2 {
+  margin: 0;
+}
+
+.court-toggle {
+  display: flex;
+  background: rgba(0,0,0,0.3);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.court-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.court-toggle-btn:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.05);
+}
+
+.court-toggle-btn.active {
+  background: rgba(255,255,255,0.12);
+  color: var(--text);
+}
+
+.court-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+#courtDotAway { background: var(--team-away, #ef4444); }
+#courtDotHome { background: var(--team-home, #3b82f6); }
+
+.court-wrap {
+  position: relative;
+  width: 100%;
+  background: #2a1a0e;
+}
+
+.court-wrap canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.court-stats {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  gap: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+
+.court-stat-pill {
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  padding: 4px 10px;
+  border-radius: 4px;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.court-stat-pill .cs-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.court-stat-pill .cs-val {
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+}
+
+.court-tooltip {
+  display: none;
+  position: absolute;
+  pointer-events: none;
+  background: rgba(10,15,25,0.92);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  max-width: 240px;
+  line-height: 1.4;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+}
+
+.court-tooltip .ct-result {
+  font-weight: 800;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
+}
+
+.court-tooltip .ct-text {
+  font-weight: 500;
+}
+
+.court-tooltip .ct-clock {
+  color: rgba(255,255,255,0.45);
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+.court-wrap canvas {
+  cursor: crosshair;
+}
+
 /* Responsive adjustments */
 @media (max-width: 600px) {
   .team-score { font-size: 3rem !important; }
@@ -587,6 +760,17 @@ let currentSummary = null;
 let previousHomeScore = null;
 let previousAwayScore = null;
 const _failedImages = new Set();  // track 404'd headshot URLs to avoid re-requesting
+
+function closeGameES() {
+    if (gameES) {
+        gameES.close();
+        if (typeof _activeEventSources !== 'undefined') {
+            var idx = _activeEventSources.indexOf(gameES);
+            if (idx > -1) _activeEventSources.splice(idx, 1);
+        }
+        gameES = null;
+    }
+}
 
 function toggleGameSelector() {
     const list = document.getElementById('gameList');
@@ -674,12 +858,12 @@ function selectGame(gameId, element = null) {
     // Background preload images just to be safe
     fetch('/api/sync/images').catch(() => {});
     
-    if (gameES) { gameES.close(); }
+    closeGameES();
     gameES = new EventSource('/api/gamecast/stream/' + gameId);
-    // Track active event sources if the global array exists
     if (typeof _activeEventSources !== 'undefined') _activeEventSources.push(gameES);
-    
+
     gameES.onmessage = function(e) {
+        if (e.data === '[DONE]') { closeGameES(); return; }
         try {
             const data = JSON.parse(e.data);
             if (data.error) return;
@@ -693,7 +877,17 @@ function selectGame(gameId, element = null) {
             updateBoxScore(data.boxscore, data.summary);
             updatePlays(data.plays, data.summary);
             updateCourt(data.plays);
+
+            if (data.summary && data.summary.status_state === 'post') {
+                closeGameES();
+            }
         } catch(err) { console.error(err); }
+    };
+
+    gameES.onerror = function() {
+        if (currentSummary && currentSummary.status_state === 'post') {
+            closeGameES();
+        }
     };
 }
 
@@ -748,6 +942,12 @@ function updateScoreboard(s) {
     document.getElementById('awayLabelWp').textContent = s.away_team;
     document.getElementById('homeLabelWp').textContent = s.home_team;
 
+    // Court toggle labels
+    var cla = document.getElementById('courtLabelAway');
+    var clh = document.getElementById('courtLabelHome');
+    if (cla) cla.textContent = s.away_team || 'Away';
+    if (clh) clh.textContent = s.home_team || 'Home';
+
     const st = s.status_state;
     if (st === 'in') {
         document.getElementById('statusBadge').style.display = 'block';
@@ -761,6 +961,9 @@ function updateScoreboard(s) {
         document.getElementById('finalBadge').style.display = 'block';
         document.getElementById('statusText').style.display = 'none';
         document.getElementById('clockContainer').style.display = 'none';
+        // Hide overlays on finished games
+        dismissTimeout();
+        dismissSub();
     } else {
         document.getElementById('statusBadge').style.display = 'none';
         document.getElementById('finalBadge').style.display = 'none';
@@ -1055,6 +1258,7 @@ function startTimeoutTimer(seconds) {
         remaining--;
         if (remaining <= 0) {
             clearInterval(timeoutInterval);
+            timeoutInterval = null;
             overlay.style.display = 'none';
         } else {
             secondsSpan.textContent = remaining;
@@ -1208,120 +1412,364 @@ function updatePlays(plays, s) {
 // ---- Court Visualization ----
 const COURT_W = 50, COURT_H = 47, HOOP_X = 25, HOOP_Y = 5.25;
 let courtShots = [];
+let courtFilter = 'both'; // 'away', 'home', 'both'
+let _courtLogoImg = null;
+let _courtLogoTeamId = null;
+
+function setCourtFilter(f) {
+    courtFilter = f;
+    document.querySelectorAll('.court-toggle-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-filter') === f);
+    });
+    drawCourt();
+}
+
+function _getFilteredShots() {
+    if (!currentSummary || courtFilter === 'both') return courtShots;
+    const tid = courtFilter === 'home' ? currentSummary.home_team_id : currentSummary.away_team_id;
+    return courtShots.filter(function(s) { return String(s.team_id) === String(tid); });
+}
+
+function _getCourtTeamColors() {
+    if (!currentSummary) return { primary: '#3b82f6', secondary: '#1e3a5f' };
+    var tid;
+    if (courtFilter === 'home') tid = currentSummary.home_team_id;
+    else if (courtFilter === 'away') tid = currentSummary.away_team_id;
+    else tid = currentSummary.home_team_id; // default to home for court theme
+    const c = TEAM_COLORS[tid] || ['#3b82f6', '#1e3a5f'];
+    return { primary: c[0], secondary: c[1], teamId: tid };
+}
+
+function _loadCourtLogo(teamId, callback) {
+    if (_courtLogoTeamId === teamId && _courtLogoImg) { callback(_courtLogoImg); return; }
+    var img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = function() { _courtLogoImg = img; _courtLogoTeamId = teamId; callback(img); };
+    img.onerror = function() { callback(null); };
+    img.src = '/images/logos/' + teamId + '.svg';
+}
+
+function _hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    return {
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16)
+    };
+}
 
 function drawCourt() {
     const canvas = document.getElementById('courtCanvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
-    const margin = 10;
-    const cw = W - 2*margin, ch = H - 2*margin;
+    const pad = 12;
+    const cw = W - 2 * pad, ch = H - 2 * pad;
+    const tc = _getCourtTeamColors();
+    const rgb = _hexToRgb(tc.primary);
 
     ctx.clearRect(0, 0, W, H);
-    // Draw base floor with gradient
-    const gradient = ctx.createLinearGradient(0, 0, 0, H);
-    gradient.addColorStop(0, '#1e293b');
-    gradient.addColorStop(1, '#0f172a');
-    ctx.fillStyle = gradient;
+
+    // ---- Hardwood floor ----
+    // Base warm wood color
+    const woodBase = ctx.createLinearGradient(0, 0, W, H);
+    woodBase.addColorStop(0, '#c4893b');
+    woodBase.addColorStop(0.3, '#b87a30');
+    woodBase.addColorStop(0.6, '#d49a48');
+    woodBase.addColorStop(1, '#b07328');
+    ctx.fillStyle = woodBase;
     ctx.fillRect(0, 0, W, H);
 
-    function cx(x) { return margin + (x / COURT_W) * cw; }
-    function cy(y) { return margin + (y / COURT_H) * ch; }
+    // Wood plank lines (vertical)
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.strokeStyle = '#6b4226';
+    ctx.lineWidth = 1;
+    const plankW = W / 14;
+    for (var i = 0; i <= 14; i++) {
+        var px = i * plankW + (i % 3) * 2;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, H);
+        ctx.stroke();
+    }
+    ctx.restore();
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.lineWidth = 1.5;
+    // Wood grain texture (subtle horizontal streaks)
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    for (var gy = 0; gy < H; gy += 3) {
+        var gAlpha = 0.03 + Math.sin(gy * 0.7) * 0.03 + Math.sin(gy * 2.3) * 0.02;
+        ctx.fillStyle = 'rgba(60,30,10,' + gAlpha + ')';
+        ctx.fillRect(0, gy, W, 1.5);
+    }
+    ctx.restore();
 
-    // Court outline
+    // Slight vignette
+    var vig = ctx.createRadialGradient(W/2, H/2, W*0.2, W/2, H/2, W*0.7);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, W, H);
+
+    function cx(x) { return pad + (x / COURT_W) * cw; }
+    function cy(y) { return pad + (y / COURT_H) * ch; }
+
+    // ---- Team-colored paint area ----
+    const keyL = cx(17), keyR = cx(33), keyTop = cy(0), keyBot = cy(19);
+    ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.18)';
+    ctx.fillRect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
+
+    // Center circle fill (half, at bottom of half-court)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx(25), cy(COURT_H), (6/COURT_W)*cw, Math.PI, 0);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.15)';
+    ctx.fill();
+    ctx.restore();
+
+    // ---- Team logo watermark at center court ----
+    var logoTeam = tc.teamId || (currentSummary && currentSummary.home_team_id);
+    if (logoTeam) {
+        _loadCourtLogo(logoTeam, function(img) {
+            if (!img) return;
+            ctx.save();
+            var logoSize = cw * 0.28;
+            var lx = cx(25) - logoSize / 2;
+            var ly = cy(COURT_H) - logoSize * 0.85;
+            ctx.globalAlpha = 0.10;
+            ctx.drawImage(img, lx, ly, logoSize, logoSize);
+            ctx.restore();
+            // Redraw lines and shots on top (deferred)
+            _drawCourtLines(ctx, W, H, pad, cw, ch, cx, cy, rgb);
+            _drawShots(ctx, cx, cy, tc);
+            _updateCourtStats();
+        });
+    }
+
+    _drawCourtLines(ctx, W, H, pad, cw, ch, cx, cy, rgb);
+    _drawShots(ctx, cx, cy, tc);
+    _updateCourtStats();
+}
+
+function _drawCourtLines(ctx, W, H, pad, cw, ch, cx, cy, rgb) {
+    // NBA official dimensions (in feet, half-court view)
+    // Court: 50ft wide × 47ft half-length
+    // Basket: 5.25ft from baseline, centered at 25ft
+    // Key: 16ft wide (17–33), 19ft deep from baseline
+    // FT circle: 6ft radius at 19ft from baseline
+    // 3PT arc: 23.75ft radius from basket center
+    // Corner 3: 3ft from sideline, straight until arc junction
+    // Restricted area: 4ft radius from basket center
+    // Center circle: 6ft radius at half-court
+
+    var lineColor = 'rgba(255,255,255,0.85)';
+    var lineWidth = 2;
+    var r3 = 23.75;
+
+    // Compute exact corner-three junction y-coordinate
+    // where the 23.75ft arc reaches 3ft from sideline (x=3 or x=47)
+    var cornerDx = HOOP_X - 3; // 22ft
+    var junctionY = HOOP_Y + Math.sqrt(r3 * r3 - cornerDx * cornerDx); // ≈14.2ft
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.setLineDash([]);
+
+    // ---- Court outline ----
     ctx.beginPath();
     ctx.rect(cx(0), cy(0), cw, ch);
     ctx.stroke();
 
-    // Half-court line
+    // ---- Half-court line ----
     ctx.beginPath();
     ctx.moveTo(cx(0), cy(COURT_H));
     ctx.lineTo(cx(COURT_W), cy(COURT_H));
     ctx.stroke();
 
-    // Center circle (at half court)
+    // ---- Center circle (visible half — semicircle into our half-court) ----
     ctx.beginPath();
-    ctx.arc(cx(25), cy(COURT_H), (6/COURT_W)*cw, Math.PI, 0);
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
-    ctx.fill();
+    ctx.arc(cx(25), cy(COURT_H), (6 / COURT_W) * cw, Math.PI, 0);
     ctx.stroke();
 
-    // Paint / key (16ft wide)
-    const keyL = cx(17), keyR = cx(33), keyTop = cy(0), keyBot = cy(19);
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
-    ctx.fillRect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
+    // ---- Paint / key outline ----
+    var keyL = cx(17), keyR = cx(33), keyTop = cy(0), keyBot = cy(19);
     ctx.beginPath();
     ctx.rect(keyL, keyTop, keyR - keyL, keyBot - keyTop);
     ctx.stroke();
 
-    // Free throw circle top half
+    // ---- Free throw circle ----
+    var ftRadius = (6 / COURT_W) * cw;
+    // Solid half — inside the key (toward baseline = ABOVE the FT line in canvas)
+    // From 0 (right) counterclockwise to π (left), sweeping upward through 3π/2
     ctx.beginPath();
-    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI, true);
+    ctx.arc(cx(25), cy(19), ftRadius, Math.PI, 0, true);
     ctx.stroke();
-    // Free throw circle bottom half (dashed)
+    // Dashed half — outside the key (toward half-court = BELOW the FT line in canvas)
+    // From π (left) counterclockwise to 0 (right), sweeping downward through π/2
     ctx.beginPath();
-    ctx.setLineDash([5, 5]);
-    ctx.arc(cx(25), cy(19), (6/COURT_W)*cw, 0, Math.PI, false);
+    ctx.setLineDash([6, 6]);
+    ctx.arc(cx(25), cy(19), ftRadius, Math.PI, 0, false);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Restricted area arc
+    // ---- Restricted area arc ----
+    // 4ft semicircle below the hoop (toward half-court)
     ctx.beginPath();
-    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (4/COURT_W)*cw, 0, Math.PI);
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = lineWidth;
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (4 / COURT_W) * cw, 0, Math.PI);
     ctx.stroke();
 
-    // Three-point arc
+    // ---- Three-point line ----
+    // Angles from hoop center to the junction points
+    var ang3Left = Math.atan2(junctionY - HOOP_Y, 3 - HOOP_X);       // ≈2.77 rad (down-left)
+    var ang3Right = Math.atan2(junctionY - HOOP_Y, 47 - HOOP_X);     // ≈0.39 rad (down-right)
+    var r3px = (r3 / COURT_W) * cw;
+
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = lineWidth;
+
+    // Left corner straight line (baseline to arc junction)
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.lineWidth = 1.5;
     ctx.moveTo(cx(3), cy(0));
-    ctx.lineTo(cx(3), cy(14));
-    const r3 = 23.75;
-    const startAng = Math.atan2(14 - HOOP_Y, 3 - HOOP_X);
-    const endAng = Math.atan2(14 - HOOP_Y, 47 - HOOP_X);
-    ctx.arc(cx(HOOP_X), cy(HOOP_Y), (r3/COURT_W)*cw, startAng, endAng);
+    ctx.lineTo(cx(3), cy(junctionY));
+    ctx.stroke();
+
+    // Three-point arc — counterclockwise from left junction to right junction
+    // This sweeps downward through π/2, which is the correct direction (away from baseline)
+    ctx.beginPath();
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), r3px, ang3Left, ang3Right, true);
+    ctx.stroke();
+
+    // Right corner straight line (arc junction to baseline)
+    ctx.beginPath();
+    ctx.moveTo(cx(47), cy(junctionY));
     ctx.lineTo(cx(47), cy(0));
     ctx.stroke();
 
-    // Backboard
+    // ---- Lane tick marks ----
+    // NBA lane marks at 7ft, 8ft, 11ft, 14ft from baseline
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    var ticks = [7, 8, 11, 14];
+    var tickLen = (0.5 / COURT_W) * cw; // ~0.5ft tick length
+    ticks.forEach(function(ty) {
+        ctx.beginPath();
+        ctx.moveTo(keyL - tickLen, cy(ty));
+        ctx.lineTo(keyL + tickLen, cy(ty));
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(keyR - tickLen, cy(ty));
+        ctx.lineTo(keyR + tickLen, cy(ty));
+        ctx.stroke();
+    });
+
+    // ---- Backboard ----
+    // 6ft wide backboard at 4ft from baseline
     ctx.beginPath();
     ctx.moveTo(cx(22), cy(4));
     ctx.lineTo(cx(28), cy(4));
-    ctx.strokeStyle = '#94a3b8';
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
     ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Hoop
+    // ---- Hoop (rim) ----
     ctx.beginPath();
-    ctx.arc(cx(HOOP_X), cy(HOOP_Y), 3, 0, Math.PI*2);
-    ctx.strokeStyle = '#ef4444';
-    ctx.lineWidth = 2;
+    ctx.arc(cx(HOOP_X), cy(HOOP_Y), 4, 0, Math.PI * 2);
+    ctx.strokeStyle = '#ff6b2b';
+    ctx.lineWidth = 2.5;
     ctx.stroke();
 
-    // Draw shots
-    courtShots.forEach(function(shot) {
-        const sx = cx(shot.x), sy = cy(shot.y);
+    // ---- Net suggestion ----
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 0.8;
+    for (var ni = -2; ni <= 2; ni++) {
+        ctx.beginPath();
+        ctx.moveTo(cx(HOOP_X) + ni * 2.5, cy(HOOP_Y) + 4);
+        ctx.lineTo(cx(HOOP_X) + ni * 1.8, cy(HOOP_Y) + 10);
+        ctx.stroke();
+    }
+}
+
+function _drawShots(ctx, cx, cy, tc) {
+    var shots = _getFilteredShots();
+    var homeId = currentSummary ? String(currentSummary.home_team_id) : '';
+    var awayId = currentSummary ? String(currentSummary.away_team_id) : '';
+    var hc = currentSummary ? (TEAM_COLORS[currentSummary.home_team_id] || ['#3b82f6'])[0] : '#3b82f6';
+    var ac = currentSummary ? (TEAM_COLORS[currentSummary.away_team_id] || ['#ef4444'])[0] : '#ef4444';
+
+    shots.forEach(function(shot) {
+        var sx = cx(shot.x), sy = cy(shot.y);
+        var isHome = String(shot.team_id) === homeId;
+        var shotColor = isHome ? hc : ac;
+        var srgb = _hexToRgb(shotColor);
+
         if (shot.made) {
+            // Glow
+            ctx.save();
             ctx.beginPath();
-            ctx.arc(sx, sy, 5, 0, Math.PI*2);
-            ctx.fillStyle = '#22c55e'; // success green
+            ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(' + srgb.r + ',' + srgb.g + ',' + srgb.b + ',0.25)';
             ctx.fill();
-            ctx.strokeStyle = '#15803d';
-            ctx.lineWidth = 1;
+            ctx.restore();
+            // Filled circle
+            ctx.beginPath();
+            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+            ctx.fillStyle = shotColor;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+            ctx.lineWidth = 1.2;
             ctx.stroke();
         } else {
-            ctx.beginPath();
-            const r = 4;
-            ctx.moveTo(sx-r, sy-r); ctx.lineTo(sx+r, sy+r);
-            ctx.moveTo(sx+r, sy-r); ctx.lineTo(sx-r, sy+r);
-            ctx.strokeStyle = '#ef4444'; // danger red
+            // Missed — X mark in team color
+            ctx.save();
+            var r = 4;
+            ctx.strokeStyle = shotColor;
             ctx.lineWidth = 2.5;
+            ctx.globalAlpha = 0.55;
+            ctx.beginPath();
+            ctx.moveTo(sx - r, sy - r); ctx.lineTo(sx + r, sy + r);
+            ctx.moveTo(sx + r, sy - r); ctx.lineTo(sx - r, sy + r);
             ctx.stroke();
+            ctx.restore();
         }
     });
+}
+
+function _updateCourtStats() {
+    var el = document.getElementById('courtStats');
+    if (!el) return;
+    var shots = _getFilteredShots();
+    if (shots.length === 0) { el.innerHTML = ''; return; }
+
+    var made = shots.filter(function(s) { return s.made; }).length;
+    var pct = shots.length > 0 ? Math.round((made / shots.length) * 100) : 0;
+
+    var homeId = currentSummary ? String(currentSummary.home_team_id) : '';
+    var awayId = currentSummary ? String(currentSummary.away_team_id) : '';
+
+    if (courtFilter === 'both' && currentSummary) {
+        var hShots = shots.filter(function(s) { return String(s.team_id) === homeId; });
+        var aShots = shots.filter(function(s) { return String(s.team_id) === awayId; });
+        var hMade = hShots.filter(function(s) { return s.made; }).length;
+        var aMade = aShots.filter(function(s) { return s.made; }).length;
+        var hPct = hShots.length > 0 ? Math.round((hMade / hShots.length) * 100) : 0;
+        var aPct = aShots.length > 0 ? Math.round((aMade / aShots.length) * 100) : 0;
+        var hc = (TEAM_COLORS[currentSummary.home_team_id] || ['#3b82f6'])[0];
+        var ac = (TEAM_COLORS[currentSummary.away_team_id] || ['#ef4444'])[0];
+        el.innerHTML =
+            '<div class="court-stat-pill"><span class="cs-dot" style="background:' + ac + '"></span>' +
+            (currentSummary.away_team || 'AWY') + ' <span class="cs-val">' + aMade + '/' + aShots.length + '</span> ' + aPct + '%</div>' +
+            '<div class="court-stat-pill"><span class="cs-dot" style="background:' + hc + '"></span>' +
+            (currentSummary.home_team || 'HOM') + ' <span class="cs-val">' + hMade + '/' + hShots.length + '</span> ' + hPct + '%</div>';
+    } else {
+        var label = courtFilter === 'home' ? (currentSummary && currentSummary.home_team || 'Home') :
+                    courtFilter === 'away' ? (currentSummary && currentSummary.away_team || 'Away') : 'All';
+        el.innerHTML = '<div class="court-stat-pill">FG <span class="cs-val">' + made + '/' + shots.length + '</span> ' + pct + '%</div>';
+    }
 }
 
 function updateCourt(plays) {
@@ -1330,18 +1778,77 @@ function updateCourt(plays) {
     plays.forEach(function(p) {
         if (p.coordinate && typeof p.coordinate.x === 'number' && typeof p.coordinate.y === 'number') {
             if (Math.abs(p.coordinate.x) < 200 && Math.abs(p.coordinate.y) < 200) {
-                newShots.push({ x: p.coordinate.x, y: p.coordinate.y, made: !!p.scoring, team_id: p.team_id });
+                newShots.push({ x: p.coordinate.x, y: p.coordinate.y, made: !!p.scoring, team_id: p.team_id, text: p.text || '', clock: p.clock || '', period: p.period || '' });
             }
         }
     });
     if (newShots.length > 0) {
-        courtShots = newShots.slice(-30);
+        courtShots = newShots;
         drawCourt();
     }
 }
 
 // Initial court draw
 setTimeout(drawCourt, 100);
+
+// ---- Court Tooltip on Hover ----
+(function() {
+    var tooltip = document.getElementById('courtTooltip');
+    var canvas = document.getElementById('courtCanvas');
+    if (!canvas || !tooltip) return;
+
+    canvas.addEventListener('mousemove', function(e) {
+        var rect = canvas.getBoundingClientRect();
+        var scaleX = canvas.width / rect.width;
+        var scaleY = canvas.height / rect.height;
+        var mx = (e.clientX - rect.left) * scaleX;
+        var my = (e.clientY - rect.top) * scaleY;
+
+        var pad = 12;
+        var cw = canvas.width - 2 * pad;
+        var ch = canvas.height - 2 * pad;
+        var shots = _getFilteredShots();
+        var hit = null;
+        var hitDist = 15; // pixel radius for detection
+
+        for (var i = shots.length - 1; i >= 0; i--) {
+            var s = shots[i];
+            var sx = pad + (s.x / COURT_W) * cw;
+            var sy = pad + (s.y / COURT_H) * ch;
+            var d = Math.sqrt((mx - sx) * (mx - sx) + (my - sy) * (my - sy));
+            if (d < hitDist) { hit = s; hitDist = d; }
+        }
+
+        if (hit) {
+            var homeId = currentSummary ? String(currentSummary.home_team_id) : '';
+            var isHome = String(hit.team_id) === homeId;
+            var teamColor = isHome
+                ? (TEAM_COLORS[currentSummary.home_team_id] || ['#3b82f6'])[0]
+                : (TEAM_COLORS[currentSummary.away_team_id] || ['#ef4444'])[0];
+            var resultLabel = hit.made ? 'Made' : 'Missed';
+            var resultColor = hit.made ? '#4ade80' : '#f87171';
+
+            tooltip.innerHTML =
+                '<div class="ct-result" style="color:' + resultColor + '">' + resultLabel + '</div>' +
+                '<div class="ct-text">' + hit.text + '</div>' +
+                (hit.clock ? '<div class="ct-clock">Q' + hit.period + ' ' + hit.clock + '</div>' : '');
+            tooltip.style.borderColor = teamColor;
+
+            // Position relative to court-wrap
+            var pctX = ((e.clientX - rect.left) / rect.width) * 100;
+            var pctY = ((e.clientY - rect.top) / rect.height) * 100;
+            tooltip.style.left = pctX + '%';
+            tooltip.style.top = pctY + '%';
+            tooltip.style.display = 'block';
+        } else {
+            tooltip.style.display = 'none';
+        }
+    });
+
+    canvas.addEventListener('mouseleave', function() {
+        tooltip.style.display = 'none';
+    });
+})();
 
 loadGames();
 </script>

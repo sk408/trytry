@@ -12,7 +12,9 @@
       "Bash(git push)",
       "Bash(grep -r \"moneyline\\\\|ML\\\\|over_under\" /c/Projects/new_nba/src/analytics/*.py)",
       "Bash(grep:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "WebFetch(domain:1drv.ms)",
+      "WebFetch(domain:photos.onedrive.com)"
     ]
   }
 }

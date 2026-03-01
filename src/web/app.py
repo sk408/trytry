@@ -1324,6 +1324,7 @@ async def sse_gamecast_stream(game_id: str):
 
             # Stop streaming for finished games after sending final data
             if status_state == "post":
+                yield "data: [DONE]\n\n"
                 if ws:
                     ws.stop()
                 return
