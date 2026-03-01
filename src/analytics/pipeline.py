@@ -273,15 +273,16 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 10: Global weight optimization (moneyline target)
-        emit("[Step 10/13] Optimizing weights — ML target (3000 Optuna trials)...")
+        # Step 10: Global weight optimization (value target)
+        emit("[Step 10/13] Optimizing weights — value target (3000 Optuna trials)...")
         if _needs_10:
             from src.analytics.weight_optimizer import optimize_weights
             if _precomputed_cache and len(_precomputed_cache) >= 20:
                 opt_result = optimize_weights(
                     _precomputed_cache, n_trials=3000,
                     callback=lambda msg: emit(f"  {msg}"),
-                    is_cancelled=is_cancelled
+                    is_cancelled=is_cancelled,
+                    target="value"
                 )
                 results["optimize"] = opt_result
             else:
@@ -456,12 +457,13 @@ def run_retune(callback: Optional[Callable] = None) -> Dict[str, Any]:
             return {"cancelled": True, **results}
 
         # Optimize weights (always run)
-        emit("[Retune 5/8] Optimizing weights — ML target (3000 trials)...")
+        emit("[Retune 5/8] Optimizing weights — value target (3000 trials)...")
         from src.analytics.weight_optimizer import optimize_weights
         opt_result = optimize_weights(
             precomputed, n_trials=3000,
             callback=lambda msg: emit(f"  {msg}"),
-            is_cancelled=is_cancelled
+            is_cancelled=is_cancelled,
+            target="value"
         )
         results["optimize"] = opt_result
         _mark_step_done("weight_optimize")
@@ -598,13 +600,14 @@ def run_overnight(max_hours: float = 8.0,
         emit(f"\n--- Pass {pass_num}: Optimization Loop ({fmt_elapsed(time_left())} remaining) ---")
 
         try:
-            # Step A: Global weight optimization (moneyline target)
-            emit(f"[Loop {pass_num}] Optimizing weights — ML target (3000 trials)...")
+            # Step A: Global weight optimization (value target)
+            emit(f"[Loop {pass_num}] Optimizing weights — value target (3000 trials)...")
             from src.analytics.weight_optimizer import optimize_weights
             opt_result = optimize_weights(
                 precomputed, n_trials=3000,
                 callback=lambda msg: emit(f"  {msg}"),
-                is_cancelled=is_cancelled
+                is_cancelled=is_cancelled,
+                target="value"
             )
             if is_cancelled():
                 break

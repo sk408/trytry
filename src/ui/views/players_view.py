@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-    QLineEdit, QFrame,
+    QLineEdit, QFrame, QTreeWidget, QTreeWidgetItem,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPixmap
 
 logger = logging.getLogger(__name__)
 
@@ -186,27 +186,27 @@ class PlayersView(QWidget):
         inj_layout.addWidget(self.injured_table)
         splitter.addWidget(injured_frame)
 
-        # ── All players panel ──
+        # ── All players panel (grouped by team) ──
         all_frame = QFrame()
         all_layout = QVBoxLayout(all_frame)
         all_layout.setContentsMargins(0, 0, 0, 0)
-        all_layout.addWidget(QLabel("All Players"))
+        self._all_header = QLabel("All Players")
+        all_layout.addWidget(self._all_header)
 
-        self.all_table = QTableWidget()
-        self.all_table.setColumnCount(5)
-        self.all_table.setHorizontalHeaderLabels([
-            "", "Player", "Team", "Position", "Status",
-        ])
-        all_hdr = self.all_table.horizontalHeader()
+        self.all_tree = QTreeWidget()
+        self.all_tree.setColumnCount(4)
+        self.all_tree.setHeaderLabels(["Player", "Position", "Status", ""])
+        all_hdr = self.all_tree.header()
         all_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        all_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.all_table.setColumnWidth(0, 34)
-        self.all_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.all_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.all_table.verticalHeader().setVisible(False)
-        self.all_table.setShowGrid(False)
-        self.all_table.setAlternatingRowColors(True)
-        all_layout.addWidget(self.all_table)
+        all_hdr.setStretchLastSection(False)
+        all_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.all_tree.setColumnWidth(3, 0)  # hidden spacer
+        self.all_tree.setIndentation(20)
+        self.all_tree.setRootIsDecorated(True)
+        self.all_tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        self.all_tree.setSelectionBehavior(QTreeWidget.SelectionBehavior.SelectRows)
+        self.all_tree.setAlternatingRowColors(True)
+        all_layout.addWidget(self.all_tree)
         splitter.addWidget(all_frame)
 
         layout.addWidget(splitter)
@@ -332,54 +332,74 @@ class PlayersView(QWidget):
     # ──────────────────────── ALL PLAYERS TABLE ────────────────────
 
     def _populate_all(self, filter_text: str = ""):
-        """Fill all-players table with optional filter and photos."""
+        """Fill all-players tree grouped by team, with optional filter."""
+        from collections import OrderedDict
+
         ft = filter_text.lower()
         rows = (
             [p for p in self._all_players if ft in p["name"].lower()]
             if ft else self._all_players
         )
-        self.all_table.setRowCount(len(rows))
-        for r, p in enumerate(rows):
-            self.all_table.setRowHeight(r, 30)
 
-            # Col 0: Photo
-            photo_item = QTableWidgetItem()
-            pid = p.get("player_id")
-            if pid:
-                try:
-                    from src.ui.widgets.image_utils import get_player_photo
-                    pixmap = get_player_photo(int(pid), 26, circle=True)
-                    if pixmap:
-                        photo_item.setData(
-                            Qt.ItemDataRole.DecorationRole, pixmap
-                        )
-                except Exception as e:
-                    logger.warning("Player photo load failed for %s: %s", pid, e)
-            self.all_table.setItem(r, 0, photo_item)
+        # Group by team (already sorted by abbreviation from query)
+        teams: OrderedDict[str, list] = OrderedDict()
+        for p in rows:
+            team = p.get("abbreviation", "???")
+            teams.setdefault(team, []).append(p)
 
-            # Col 1: Name
-            self.all_table.setItem(r, 1, QTableWidgetItem(p["name"]))
+        self.all_tree.clear()
+        total = 0
+        for team_abbr, players in teams.items():
+            # Team header row
+            team_item = QTreeWidgetItem(self.all_tree)
+            active = sum(1 for p in players if not p.get("is_injured"))
+            injured = len(players) - active
+            label = f"{team_abbr}  ({len(players)} players"
+            if injured:
+                label += f", {injured} injured"
+            label += ")"
+            team_item.setText(0, label)
+            font = team_item.font(0)
+            font.setBold(True)
+            team_item.setFont(0, font)
+            total += len(players)
 
-            # Col 2: Team
-            self.all_table.setItem(
-                r, 2, QTableWidgetItem(p.get("abbreviation", ""))
-            )
+            # Player rows under team
+            for p in players:
+                child = QTreeWidgetItem(team_item)
 
-            # Col 3: Position
-            self.all_table.setItem(
-                r, 3, QTableWidgetItem(p.get("position", ""))
-            )
+                # Col 0: Name (with photo icon)
+                child.setText(0, p["name"])
+                pid = p.get("player_id")
+                if pid:
+                    try:
+                        from src.ui.widgets.image_utils import get_player_photo
+                        pixmap = get_player_photo(int(pid), 22, circle=True)
+                        if pixmap:
+                            child.setIcon(0, QIcon(pixmap))
+                    except Exception:
+                        pass
 
-            # Col 4: Status
-            is_inj = p.get("is_injured")
-            note = p.get("injury_note", "") or ""
-            if is_inj:
-                item = QTableWidgetItem(note[:50] if note else "Injured")
-                item.setForeground(QColor(239, 68, 68))
-            else:
-                item = QTableWidgetItem("Active")
-                item.setForeground(QColor(34, 197, 94))
-            self.all_table.setItem(r, 4, item)
+                # Col 1: Position
+                child.setText(1, p.get("position", ""))
+
+                # Col 2: Status
+                is_inj = p.get("is_injured")
+                note = p.get("injury_note", "") or ""
+                if is_inj:
+                    child.setText(2, note[:50] if note else "Injured")
+                    child.setForeground(2, QColor(239, 68, 68))
+                else:
+                    child.setText(2, "Active")
+                    child.setForeground(2, QColor(34, 197, 94))
+
+        # Expand all when filtering (so matches are visible), collapse when not
+        if ft:
+            self.all_tree.expandAll()
+        else:
+            self.all_tree.collapseAll()
+
+        self._all_header.setText(f"All Players ({total})")
 
     def _filter_players(self, text: str):
         self._populate_all(text)

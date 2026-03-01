@@ -14,56 +14,56 @@ _SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sn
 @dataclass
 class WeightConfig:
     # Defensive adjustment
-    def_factor_dampening: float = 0.90   # optimizer: 0.898 (keeps hitting ceiling)
+    def_factor_dampening: float = 1.70   # sensitivity: optimal ~1.7
 
     # Spread factors
-    turnover_margin_mult: float = 0.50   # optimizer: 0.499 (was 0.26)
-    rebound_diff_mult: float = 0.047     # optimizer: 0.047 re-enabled (was 0)
-    rating_matchup_mult: float = 0.42    # optimizer: 0.419 (stable)
+    turnover_margin_mult: float = 6.00   # sensitivity: optimal ~6.4
+    rebound_diff_mult: float = 0.50      # sensitivity: optimal ~0.5
+    rating_matchup_mult: float = 0.42    # sensitivity: already near optimal
 
     # Four Factors
-    four_factors_scale: float = 180.0    # optimizer: 180 (was 200)
-    ff_efg_weight: float = 0.40
-    ff_tov_weight: float = 0.25
-    ff_oreb_weight: float = 0.20
-    ff_fta_weight: float = 0.15
+    four_factors_scale: float = 1350.0   # sensitivity: optimal ~1378
+    ff_efg_weight: float = 3.55          # sensitivity: optimal ~3.56
+    ff_tov_weight: float = 3.40          # sensitivity: optimal ~3.38
+    ff_oreb_weight: float = 2.80         # sensitivity: optimal ~2.81
+    ff_fta_weight: float = 0.05          # sensitivity: optimal ~0.05
 
     # Clutch
-    clutch_scale: float = 0.074          # optimizer: 0.074 (was 0.12)
+    clutch_scale: float = 0.13           # sensitivity: optimal ~0.13
     clutch_cap: float = 3.5
     clutch_threshold: float = 6.0
 
     # Hustle
-    hustle_effort_mult: float = 0.007    # optimizer: 0.007 (nearly zero)
+    hustle_effort_mult: float = 3.90     # sensitivity: optimal ~3.9
     hustle_contested_wt: float = 0.3
 
     # Pace / Total
     pace_baseline: float = 98.0
-    pace_mult: float = 0.08             # optimizer: 0.081 (was 0.23)
+    pace_mult: float = 0.0              # sensitivity: dead weight, zeroed
     steals_threshold: float = 14.0
     steals_penalty: float = 0.15
     blocks_threshold: float = 10.0
     blocks_penalty: float = 0.12
     oreb_baseline: float = 20.0
-    oreb_mult: float = 0.2
+    oreb_mult: float = 0.0              # sensitivity: dead weight, zeroed
     hustle_defl_baseline: float = 30.0
     hustle_defl_penalty: float = 0.1
 
-    # Fatigue
-    fatigue_total_mult: float = 0.3
-    fatigue_b2b: float = 2.0
-    fatigue_3in4: float = 1.0
-    fatigue_4in6: float = 1.5
+    # Fatigue — sensitivity: all dead weight, zeroed
+    fatigue_total_mult: float = 0.0
+    fatigue_b2b: float = 0.0
+    fatigue_3in4: float = 0.0
+    fatigue_4in6: float = 0.0
 
-    # ESPN blend
+    # ESPN blend — sensitivity: dead weight, zeroed
     espn_spread_scale: float = 0.3
-    espn_model_weight: float = 0.80
-    espn_weight: float = 0.20
+    espn_model_weight: float = 0.0
+    espn_weight: float = 0.0
     espn_disagree_damp: float = 0.85
 
-    # ML ensemble
-    ml_ensemble_weight: float = 0.33    # optimizer: 0.334 — ML now significant contributor
-    ml_disagree_damp: float = 0.5
+    # ML ensemble — sensitivity: dead weight, zeroed
+    ml_ensemble_weight: float = 0.0
+    ml_disagree_damp: float = 0.0
     ml_disagree_threshold: float = 6.0
 
     # Sharp Money — edge = (money% - public%) / 100; typically ±0.05 to ±0.15
@@ -217,28 +217,22 @@ def invalidate_weight_cache():
 OPTIMIZER_RANGES = {
     # Signs are locked to match basketball logic — no sign flips allowed.
     # spread_clamp is NOT tunable; it's fixed at 30 to prevent compression cheating.
-    "def_factor_dampening": (0.1, 3.0),      # defense dampening (always positive)
-    "turnover_margin_mult": (0.0, 3.0),      # turnovers are bad (positive = penalizes TOs)
-    "rebound_diff_mult": (0.0, 2.0),         # more rebounds = good (always positive)
-    "rating_matchup_mult": (0.0, 2.0),       # matchup edge = good (always positive)
-    "four_factors_scale": (50.0, 1500.0),    # scales weighted FF edge into spread points
-    "clutch_scale": (0.01, 2.0),             # clutch rating impact (always positive)
-    "hustle_effort_mult": (0.0, 5.0),        # hustle effort helps (always positive)
-    "pace_mult": (0.0, 1.0),                 # pace adjustment (always positive)
-    "fatigue_total_mult": (0.0, 2.0),        # fatigue hurts (positive = penalizes tired teams)
-    "espn_model_weight": (0.0, 1.0),         # model weight in ESPN blend
-    "ml_ensemble_weight": (0.0, 2.0),        # ML blend weight (always positive)
-    "ml_disagree_damp": (0.0, 2.0),          # dampening factor (always positive)
-    "ff_efg_weight": (0.0, 3.0),             # four factors sub-weights (always positive)
-    "ff_tov_weight": (0.0, 2.0),
-    "ff_oreb_weight": (0.0, 2.0),
-    "ff_fta_weight": (0.0, 2.0),
-    "blocks_penalty": (0.0, 2.0),            # blocks contribute positively (always positive)
-    "steals_penalty": (0.0, 2.0),            # steals contribute positively (always positive)
-    "oreb_mult": (0.0, 1.0),                 # offensive rebounds help (always positive)
-    "pace_baseline": (80.0, 115.0),          # league-average pace reference point
-    "sharp_money_weight": (0.0, 5.0),        # sharp money influence (always positive)
-    "ats_edge_threshold": (1.0, 6.0),        # min spread edge for "confident" pick
+    # Ranges widened per sensitivity analysis 2025-02-28.
+    "def_factor_dampening": (0.1, 6.0),      # sensitivity: optimal ~3.7, was capped at 3.0
+    "turnover_margin_mult": (0.0, 10.0),     # sensitivity2: optimal ~6.4-6.6, was capped at 5.0
+    "rebound_diff_mult": (0.0, 3.0),         # sensitivity: optimal ~0.54, small headroom
+    "rating_matchup_mult": (0.0, 2.0),       # matchup edge (stable)
+    "four_factors_scale": (50.0, 2000.0),    # sensitivity: optimal 1100-1500, widened ceiling
+    "clutch_scale": (0.01, 2.0),             # sensitivity: optimal ~0.13 (in range)
+    "hustle_effort_mult": (0.0, 8.0),        # sensitivity: optimal ~4.8, was capped at 5.0, widened
+    "ff_efg_weight": (0.0, 6.0),             # sensitivity: optimal ~3.9, was capped at 3.0
+    "ff_tov_weight": (0.0, 4.0),             # sensitivity: optimal ~2.6, was capped at 2.0
+    "ff_oreb_weight": (0.0, 4.0),            # sensitivity: optimal ~2.0, headroom added
+    "ff_fta_weight": (0.0, 4.0),             # sensitivity: optimal ~0.84-3.1, was capped at 2.0
+    "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
+    "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
+    "sharp_money_weight": (0.0, 10.0),       # sensitivity: optimal ~7.9 for ML ROI, was capped at 5.0
+    "ats_edge_threshold": (0.5, 6.0),        # sensitivity: optimal 0.5, lowered floor
 }
 
 

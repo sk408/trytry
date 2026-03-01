@@ -644,7 +644,7 @@ def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
     - Holdout minimum raised to 7 games (was 5) for reliable evaluation
     - Perturbation range scales with distance from optimizer range midpoint
     """
-    target = "ml"
+    target = "value"
     global_w = get_weight_config()
     vg_all = VectorizedGames(games)
     global_result = vg_all.evaluate(global_w, target=target)
