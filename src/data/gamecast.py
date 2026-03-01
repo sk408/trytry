@@ -33,36 +33,43 @@ def normalize_espn_abbr(abbr: str) -> str:
 
 
 def fetch_espn_scoreboard() -> List[Dict[str, Any]]:
-    """Fetch today's ESPN scoreboard."""
-    try:
-        resp = requests.get(ESPN_SCOREBOARD_URL, headers=_HEADERS, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        games = []
-        for event in data.get("events", []):
-            comp = event.get("competitions", [{}])[0]
-            competitors = comp.get("competitors", [])
-            home = next((c for c in competitors if c.get("homeAway") == "home"), {})
-            away = next((c for c in competitors if c.get("homeAway") == "away"), {})
-            games.append({
-                "espn_id": event.get("id", ""),
-                "name": event.get("name", ""),
-                "status": event.get("status", {}).get("type", {}).get("description", ""),
-                "short_detail": event.get("status", {}).get("type", {}).get("shortDetail", ""),
-                "period": event.get("status", {}).get("period", 0),
-                "clock": event.get("status", {}).get("displayClock", ""),
-                "state": event.get("status", {}).get("type", {}).get("state", ""),
-                "home_team": normalize_espn_abbr(home.get("team", {}).get("abbreviation", "")),
-                "away_team": normalize_espn_abbr(away.get("team", {}).get("abbreviation", "")),
-                "home_team_id": home.get("team", {}).get("id", ""),
-                "away_team_id": away.get("team", {}).get("id", ""),
-                "home_score": int(home.get("score", 0) or 0),
-                "away_score": int(away.get("score", 0) or 0),
-            })
-        return games
-    except Exception as e:
-        logger.error(f"ESPN scoreboard error: {e}")
-        return []
+    """Fetch today's ESPN scoreboard with retry on transient errors."""
+    import time as _time
+
+    for attempt in range(3):
+        try:
+            resp = requests.get(ESPN_SCOREBOARD_URL, headers=_HEADERS, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            games = []
+            for event in data.get("events", []):
+                comp = event.get("competitions", [{}])[0]
+                competitors = comp.get("competitors", [])
+                home = next((c for c in competitors if c.get("homeAway") == "home"), {})
+                away = next((c for c in competitors if c.get("homeAway") == "away"), {})
+                games.append({
+                    "espn_id": event.get("id", ""),
+                    "name": event.get("name", ""),
+                    "status": event.get("status", {}).get("type", {}).get("description", ""),
+                    "short_detail": event.get("status", {}).get("type", {}).get("shortDetail", ""),
+                    "period": event.get("status", {}).get("period", 0),
+                    "clock": event.get("status", {}).get("displayClock", ""),
+                    "state": event.get("status", {}).get("type", {}).get("state", ""),
+                    "home_team": normalize_espn_abbr(home.get("team", {}).get("abbreviation", "")),
+                    "away_team": normalize_espn_abbr(away.get("team", {}).get("abbreviation", "")),
+                    "home_team_id": home.get("team", {}).get("id", ""),
+                    "away_team_id": away.get("team", {}).get("id", ""),
+                    "home_score": int(home.get("score", 0) or 0),
+                    "away_score": int(away.get("score", 0) or 0),
+                })
+            return games
+        except Exception as e:
+            if attempt < 2:
+                logger.warning(f"ESPN scoreboard attempt {attempt + 1} failed: {e}")
+                _time.sleep(2)
+            else:
+                logger.error(f"ESPN scoreboard error after 3 attempts: {e}")
+    return []
 
 
 def fetch_espn_game_summary(game_id: str) -> Dict[str, Any]:

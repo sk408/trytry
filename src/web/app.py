@@ -1522,13 +1522,13 @@ async def team_colors_api():
 
 @app.on_event("startup")
 async def startup():
+    # init_db() and InjuryMonitor are handled by src.bootstrap.bootstrap(),
+    # called from main.py before Uvicorn starts.  The calls below are
+    # kept as idempotent fallbacks for direct `uvicorn src.web.app:app` usage.
     init_db()
-    # Start injury monitor for notifications
     try:
         from src.notifications.injury_monitor import get_injury_monitor
-        monitor = get_injury_monitor()
-        monitor.start()
-        logger.info("Injury monitor started")
+        get_injury_monitor().start()   # no-op if already running
     except Exception as e:
         logger.warning(f"Injury monitor failed to start: {e}")
     logger.info("NBA Prediction System started")

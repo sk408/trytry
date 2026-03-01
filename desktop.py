@@ -5,60 +5,60 @@ import logging
 import sys
 import traceback
 
-# Enable faulthandler early — prints a traceback on SIGSEGV / SIGABRT
+# Print native crash tracebacks (SIGSEGV / SIGABRT)
 faulthandler.enable()
 
-# Load initial config to set correct log level
-import src.config
-initial_log_level_name = src.config.get("log_level", "INFO")
-initial_log_level = getattr(logging, initial_log_level_name, logging.INFO)
+from src.bootstrap import setup_logging, bootstrap, shutdown
 
-logging.basicConfig(
-    level=initial_log_level,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+setup_logging()
+
 logger = logging.getLogger(__name__)
 
 # Global exception hook — prevents PySide6 from crashing on unhandled
 # exceptions in signal slots (which propagate to C++ and terminate).
-_original_excepthook = sys.excepthook
+
 
 def _gui_excepthook(exc_type, exc_value, exc_tb):
     """Log unhandled exceptions instead of crashing the app."""
-    logger.error("Unhandled exception:\n%s",
-                 "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    logger.error(
+        "Unhandled exception:\n%s",
+        "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+    )
+
 
 sys.excepthook = _gui_excepthook
 
 
 def main():
-    """Initialize DB, start injury monitor, launch PySide6 GUI."""
-    # Ensure src package patches nba_api headers on import
-    import src  # noqa: F401
-
-    from src.database.migrations import init_db
-    logger.info("Initializing database...")
-    init_db()
-
-    # Start injury monitor in background
-    try:
-        from src.notifications.injury_monitor import InjuryMonitor
-        monitor = InjuryMonitor()
-        monitor.start()
-        logger.info("Injury monitor started (5-min polling)")
-    except Exception as e:
-        logger.warning(f"Injury monitor failed to start: {e}")
-
-    # Launch PySide6 app
+    """Show splash, bootstrap shared services, launch PySide6 GUI."""
     from PySide6.QtWidgets import QApplication
-    from src.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("NBA Game Prediction System")
 
+    # Show splash immediately — before any heavy init
+    from src.ui.splash import SplashScreen
+
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
+
+    # Bootstrap with splash status updates
+    bootstrap(status_callback=lambda msg: (splash.set_status(msg), app.processEvents()))
+
+    # Build main window
+    splash.set_status("Loading interface...")
+    app.processEvents()
+
+    from src.ui.main_window import MainWindow
+
     window = MainWindow()
+
+    # Graceful cleanup on quit
+    app.aboutToQuit.connect(shutdown)
+
     window.show()
+    splash.finish(window)
 
     logger.info("Desktop GUI launched")
     sys.exit(app.exec())

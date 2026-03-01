@@ -1,9 +1,9 @@
 {
-  "n_train": 709,
-  "n_val": 177,
+  "n_train": 714,
+  "n_val": 178,
   "n_features": 88,
-  "spread_mae": 11.795831229137836,
-  "total_mae": 14.736002259335276,
+  "spread_mae": 11.84262516366297,
+  "total_mae": 15.209384618180522,
   "feature_cols": [
     "home_points",
     "away_points",
@@ -94,89 +94,89 @@
     "home_roster_changed",
     "away_roster_changed"
   ],
-  "trained_at": "2026-02-27T19:35:22.447101",
+  "trained_at": "2026-02-28T18:37:18.310112",
   "spread_top_features": [
     {
       "feature": "diff_net_rating",
-      "importance": 2.579077959060669
+      "importance": 2.801685094833374
     },
     {
       "feature": "away_net_rating",
-      "importance": 0.951650083065033
+      "importance": 0.9845094084739685
     },
     {
       "feature": "home_injury_ppg_lost",
-      "importance": 0.7430106401443481
-    },
-    {
-      "feature": "ff_efg_edge",
-      "importance": 0.6756734251976013
-    },
-    {
-      "feature": "home_injury_minutes_lost",
-      "importance": 0.5595311522483826
-    },
-    {
-      "feature": "away_ts_pct",
-      "importance": 0.5534813404083252
-    },
-    {
-      "feature": "diff_injury_minutes_lost",
-      "importance": 0.5517644882202148
-    },
-    {
-      "feature": "home_def_rating",
-      "importance": 0.547206699848175
+      "importance": 0.9363315105438232
     },
     {
       "feature": "home_steals",
-      "importance": 0.4850482940673828
+      "importance": 0.8403139710426331
     },
     {
-      "feature": "away_def_rating",
-      "importance": 0.4605102837085724
+      "feature": "home_injury_minutes_lost",
+      "importance": 0.7463129162788391
+    },
+    {
+      "feature": "away_steals",
+      "importance": 0.5411885380744934
+    },
+    {
+      "feature": "away_ts_pct",
+      "importance": 0.49008822441101074
+    },
+    {
+      "feature": "away_off_rating",
+      "importance": 0.48069384694099426
+    },
+    {
+      "feature": "diff_assists",
+      "importance": 0.46452587842941284
+    },
+    {
+      "feature": "home_fg3_rate",
+      "importance": 0.45018720626831055
     }
   ],
   "total_top_features": [
     {
       "feature": "home_assists",
-      "importance": 1.7573233842849731
-    },
-    {
-      "feature": "away_points",
-      "importance": 1.2789885997772217
-    },
-    {
-      "feature": "home_blocks",
-      "importance": 1.269580602645874
+      "importance": 1.511773943901062
     },
     {
       "feature": "avg_pace",
-      "importance": 1.2456775903701782
+      "importance": 1.3610615730285645
     },
     {
-      "feature": "home_def_factor_raw",
-      "importance": 0.8168319463729858
+      "feature": "away_points",
+      "importance": 1.2144968509674072
     },
     {
-      "feature": "away_fg3_rate",
-      "importance": 0.7169402837753296
+      "feature": "home_blocks",
+      "importance": 1.1008714437484741
     },
     {
       "feature": "diff_injury_minutes_lost",
-      "importance": 0.6701849102973938
+      "importance": 0.5920505523681641
     },
     {
-      "feature": "home_injury_ppg_lost",
-      "importance": 0.5571961402893066
+      "feature": "home_def_factor_raw",
+      "importance": 0.5185722708702087
+    },
+    {
+      "feature": "away_blocks",
+      "importance": 0.5168607831001282
     },
     {
       "feature": "away_assists",
-      "importance": 0.4789780080318451
+      "importance": 0.48605701327323914
     },
     {
-      "feature": "away_injury_minutes_lost",
-      "importance": 0.40821269154548645
+      "feature": "home_injury_ppg_lost",
+      "importance": 0.4688848555088043
+    },
+    {
+      "feature": "diff_ts_pct",
+      "importance": 0.39795252680778503
     }
   ]
 }

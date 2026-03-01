@@ -1,35 +1,18 @@
 """Entry point — FastAPI web server on port 8000."""
 
-import logging
-import sys
+from src.bootstrap import setup_logging, bootstrap
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+setup_logging()
+
+import logging
+
 logger = logging.getLogger(__name__)
 
 
 def main():
-    """Initialize DB, start injury monitor, launch Uvicorn."""
-    # Ensure src package patches nba_api headers on import
-    import src  # noqa: F401
+    """Initialize shared services, launch Uvicorn."""
+    bootstrap()
 
-    from src.database.migrations import init_db
-    logger.info("Initializing database...")
-    init_db()
-
-    # Start injury monitor in background
-    try:
-        from src.notifications.injury_monitor import InjuryMonitor
-        monitor = InjuryMonitor()
-        monitor.start()
-        logger.info("Injury monitor started (5-min polling)")
-    except Exception as e:
-        logger.warning(f"Injury monitor failed to start: {e}")
-
-    # Launch FastAPI via Uvicorn
     import uvicorn
     from src.web.app import app
 

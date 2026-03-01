@@ -547,19 +547,17 @@ class GamecastView(QWidget):
             self.info_panel.update_info(None, "HOME", "AWAY", 0, 0, 50.0, None)
             
             # Clear scoreboard and other parts
-            self.scoreboard.update_scores(
-                home_abbr="HOME",
-                home_name="Home Team",
-                away_abbr="AWAY",
-                away_name="Away Team",
+            self.scoreboard.update_data(
+                home_abbr="Home Team",
+                away_abbr="Away Team",
                 home_score=0,
                 away_score=0,
                 period=0,
                 clock="12:00",
                 status_text="Select a game",
-                status_state="pre"
+                status_state="pre",
             )
-            self.scoreboard.update_odds({})
+            self.info_panel.update_odds({})
             self.play_feed.clear()
             self.box_tabs.setTabText(0, "AWAY")
             self.box_tabs.setTabText(1, "HOME")
