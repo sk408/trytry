@@ -431,13 +431,13 @@ textarea:focus {
 }
 
 .team-side .team-name {
-    font-size: clamp(1.25rem, 1.1rem + 0.3vw, 1.75rem);
+    font-size: clamp(1.1rem, 1rem + 0.2vw, 1.4rem);
     font-weight: 700;
     margin-bottom: 0.5rem;
 }
 
 .team-side .team-score {
-    font-size: clamp(2.5rem, 2rem + 1vw, 4rem);
+    font-size: clamp(2rem, 1.8rem + 0.5vw, 2.8rem);
     font-weight: 800;
     color: var(--accent);
 }
@@ -1273,8 +1273,8 @@ textarea:focus {
 }
 
 .team-logo-pred {
-    width: clamp(48px, 3.5vw, 80px);
-    height: clamp(48px, 3.5vw, 80px);
+    width: clamp(40px, 3vw, 60px);
+    height: clamp(40px, 3vw, 60px);
     margin-bottom: 0.5rem;
 }
 
@@ -1644,8 +1644,8 @@ textarea:focus {
 }
 
 .game-card .game-teams img {
-    width: clamp(28px, 2vw, 40px);
-    height: clamp(28px, 2vw, 40px);
+    width: clamp(24px, 1.8vw, 34px);
+    height: clamp(24px, 1.8vw, 34px);
 }
 
 .game-card .game-score {
@@ -1778,13 +1778,13 @@ textarea:focus {
 }
 
 .team-logo-lg {
-    width: clamp(60px, 4vw, 90px);
-    height: clamp(60px, 4vw, 90px);
+    width: clamp(48px, 3.5vw, 72px);
+    height: clamp(48px, 3.5vw, 72px);
 }
 
 .team-abbr {
     font-family: var(--font-heading);
-    font-size: clamp(1.5rem, 1.2rem + 0.5vw, 2.2rem);
+    font-size: clamp(1.3rem, 1.1rem + 0.3vw, 1.75rem);
     line-height: 1;
     font-weight: 700;
     color: #e2e8f0;
@@ -1794,7 +1794,7 @@ textarea:focus {
 .team-score {
     color: #ffffff;
     font-family: var(--font-heading);
-    font-size: clamp(3.5rem, 3rem + 1.5vw, 6rem);
+    font-size: clamp(3.5rem, 3rem + 0.8vw, 4.8rem);
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
     text-align: center;
     line-height: 1;
@@ -1809,13 +1809,13 @@ textarea:focus {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    width: clamp(40px, 3vw, 60px);
+    width: clamp(36px, 2.5vw, 50px);
     margin: 0 5px;
 }
 
 .vs-text {
     font-family: var(--font-heading);
-    font-size: clamp(1.2rem, 1rem + 0.3vw, 1.8rem);
+    font-size: clamp(1.1rem, 1rem + 0.2vw, 1.4rem);
     color: rgba(255, 255, 255, 0.4);
     font-weight: 700;
 }
@@ -1913,17 +1913,23 @@ textarea:focus {
     transform: translateX(-50%);
     background: rgba(239, 68, 68, 0.9);
     color: white;
-    padding: 10px 20px;
+    padding: 8px 18px;
     border-radius: 30px;
     font-family: var(--font-heading);
-    font-size: 1.5rem;
+    font-size: 1.2rem;
     z-index: 9999;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
     border: 2px solid #fca5a5;
     font-weight: 700;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     justify-content: center;
+    cursor: pointer;
+    transition: opacity 0.3s ease;
+}
+
+.timeout-overlay:hover {
+    opacity: 0.6;
 }
 
 .sub-overlay {
@@ -1942,6 +1948,12 @@ textarea:focus {
     gap: 25px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
     backdrop-filter: blur(8px);
+    cursor: pointer;
+    transition: opacity 0.3s ease;
+}
+
+.sub-overlay:hover {
+    opacity: 0.6;
 }
 
 .sub-player {
@@ -2320,24 +2332,74 @@ textarea:focus {
         padding: 0.75rem 1.25rem;
     }
 
-    /* Prediction card */
+    /* Prediction card — centered and constrained */
     .prediction-card {
         padding: 2rem;
         gap: 2rem;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
     }
 
     .prediction-center {
         padding: 0 1.5rem;
     }
 
-    /* Score card */
+    /* Game selector — constrain width */
+    .game-selector {
+        max-width: 900px;
+    }
+
+    /* Score card — constrain width on desktop */
     .score-card {
-        min-height: 260px;
+        min-height: 240px;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
         border-radius: var(--radius-xl);
     }
 
     .score-display {
         padding: 50px 24px 24px 24px;
+    }
+
+    /* Timeout overlay — smaller, top-right on desktop */
+    .timeout-overlay {
+        left: auto;
+        right: 24px;
+        transform: none;
+        font-size: 1rem;
+        padding: 6px 16px;
+    }
+
+    /* Substitution overlay — smaller, corner toast on desktop */
+    .sub-overlay {
+        top: auto;
+        bottom: 24px;
+        right: 24px;
+        left: auto;
+        transform: none;
+        padding: 16px 24px;
+        gap: 20px;
+        border-radius: 12px;
+        max-width: 420px;
+    }
+
+    .sub-player {
+        width: 90px;
+    }
+
+    .sub-photo {
+        width: 64px;
+        height: 64px;
+    }
+
+    .sub-name {
+        font-size: 12px;
+    }
+
+    .sub-arrows {
+        font-size: 22px;
     }
 
     /* Game cards */

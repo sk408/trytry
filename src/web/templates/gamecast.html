@@ -19,13 +19,13 @@
 </div>
 
     <div id="gameDetail" class="hidden">
-    <!-- Timeout Overlay -->
-    <div id="timeoutOverlay" class="timeout-overlay">
+    <!-- Timeout Overlay (click to dismiss) -->
+    <div id="timeoutOverlay" class="timeout-overlay" onclick="dismissTimeout()">
         <span>TIMEOUT:</span><span id="timeoutSeconds">75</span><span>s</span>
     </div>
 
-    <!-- Substitution Overlay -->
-    <div id="subOverlay" class="sub-overlay">
+    <!-- Substitution Overlay (click to dismiss) -->
+    <div id="subOverlay" class="sub-overlay" onclick="dismissSub()">
         <div class="sub-player">
             <span class="sub-label sub-label-in">IN</span>
             <img id="subInImg" src="" class="sub-photo sub-photo-in" onerror="this.onerror=null; this.style.display='none';">
@@ -1028,6 +1028,18 @@ function fillBoxTable(tableId, players) {
 let lastPlayText = "";
 let timeoutInterval = null;
 let subTimeout = null;
+
+function dismissTimeout() {
+    if (timeoutInterval) clearInterval(timeoutInterval);
+    timeoutInterval = null;
+    document.getElementById('timeoutOverlay').style.display = 'none';
+}
+
+function dismissSub() {
+    if (subTimeout) clearTimeout(subTimeout);
+    subTimeout = null;
+    document.getElementById('subOverlay').style.display = 'none';
+}
 
 function startTimeoutTimer(seconds) {
     const overlay = document.getElementById('timeoutOverlay');
