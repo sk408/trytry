@@ -13,6 +13,7 @@ _DEFAULTS: Dict[str, Any] = {
     "db_path": "data/nba_analytics.db",
     "season": "2025-26",
     "season_year": "2025",
+    "historical_seasons": ["2023-24", "2024-25"],
     "theme": "dark",
     "auto_sync_interval_minutes": 60,
     "notification_webhook_url": "",
@@ -92,6 +93,10 @@ def invalidate_cache():
     global _cache
     with _settings_lock:
         _cache = None
+
+
+def get_historical_seasons() -> list:
+    return get("historical_seasons", [])
 
 
 def get_config() -> Dict[str, Any]:

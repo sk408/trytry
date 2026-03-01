@@ -66,6 +66,7 @@ class MatchupPrediction:
 class PrecomputedGame:
     """Zero-DB-access replay structure for optimization."""
     game_date: str = ""
+    season: str = ""
     home_team_id: int = 0
     away_team_id: int = 0
     actual_home_score: float = 0.0
@@ -393,9 +394,28 @@ def _infer_historical_injuries(team_id: int, game_date: str,
     }
 
 
-def _get_team_metrics(team_id: int) -> Dict[str, float]:
+def _game_date_to_season(game_date: str) -> str:
+    """Map a game date (YYYY-MM-DD) to NBA season string (e.g. '2024-25').
+
+    NBA regular season runs Oct-Apr. Games before July belong to the
+    season that started the prior calendar year.
+    """
+    try:
+        year, month = int(game_date[:4]), int(game_date[5:7])
+        if month >= 7:  # Jul-Dec: season starts this calendar year
+            return f"{year}-{str(year + 1)[2:]}"
+        else:  # Jan-Jun: season started last year
+            return f"{year - 1}-{str(year)[2:]}"
+    except (ValueError, IndexError):
+        return get_season()
+
+
+def _get_team_metrics(team_id: int, season: Optional[str] = None) -> Dict[str, float]:
     """Fetch team metrics as a flat dict, using cache + memory store."""
-    cached = team_cache.get(team_id, "metrics")
+    if season is None:
+        season = get_season()
+    cache_key = f"metrics_{season}"
+    cached = team_cache.get(team_id, cache_key)
     if cached is not None:
         return cached
 
@@ -403,7 +423,6 @@ def _get_team_metrics(team_id: int) -> Dict[str, float]:
         # Try memory store first (already loaded as DataFrame)
         from src.analytics.memory_store import get_store
         store = get_store()
-        season = get_season()
         if store.team_metrics is not None and not store.team_metrics.empty:
             rows = store.team_metrics[
                 (store.team_metrics["team_id"] == team_id) &
@@ -412,7 +431,7 @@ def _get_team_metrics(team_id: int) -> Dict[str, float]:
             if not rows.empty:
                 result = {str(k): (float(v) if isinstance(v, (int, float)) else v)
                           for k, v in rows.iloc[0].to_dict().items()}
-                team_cache.set(team_id, "metrics", result)
+                team_cache.set(team_id, cache_key, result)
                 return result
     except Exception:
         pass  # fall through to DB
@@ -422,7 +441,7 @@ def _get_team_metrics(team_id: int) -> Dict[str, float]:
         (team_id, season)
     )
     result = dict(row) if row else {}
-    team_cache.set(team_id, "metrics", result)
+    team_cache.set(team_id, cache_key, result)
     return result
 
 
@@ -1006,8 +1025,9 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
             home_court = get_home_court_advantage(htid)
 
             # Metrics
-            hm = _get_team_metrics(htid)
-            am = _get_team_metrics(atid)
+            game_season = _game_date_to_season(gdate)
+            hm = _get_team_metrics(htid, season=game_season)
+            am = _get_team_metrics(atid, season=game_season)
 
             league_avg = _LEAGUE_AVG_PPG
             away_opp_pts = am.get("opp_pts", league_avg) or league_avg
@@ -1098,6 +1118,7 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
 
             return PrecomputedGame(
                 game_date=gdate,
+                season=game_season,
                 home_team_id=htid,
                 away_team_id=atid,
                 actual_home_score=g.get("home_score", 0),

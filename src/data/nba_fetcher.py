@@ -235,11 +235,12 @@ def fetch_schedule_played() -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_team_estimated_metrics() -> List[Dict[str, Any]]:
+def fetch_team_estimated_metrics(season: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch TeamEstimatedMetrics."""
     try:
         from nba_api.stats.endpoints import TeamEstimatedMetrics
-        season = get_season()
+        if season is None:
+            season = get_season()
         result = _safe_get(TeamEstimatedMetrics, season=season, league_id="00")
         if result is None:
             return []
@@ -270,11 +271,13 @@ def fetch_team_estimated_metrics() -> List[Dict[str, Any]]:
 
 def fetch_league_dash_team_stats(measure_type: str = "Advanced",
                                   per_mode: str = "PerGame",
-                                  location: str = "") -> List[Dict[str, Any]]:
+                                  location: str = "",
+                                  season: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch LeagueDashTeamStats with flexible measure type and location."""
     try:
         from nba_api.stats.endpoints import LeagueDashTeamStats
-        season = get_season()
+        if season is None:
+            season = get_season()
         kwargs = {
             "season": season,
             "measure_type_detailed_defense": measure_type,
@@ -294,11 +297,12 @@ def fetch_league_dash_team_stats(measure_type: str = "Advanced",
         return []
 
 
-def fetch_team_clutch_stats() -> List[Dict[str, Any]]:
+def fetch_team_clutch_stats(season: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch LeagueDashTeamClutch (Advanced)."""
     try:
         from nba_api.stats.endpoints import LeagueDashTeamClutch
-        season = get_season()
+        if season is None:
+            season = get_season()
         result = _safe_get(
             LeagueDashTeamClutch,
             season=season,
@@ -318,11 +322,12 @@ def fetch_team_clutch_stats() -> List[Dict[str, Any]]:
         return []
 
 
-def fetch_team_hustle_stats() -> List[Dict[str, Any]]:
+def fetch_team_hustle_stats(season: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch LeagueHustleStatsTeam."""
     try:
         from nba_api.stats.endpoints import LeagueHustleStatsTeam
-        season = get_season()
+        if season is None:
+            season = get_season()
         result = _safe_get(LeagueHustleStatsTeam, season=season, league_id_nullable="00")
         if result is None:
             return []
@@ -467,8 +472,10 @@ def save_players(players: List[Dict[str, Any]]):
         )
 
 
-def save_game_logs(logs: List[Dict[str, Any]]):
+def save_game_logs(logs: List[Dict[str, Any]], season: Optional[str] = None):
     """Insert game logs into player_stats with conflict ignore (batched)."""
+    if season is None:
+        season = get_season()
     batch = []
     for log in logs:
         opp_id = log.get("opponent_team_id", 0)
@@ -478,7 +485,7 @@ def save_game_logs(logs: List[Dict[str, Any]]):
             continue
         batch.append((
             log["player_id"], opp_id, log["is_home"], log["game_date"],
-            log.get("game_id", ""),
+            log.get("game_id", ""), season,
             log["points"], log["rebounds"], log["assists"], log["minutes"],
             log.get("steals", 0), log.get("blocks", 0), log.get("turnovers", 0),
             log.get("fg_made", 0), log.get("fg_attempted", 0),
@@ -491,10 +498,10 @@ def save_game_logs(logs: List[Dict[str, Any]]):
     if batch:
         db.execute_many(
             """INSERT OR IGNORE INTO player_stats
-               (player_id, opponent_team_id, is_home, game_date, game_id,
+               (player_id, opponent_team_id, is_home, game_date, game_id, season,
                 points, rebounds, assists, minutes, steals, blocks, turnovers,
                 fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
                 oreb, dreb, plus_minus, win_loss, personal_fouls)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             batch,
         )

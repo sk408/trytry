@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS player_stats (
     is_home INTEGER NOT NULL,
     game_date DATE NOT NULL,
     game_id TEXT,
+    season TEXT NOT NULL DEFAULT '2025-26',
     points REAL NOT NULL,
     rebounds REAL NOT NULL,
     assists REAL NOT NULL,
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS player_stats (
     plus_minus REAL DEFAULT 0,
     win_loss TEXT,
     personal_fouls REAL DEFAULT 0,
-    UNIQUE(player_id, opponent_team_id, game_date),
+    UNIQUE(player_id, opponent_team_id, game_date, season),
     FOREIGN KEY (player_id) REFERENCES players(player_id),
     FOREIGN KEY (opponent_team_id) REFERENCES teams(team_id)
 );
@@ -335,11 +336,21 @@ CREATE INDEX IF NOT EXISTS idx_injuries_player ON injuries(player_id);
 """
 
 
+def _migrate_player_stats_season():
+    """Add season column to player_stats if missing (v2 migration)."""
+    try:
+        execute("ALTER TABLE player_stats ADD COLUMN season TEXT NOT NULL DEFAULT '2025-26'")
+        _log.info("Added 'season' column to player_stats")
+    except Exception:
+        pass  # Column already exists
+
+
 def init_db():
     """Create all tables and indexes."""
     execute_script(SCHEMA_SQL)
     execute_script(INDEXES_SQL)
     _run_column_migrations()
+    _migrate_player_stats_season()
 
 
 def _run_column_migrations():

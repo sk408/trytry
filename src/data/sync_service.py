@@ -1,4 +1,4 @@
-"""Central data sync orchestrator: full_sync() with 6 sub-steps."""
+"""Central data sync orchestrator: full_sync() with 8 sub-steps."""
 
 import logging
 import time
@@ -364,7 +364,7 @@ def sync_team_metrics(callback: Optional[Callable] = None, force: bool = False):
 
 
 def _update_team_dash_stats(season, measure, location, now, callback):
-    data = nba_fetcher.fetch_league_dash_team_stats(measure_type=measure, location=location)
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type=measure, location=location, season=season)
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -401,7 +401,7 @@ def _update_team_dash_stats(season, measure, location, now, callback):
 
 
 def _update_opponent_stats(season, now, callback):
-    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Opponent")
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Opponent", season=season)
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -417,7 +417,7 @@ def _update_opponent_stats(season, now, callback):
 
 
 def _update_home_road_stats(season, location, now, callback):
-    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Base", location=location)
+    data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Base", location=location, season=season)
     prefix = "home" if location == "Home" else "road"
     assert prefix in ("home", "road"), f"unexpected location: {location}"
     for row in data:
@@ -440,7 +440,7 @@ def _update_home_road_stats(season, location, now, callback):
 
 
 def _update_clutch_stats(season, now, callback):
-    data = nba_fetcher.fetch_team_clutch_stats()
+    data = nba_fetcher.fetch_team_clutch_stats(season=season)
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -458,7 +458,7 @@ def _update_clutch_stats(season, now, callback):
 
 
 def _update_hustle_stats(season, now, callback):
-    data = nba_fetcher.fetch_team_hustle_stats()
+    data = nba_fetcher.fetch_team_hustle_stats(season=season)
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -598,8 +598,84 @@ def sync_historical_odds(callback: Optional[Callable] = None, force: bool = Fals
     if callback:
         callback(f"Odds sync complete: {count} games updated.")
 
+
+def sync_historical_seasons(callback: Optional[Callable] = None, force: bool = False):
+    """Sync game logs and team metrics for historical seasons (one-time fetch)."""
+    from src.config import get_historical_seasons
+
+    historical = get_historical_seasons()
+    if not historical:
+        if callback:
+            callback("No historical seasons configured, skipping...")
+        return
+
+    for hist_season in historical:
+        step_key = f"historical_{hist_season}"
+
+        # Historical data is immutable — only fetch once unless forced
+        if not force and _is_fresh(step_key, hours=8760):  # 1 year freshness
+            if callback:
+                callback(f"Historical season {hist_season} already synced, skipping...")
+            continue
+
+        if callback:
+            callback(f"Fetching game logs for {hist_season}...")
+
+        # 1. Bulk game logs
+        logs = nba_fetcher.fetch_bulk_game_logs(season=hist_season)
+        if logs:
+            nba_fetcher.save_game_logs(logs, season=hist_season)
+            if callback:
+                callback(f"  Saved {len(logs)} game logs for {hist_season}")
+        else:
+            if callback:
+                callback(f"  No game logs found for {hist_season}")
+
+        # 2. Team metrics for this season
+        if callback:
+            callback(f"Fetching team metrics for {hist_season}...")
+
+        season = hist_season
+        now = datetime.now().isoformat()
+
+        # Estimated metrics — insert rows so UPDATE calls below have rows to update
+        est_metrics = nba_fetcher.fetch_team_estimated_metrics(season=season)
+        for m in est_metrics:
+            tid = m["team_id"]
+            db.execute(
+                """INSERT INTO team_metrics (team_id, season, gp, w, l, w_pct,
+                     e_off_rating, e_def_rating, e_net_rating, e_pace,
+                     e_ast_ratio, e_oreb_pct, e_dreb_pct, e_reb_pct, e_tm_tov_pct, last_synced_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(team_id, season) DO UPDATE SET
+                     gp=excluded.gp, w=excluded.w, l=excluded.l, w_pct=excluded.w_pct,
+                     e_off_rating=excluded.e_off_rating, e_def_rating=excluded.e_def_rating,
+                     e_net_rating=excluded.e_net_rating, e_pace=excluded.e_pace,
+                     e_ast_ratio=excluded.e_ast_ratio, e_oreb_pct=excluded.e_oreb_pct,
+                     e_dreb_pct=excluded.e_dreb_pct, e_reb_pct=excluded.e_reb_pct,
+                     e_tm_tov_pct=excluded.e_tm_tov_pct, last_synced_at=excluded.last_synced_at""",
+                (tid, season, m["gp"], m["w"], m["l"], m["w_pct"],
+                 m["e_off_rating"], m["e_def_rating"], m["e_net_rating"], m["e_pace"],
+                 m["e_ast_ratio"], m["e_oreb_pct"], m["e_dreb_pct"], m["e_reb_pct"],
+                 m["e_tm_tov_pct"], now)
+            )
+
+        # Advanced, Four Factors, Opponent, Home/Road, Clutch, Hustle
+        _update_team_dash_stats(season, "Advanced", "", now, callback)
+        _update_team_dash_stats(season, "Four Factors", "", now, callback)
+        _update_opponent_stats(season, now, callback)
+        _update_home_road_stats(season, "Home", now, callback)
+        _update_home_road_stats(season, "Road", now, callback)
+        _update_clutch_stats(season, now, callback)
+        _update_hustle_stats(season, now, callback)
+
+        _set_sync_meta(step_key, _get_game_count(), _get_last_game_date())
+        if callback:
+            callback(f"Historical season {hist_season} sync complete")
+
+
 def full_sync(callback: Optional[Callable] = None, force: bool = False):
-    """Full 7-step data sync.
+    """Full 8-step data sync.
 
     Args:
         force: If True, bypass all freshness checks and re-fetch everything.
@@ -610,13 +686,14 @@ def full_sync(callback: Optional[Callable] = None, force: bool = False):
         clear_sync_cache()
 
     steps = [
-        ("1/7 Reference data", sync_reference_data),
-        ("2/7 Player game logs", sync_player_game_logs),
-        ("3/7 Injuries", sync_injuries_step),
-        ("4/7 Injury history", sync_injury_history),
-        ("5/7 Team metrics", sync_team_metrics),
-        ("6/7 Player impact", sync_player_impact),
-        ("7/7 Vegas odds", sync_historical_odds),
+        ("1/8 Reference data", sync_reference_data),
+        ("2/8 Player game logs", sync_player_game_logs),
+        ("3/8 Historical seasons", sync_historical_seasons),
+        ("4/8 Injuries", sync_injuries_step),
+        ("5/8 Injury history", sync_injury_history),
+        ("6/8 Team metrics", sync_team_metrics),
+        ("7/8 Player impact", sync_player_impact),
+        ("8/8 Vegas odds", sync_historical_odds),
     ]
     for label, func in steps:
         if callback:
