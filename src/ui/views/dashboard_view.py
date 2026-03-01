@@ -3,9 +3,9 @@
 import logging
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTextEdit, QFrame, QGridLayout,
+    QTextEdit, QFrame, QGridLayout, QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 
 from src.ui.workers import start_sync_worker, start_injury_worker, start_nuke_resync_worker
 
@@ -13,34 +13,59 @@ logger = logging.getLogger(__name__)
 
 
 class StatCard(QFrame):
-    """A single stat card widget."""
+    """Broadcast-styled stat card widget."""
+
+    # Different accent colors per card
+    _ACCENTS = ["#00e5ff", "#22c55e", "#a78bfa", "#f59e0b"]
+    _idx = 0
 
     def __init__(self, label: str, value: str = "0"):
         super().__init__()
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet("""
-            StatCard {
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 12px;
-            }
-        """)
+        accent = StatCard._ACCENTS[StatCard._idx % len(StatCard._ACCENTS)]
+        StatCard._idx += 1
+
+        self.setProperty("class", "broadcast-card")
+        self.setMinimumHeight(90)
+
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(2)
 
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet("font-size: 28px; font-weight: 700; color: #3b82f6;")
+        self.value_label.setStyleSheet(
+            f"font-size: 32px; font-weight: 700; color: {accent}; "
+            f"font-family: 'Oswald'; background: transparent;"
+        )
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.text_label = QLabel(label)
+        self.text_label = QLabel(label.upper())
         self.text_label.setStyleSheet(
-            "font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #64748b;"
+            "font-size: 10px; font-weight: 700; letter-spacing: 2px; "
+            "color: #64748b; background: transparent;"
         )
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.value_label)
         layout.addWidget(self.text_label)
+
+        # Opacity effect deferred to animate_in() to avoid QFont warnings
+        self._opacity_effect = None
+
+    def animate_in(self, delay_ms: int = 0):
+        """Fade in with optional delay for stagger effect."""
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._opacity_effect)
+        self._anim = QPropertyAnimation(self._opacity_effect, b"opacity")
+        self._anim.setDuration(500)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(lambda: self.setGraphicsEffect(None))
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, self._anim.start)
+        else:
+            self._anim.start()
 
     def set_value(self, value: str):
         self.value_label.setText(value)
@@ -111,8 +136,12 @@ class DashboardView(QWidget):
         # Current worker
         self._worker = None
 
-        # Load initial stats
+        # Load initial stats and trigger entrance animations
         self._refresh_stats()
+        for i, card in enumerate([
+            self.teams_card, self.players_card, self.games_card, self.injuries_card
+        ]):
+            card.animate_in(delay_ms=i * 120)
 
     def _refresh_stats(self):
         """Refresh stat card values from DB."""

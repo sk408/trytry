@@ -97,6 +97,12 @@ QPushButton[class="success"] {
     background-color: rgba(34, 197, 94, 0.8);
 }
 
+QPushButton[class="success"]:hover {
+    background-color: rgba(22, 163, 74, 0.95);
+    border-color: #22c55e;
+    color: #ffffff;
+}
+
 /* ---- Input Fields ---- */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background-color: rgba(20, 30, 45, 0.8);
@@ -196,6 +202,9 @@ QLabel[class="header"] {
     font-weight: 700;
     color: #ffffff;
     text-transform: uppercase;
+    letter-spacing: 2px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid rgba(0, 229, 255, 0.4);
 }
 
 QLabel[class="subheader"] {
@@ -347,6 +356,69 @@ QCheckBox::indicator {
 QCheckBox::indicator:checked {
     background: #00e5ff;
     border-color: #00e5ff;
+}
+
+/* ---- Broadcast Glass Cards ---- */
+QFrame[class="broadcast-card"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(30, 41, 59, 0.9), stop:1 rgba(15, 23, 42, 0.95));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+QFrame[class="broadcast-card"]:hover {
+    border-color: rgba(0, 229, 255, 0.3);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(30, 41, 59, 0.95), stop:1 rgba(20, 30, 50, 0.98));
+}
+
+/* ---- Team Color Accent Frames ---- */
+QFrame[class="team-panel-home"], QFrame[class="team-panel-away"] {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+/* ---- Confidence Progress Bar ---- */
+QProgressBar[class="confidence"] {
+    border: none;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    text-align: center;
+    color: #e2e8f0;
+    font-size: 11px;
+    font-weight: 700;
+    min-height: 20px;
+}
+
+QProgressBar[class="confidence"]::chunk {
+    border-radius: 4px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #ef4444, stop:0.4 #f59e0b, stop:0.7 #22c55e, stop:1 #00e5ff);
+}
+
+/* ---- Live Badge ---- */
+QLabel[class="live-badge"] {
+    background: #ef4444;
+    color: white;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}
+
+/* ---- Edge Indicator ---- */
+QLabel[class="edge-positive"] {
+    color: #22c55e;
+    font-weight: 700;
+}
+
+QLabel[class="edge-negative"] {
+    color: #ef4444;
+    font-weight: 700;
 }
 """
 

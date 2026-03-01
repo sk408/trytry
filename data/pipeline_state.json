@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-02-28 19:31:51",
-  "elapsed_seconds": 6.0,
+  "last_run": "2026-02-28 23:40:49",
+  "elapsed_seconds": 35.9,
   "results_summary": {
     "state": "loaded",
     "memory_loaded": true,
@@ -10,9 +10,9 @@
       "total_games": 892,
       "overall_spread_accuracy": 67.2,
       "overall_total_accuracy": 26.0,
-      "avg_spread_error": 18.78,
+      "avg_spread_error": 18.79,
       "avg_total_error": 23.9,
-      "spread_within_5_pct": 16.6,
+      "spread_within_5_pct": 16.5,
       "total_within_10_pct": 26.0,
       "home_away": {
         "actual_home_wins": 472,
@@ -29,14 +29,14 @@
           "games": 88,
           "winner_pct": 48.9,
           "within_5_pct": 9.1,
-          "avg_error": 20.66
+          "avg_error": 20.67
         },
         {
           "range": "3-7 (comfortable)",
           "games": 182,
           "winner_pct": 57.1,
           "within_5_pct": 10.4,
-          "avg_error": 21.66
+          "avg_error": 21.68
         },
         {
           "range": "7-12 (blowout)",
@@ -49,7 +49,7 @@
           "range": "12+ (landslide)",
           "games": 415,
           "winner_pct": 77.1,
-          "within_5_pct": 22.7,
+          "within_5_pct": 22.4,
           "avg_error": 16.65
         }
       ],
@@ -101,22 +101,22 @@
         "upsets_detected": 0,
         "confidence_buckets": {
           "toss_up": {
-            "games": 53,
-            "correct": 28,
+            "games": 51,
+            "correct": 27,
             "label": "< 3 points",
-            "accuracy": 52.8
+            "accuracy": 52.9
           },
           "moderate": {
-            "games": 63,
-            "correct": 39,
+            "games": 64,
+            "correct": 40,
             "label": "3-7 points",
-            "accuracy": 61.9
+            "accuracy": 62.5
           },
           "strong": {
-            "games": 776,
+            "games": 777,
             "correct": 532,
             "label": "7+ points",
-            "accuracy": 68.6
+            "accuracy": 68.5
           }
         },
         "tier_accuracy": {
@@ -157,7 +157,7 @@
               "month": "2025-10",
               "games": 80,
               "accuracy": 60.0,
-              "mae": 20.99
+              "mae": 21.0
             },
             {
               "month": "2025-11",
@@ -908,11 +908,11 @@
         "vegas_comparison": {
           "ats_games": 892,
           "ats_rate": 54.9,
-          "clv_rate": 30.6,
-          "edge_hit_rate": 54.6,
-          "total_edge_games": 837,
-          "final_bankroll": 2062.5,
-          "roi_pct": 4.0,
+          "clv_rate": 30.5,
+          "edge_hit_rate": 54.7,
+          "total_edge_games": 834,
+          "final_bankroll": 2112.55,
+          "roi_pct": 4.2,
           "feature_attribution": {
             "avg_fatigue_adj": 0.0,
             "avg_rating_adj": 0.0,

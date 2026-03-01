@@ -3,7 +3,7 @@
 {% block title %}Gamecast — NBA Predictor{% endblock %}
 
 {% block content %}
-<h1 class="page-title" style="font-family: var(--font-heading); color: var(--accent); text-transform: uppercase; font-size: 2rem;">Gamecast</h1>
+<h1 class="section-header">Gamecast</h1>
 
 <!-- Game Selector -->
 <div class="card mb-4 game-selector" id="game-selector" style="padding:0; overflow:hidden;">
@@ -11,118 +11,105 @@
         <span>Select Game</span>
         <span class="toggle-icon" id="gameSelectorIcon">&#9660;</span>
     </h2>
-    <div id="gameList" class="games-list" style="display:flex; flex-direction:column; padding:0 16px 16px 16px; gap:8px;">
-        <div style="padding:12px;text-align:center;color:var(--text-muted);">Loading games...</div>
+    <div id="gameList" class="games-list stagger-in" style="display:flex; flex-direction:column; padding:0 16px 16px 16px; gap:8px;">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
     </div>
 </div>
 
     <div id="gameDetail" class="hidden">
     <!-- Timeout Overlay -->
-    <div id="timeoutOverlay" style="display:none; position:fixed; top:20px; left:50%; transform:translateX(-50%); background:rgba(239, 68, 68, 0.9); color:white; padding:10px 20px; border-radius:30px; font-family:var(--font-heading); font-size:1.5rem; z-index:9999; box-shadow:0 4px 15px rgba(0,0,0,0.5); border: 2px solid #fca5a5; font-weight:700; align-items:center; gap:10px; justify-content:center;">
+    <div id="timeoutOverlay" class="timeout-overlay">
         <span>TIMEOUT:</span><span id="timeoutSeconds">75</span><span>s</span>
     </div>
 
     <!-- Substitution Overlay -->
-    <div id="subOverlay" style="display:none; position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); background:rgba(15, 23, 42, 0.95); border: 2px solid var(--accent); border-radius:16px; padding:20px 30px; z-index:10000; flex-direction:row; align-items:center; gap:25px; box-shadow:0 10px 40px rgba(0,0,0,0.8); backdrop-filter:blur(8px);">
-        <!-- Entering Player -->
-        <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
-            <span style="color:#22c55e; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">IN</span>
-            <img id="subInImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #22c55e; box-shadow:0 0 15px rgba(34, 197, 94, 0.4);" onerror="this.onerror=null; this.style.display='none';">
-            <span id="subInName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
-            <span id="subInStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
+    <div id="subOverlay" class="sub-overlay">
+        <div class="sub-player">
+            <span class="sub-label sub-label-in">IN</span>
+            <img id="subInImg" src="" class="sub-photo sub-photo-in" onerror="this.onerror=null; this.style.display='none';">
+            <span id="subInName" class="sub-name"></span>
+            <span id="subInStats" class="sub-stats"></span>
         </div>
-        <!-- Arrows -->
-        <div style="color:#64748b; font-size:28px; display:flex; flex-direction:column; gap:5px;">
-            <span style="transform: scaleX(-1);">➔</span>
-            <span>➔</span>
+        <div class="sub-arrows">
+            <span style="transform: scaleX(-1);">&#10148;</span>
+            <span>&#10148;</span>
         </div>
-        <!-- Leaving Player -->
-        <div style="text-align:center; display:flex; flex-direction:column; align-items:center; width:100px;">
-            <span style="color:#ef4444; font-weight:bold; font-size:14px; margin-bottom:8px; letter-spacing:1px;">OUT</span>
-            <img id="subOutImg" src="" style="width:80px;height:80px;border-radius:50%;object-fit:cover; border:3px solid #ef4444; box-shadow:0 0 15px rgba(239, 68, 68, 0.4);" onerror="this.onerror=null; this.style.display='none';">
-            <span id="subOutName" style="color:white; font-weight:bold; margin-top:8px; font-size:13px; text-align:center; line-height:1.2;"></span>
-            <span id="subOutStats" style="color:#94a3b8; font-size:11px; margin-top:4px;"></span>
+        <div class="sub-player">
+            <span class="sub-label sub-label-out">OUT</span>
+            <img id="subOutImg" src="" class="sub-photo sub-photo-out" onerror="this.onerror=null; this.style.display='none';">
+            <span id="subOutName" class="sub-name"></span>
+            <span id="subOutStats" class="sub-stats"></span>
         </div>
     </div>
 
     <!-- Live Score -->
-    <div class="card" id="score-card" style="position:relative; overflow:hidden; background: rgba(15, 20, 30, 0.95); border: 1px solid rgba(255, 255, 255, 0.1); padding:0; min-height: 220px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); display: flex; flex-direction: column;">
-        
+    <div class="score-card" id="score-card">
         <!-- Skewed Backgrounds -->
-        <div id="awayBgAccent" style="position:absolute; top:0; left:0; width:51%; height:100%; opacity:0.85; background:linear-gradient(113deg, var(--team-away) 0%, #000000 100%); clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
-        <div id="homeBgAccent" style="position:absolute; top:0; right:0; width:51%; height:100%; opacity:0.85; background:linear-gradient(293deg, var(--team-home) 0%, #000000 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 30px 100%); pointer-events:none; z-index:0; transition: background 0.3s;"></div>
-        
-        <!-- Center slanted separator -->
-        <!-- <div style="position:absolute; top:0; left:50%; width:2px; height:100%; background:rgba(255,255,255,0.15); transform: translateX(-50%) skewX(15deg); z-index:0;"></div> -->
+        <div id="awayBgAccent" class="score-bg-accent score-bg-away"></div>
+        <div id="homeBgAccent" class="score-bg-accent score-bg-home"></div>
 
         <!-- Top Status Banner -->
-        <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); background:rgba(10, 15, 25, 0.95); padding: 4px 20px; border-radius: 0 0 8px 8px; z-index:2; text-align:center; min-width: 140px; border: 1px solid rgba(255,255,255,0.1); border-top: none; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-            <div id="statusBadge" class="live-badge" style="display:none; font-size: 0.65rem; padding: 2px 8px; margin: 0 auto 4px auto; width: fit-content;">LIVE</div>
-            <div id="finalBadge" class="final-badge" style="display:none; font-size: 0.65rem; padding: 2px 8px; margin: 0 auto 4px auto; width: fit-content;">FINAL</div>
+        <div class="score-status-banner">
+            <div id="statusBadge" class="live-badge" style="display:none; margin: 0 auto 4px auto; width: fit-content;">LIVE</div>
+            <div id="finalBadge" class="final-badge" style="display:none; margin: 0 auto 4px auto; width: fit-content;">FINAL</div>
             <div id="clockContainer" style="display:flex; justify-content:center; align-items:center; gap: 8px;">
-                <span id="period" style="font-weight:bold; font-size:0.8rem; color:var(--text);"></span>
-                <span id="clock" style="font-size:0.9rem; font-weight:700; color:var(--text);"></span>
+                <span id="period" style="font-weight:bold; font-size:0.8rem;"></span>
+                <span id="clock" style="font-size:0.9rem; font-weight:700;"></span>
             </div>
-            <div id="statusText" style="font-size:0.75rem; color:var(--text-muted); font-weight:600; display:none;"></div>
+            <div id="statusText" class="text-xs text-muted font-bold" style="display:none;"></div>
         </div>
 
-        <!-- Bottom Glowing Borders -->
-        <div id="awayGlow" style="position:absolute; top:0; left:0; width:4px; height:100%; background:var(--team-away); z-index:1;"></div>
-        <div id="homeGlow" style="position:absolute; top:0; right:0; width:4px; height:100%; background:var(--team-home); z-index:1;"></div>
+        <!-- Side Glowing Borders -->
+        <div id="awayGlow" class="score-glow score-glow-away"></div>
+        <div id="homeGlow" class="score-glow score-glow-home"></div>
 
         <!-- Score Content -->
-        <div class="score-display" style="position:relative; z-index:1; padding: 45px 12px 20px 12px; display:flex; justify-content:space-between; align-items:center; flex: 1;">
-            
+        <div class="score-display">
             <!-- AWAY TEAM -->
-            <div class="score-team" style="display:flex; flex-direction:column; align-items:center; flex: 1; gap: 10px;">
-                <div style="display:flex; flex-direction:column; align-items:center;">
-                    <img id="awayLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                            <div class="team-abbr drop-shadow" id="awayTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">AWY</div>
-                            <!-- Timeouts and Bonus -->
-                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
-                        <div id="awayBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
-                        <div id="awayTimeouts" style="display:flex; gap:3px;"></div>
+            <div class="score-team">
+                <div class="score-team-info">
+                    <img id="awayLogo" src="" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
+                    <div class="team-abbr drop-shadow" id="awayTeam">AWY</div>
+                    <div class="team-extras">
+                        <div id="awayBonus" class="bonus-text">BONUS</div>
+                        <div id="awayTimeouts" class="timeout-dots"></div>
                     </div>
                 </div>
-                
-                <span class="team-score drop-shadow" id="awayScore" style="color:#ffffff; font-size:4rem; text-shadow:0 2px 8px rgba(0,0,0,0.5); text-align:center; line-height: 1;">0</span>
+                <span class="team-score drop-shadow" id="awayScore">0</span>
             </div>
 
             <!-- CENTER VS -->
-            <div class="score-center" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width: 40px; margin: 0 5px;">
-                <span id="vsText" style="font-family:var(--font-heading); font-size:1.2rem; color:rgba(255,255,255,0.4); font-weight:700;">VS</span>
+            <div class="score-center">
+                <span id="vsText" class="vs-text">VS</span>
             </div>
-            
+
             <!-- HOME TEAM -->
-            <div class="score-team" style="display:flex; flex-direction:column; align-items:center; flex: 1; gap: 10px;">
-                <div style="display:flex; flex-direction:column; align-items:center;">
-                    <img id="homeLogo" src="" width="60" height="60" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
-                            <div class="team-abbr drop-shadow" id="homeTeam" style="font-family:var(--font-heading); font-size:1.5rem; line-height:1; font-weight: 700; color:#e2e8f0; margin-top:4px;">HOM</div>
-                            <!-- Timeouts and Bonus -->
-                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 2px; margin-top: 4px; height: 20px;">
-                        <div id="homeBonus" style="font-family:var(--font-heading); font-size:0.65rem; color:#fbbf24; font-weight:700; visibility:hidden; line-height:1;">BONUS</div>
-                        <div id="homeTimeouts" style="display:flex; gap:3px;"></div>
+            <div class="score-team">
+                <div class="score-team-info">
+                    <img id="homeLogo" src="" class="team-logo-lg drop-shadow" alt="" onerror="this.style.display='none'">
+                    <div class="team-abbr drop-shadow" id="homeTeam">HOM</div>
+                    <div class="team-extras">
+                        <div id="homeBonus" class="bonus-text">BONUS</div>
+                        <div id="homeTimeouts" class="timeout-dots"></div>
                     </div>
                 </div>
-
-                <span class="team-score drop-shadow" id="homeScore" style="color:#ffffff; font-size:4rem; text-shadow:0 2px 8px rgba(0,0,0,0.5); text-align:center; line-height: 1;">0</span>
+                <span class="team-score drop-shadow" id="homeScore">0</span>
             </div>
-
         </div>
 
         <!-- Quarter Scores -->
-        <div style="position:relative; z-index:2; padding: 0 10px 16px 10px; display:flex; justify-content:center; width:100%;">
-            <div class="quarter-scores" id="quarterScores" style="text-align:center;font-size:0.85rem;color:var(--text-muted); background:rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; max-width: 100%; overflow-x: auto;"></div>
-        </div>
-        
-        <!-- Animated Score Banner -->
-        <div id="scoreBanner" style="position:absolute; top:-60px; left:50%; transform:translateX(-50%); background:var(--accent); color:white; padding:8px 24px; border-radius:0 0 12px 12px; font-weight:800; font-size:1.1rem; box-shadow:0 4px 12px rgba(0,0,0,0.5); z-index:10; transition:top 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); pointer-events:none; white-space: nowrap;">
-            TEAM SCORE!
+        <div class="quarter-scores-wrap">
+            <div class="quarter-scores-inner" id="quarterScores"></div>
         </div>
 
+        <!-- Animated Score Banner -->
+        <div id="scoreBanner" class="score-banner">TEAM SCORE!</div>
+
         <!-- Flash Overlays -->
-        <div id="awayFlash" style="position:absolute; top:0; left:0; width:55%; height:100%; background:var(--team-away); opacity:0; clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 100%, 0 100%); pointer-events:none; z-index:1; transition: opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></div>
-        <div id="homeFlash" style="position:absolute; top:0; right:0; width:55%; height:100%; background:var(--team-home); opacity:0; clip-path: polygon(0 0, 100% 0, 100% 100%, 30px 100%); pointer-events:none; z-index:1; transition: opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.275);"></div>
+        <div id="awayFlash" class="score-flash score-flash-away"></div>
+        <div id="homeFlash" class="score-flash score-flash-home"></div>
     </div>
 
     <!-- Live Odds & Prediction (Grid) -->
@@ -130,14 +117,14 @@
         <!-- Prediction -->
         <div class="card">
             <h2>Model Prediction</h2>
-            
+
             <!-- Win Probability -->
             <div class="win-prob-container mt-2 mb-4">
                 <div class="win-prob-labels">
                     <span><span id="awayLabelWp">AWAY</span> <span id="wpAway">50%</span></span>
                     <span><span id="wpHome">50%</span> <span id="homeLabelWp">HOME</span></span>
                 </div>
-                <div class="win-prob-bar" style="box-shadow:inset 0 2px 4px rgba(0,0,0,0.3);">
+                <div class="win-prob-bar">
                     <div class="win-prob-away" id="wpBarAway" style="width: 50%"></div>
                     <div class="win-prob-home" id="wpBarHome" style="width: 50%"></div>
                 </div>
@@ -155,26 +142,26 @@
                 <div class="text-muted text-sm" style="grid-column: 1 / -1;">Loading...</div>
             </div>
         </div>
-        
+
         <!-- Game Flow Stats -->
         <div class="card" style="grid-column: 1 / -1;">
             <h2>Game Flow Stats</h2>
-            <div style="display:flex; justify-content:space-around; align-items:center; text-align:center; padding: 10px 0;">
-                <div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Drives Scored</div>
-                    <div style="font-size: 1.5rem; font-weight: bold; margin-top: 5px;">
+            <div class="flow-stats">
+                <div class="flow-stat">
+                    <span class="flow-stat-label">Drives Scored</span>
+                    <div class="flow-stat-value">
                         <span id="awayDrives" style="color: var(--team-away);">0</span> - <span id="homeDrives" style="color: var(--team-home);">0</span>
                     </div>
                 </div>
-                <div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Poss Scored</div>
-                    <div style="font-size: 1.5rem; font-weight: bold; margin-top: 5px;">
+                <div class="flow-stat">
+                    <span class="flow-stat-label">Poss Scored</span>
+                    <div class="flow-stat-value">
                         <span id="awayPoss" style="color: var(--team-away);">0</span> - <span id="homePoss" style="color: var(--team-home);">0</span>
                     </div>
                 </div>
-                <div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold;">Current Run</div>
-                    <div id="currentRun" style="font-size: 1.2rem; font-weight: bold; margin-top: 5px; color: var(--text);">None</div>
+                <div class="flow-stat">
+                    <span class="flow-stat-label">Current Run</span>
+                    <div id="currentRun" class="flow-stat-value">None</div>
                 </div>
             </div>
         </div>

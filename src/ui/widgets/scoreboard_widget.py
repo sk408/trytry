@@ -56,6 +56,14 @@ class ScoreboardWidget(QWidget):
         self._away_flash_alpha = 0.0
         self._home_flash_alpha = 0.0
 
+        # Pulsing live dot
+        self._live_pulse_alpha = 1.0
+        self._live_pulse_growing = False
+        self._live_pulse_timer = QTimer(self)
+        self._live_pulse_timer.setInterval(50)
+        self._live_pulse_timer.timeout.connect(self._on_live_pulse)
+        self._live_pulse_timer.start()
+
         # Animations
         self._anim_away = QVariantAnimation(self)
         self._anim_away.setDuration(800)
@@ -244,6 +252,21 @@ class ScoreboardWidget(QWidget):
             
         self._sub_timer.start(6000)
         self._sub_refresh_timer.start(500)
+        self.update()
+
+    def _on_live_pulse(self):
+        """Animate the live indicator dot alpha between 0.3 and 1.0."""
+        if self._status_state != "in":
+            return
+        step = 0.04
+        if self._live_pulse_growing:
+            self._live_pulse_alpha = min(1.0, self._live_pulse_alpha + step)
+            if self._live_pulse_alpha >= 1.0:
+                self._live_pulse_growing = False
+        else:
+            self._live_pulse_alpha = max(0.2, self._live_pulse_alpha - step)
+            if self._live_pulse_alpha <= 0.2:
+                self._live_pulse_growing = True
         self.update()
 
     def _set_away_flash_alpha(self, val):
@@ -491,9 +514,16 @@ class ScoreboardWidget(QWidget):
         p.drawLine(int(mid_x), 32, int(mid_x + 80), 32)
 
         if self._status_state == "in":
-            # Live indicator
+            # Pulsing live indicator dot with glow
+            pulse_a = self._live_pulse_alpha
+            # Outer glow ring
+            glow_clr = QColor(239, 68, 68, int(80 * pulse_a))
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#22c55e"))
+            p.setBrush(glow_clr)
+            p.drawEllipse(int(mid_x - 68), 9, 14, 14)
+            # Inner dot
+            dot_clr = QColor(239, 68, 68, int(255 * pulse_a))
+            p.setBrush(dot_clr)
             p.drawEllipse(int(mid_x - 65), 12, 8, 8)
             period_text = f"Q{self._period}" if self._period <= 4 else f"OT{self._period - 4}"
             draw_text_with_shadow(p, mid_x - 45, 22, f"LIVE  {period_text}  {self._clock}", small_font, QColor("#ffffff"))

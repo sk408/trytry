@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#3b82f6">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0f19">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/static/manifest.json">
     <title>{% block title %}NBA Predictor{% endblock %}</title>
     <link rel="stylesheet" href="/static/style.css">
@@ -55,6 +57,33 @@
     <main class="container">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Mobile Bottom Navigation -->
+    <nav class="bottom-nav" aria-label="Mobile navigation">
+        <div class="bottom-nav-inner">
+            <a href="/dashboard" {% if active == 'dashboard' %}class="active"{% endif %}>
+                <span class="nav-icon">&#x1F4CA;</span>
+                <span>Dashboard</span>
+            </a>
+            <a href="/gamecast" {% if active == 'gamecast' %}class="active"{% endif %}>
+                <span class="nav-icon">&#x1F3C0;</span>
+                <span>Live</span>
+                <span class="live-dot" id="mobileliveDot" style="display:none;"></span>
+            </a>
+            <a href="/matchups" {% if active == 'matchups' %}class="active"{% endif %}>
+                <span class="nav-icon">&#x2694;&#xFE0F;</span>
+                <span>Matchups</span>
+            </a>
+            <a href="/players" {% if active == 'players' %}class="active"{% endif %}>
+                <span class="nav-icon">&#x1F464;</span>
+                <span>Players</span>
+            </a>
+            <a href="/schedule" {% if active == 'schedule' %}class="active"{% endif %}>
+                <span class="nav-icon">&#x1F4C5;</span>
+                <span>Schedule</span>
+            </a>
+        </div>
+    </nav>
 
     <script>
         function toggleNav() {

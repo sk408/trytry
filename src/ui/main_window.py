@@ -1,11 +1,12 @@
-"""PySide6 Desktop GUI — Main window with 10 tabs."""
+"""PySide6 Desktop GUI — Main window with 12 tabs."""
 
 import logging
 import os
 from PySide6.QtWidgets import (
-    QMainWindow, QTabWidget, QStatusBar, QApplication, QWidget, QVBoxLayout,
+    QMainWindow, QTabWidget, QStatusBar, QApplication, QWidget,
+    QVBoxLayout, QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFontDatabase, QFont
 
 from src.ui.theme import GLOBAL_STYLESHEET
@@ -47,6 +48,11 @@ class MainWindow(QMainWindow):
 
         # Initialize tabs (lazy import to avoid circular deps)
         self._init_tabs()
+
+        # Tab crossfade transition
+        self._tab_fade_effect = None
+        self._tab_fade_anim = None
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         # Notification bell
         self._init_notifications()
@@ -97,6 +103,25 @@ class MainWindow(QMainWindow):
         from src.ui.notification_widget import NotificationBell
         self.notif_bell = NotificationBell(self)
         self.tabs.setCornerWidget(self.notif_bell, Qt.Corner.TopRightCorner)
+
+    def _on_tab_changed(self, index: int):
+        """Apply a quick fade-in when switching tabs."""
+        widget = self.tabs.widget(index)
+        if not widget:
+            return
+        effect = QGraphicsOpacityEffect(widget)
+        effect.setOpacity(0.3)
+        widget.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity")
+        anim.setDuration(250)
+        anim.setStartValue(0.3)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Store refs so they aren't garbage collected mid-animation
+        self._tab_fade_effect = effect
+        self._tab_fade_anim = anim
+        anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+        anim.start()
 
     def set_status(self, msg: str):
         """Update status bar message."""

@@ -7,9 +7,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QGridLayout, QScrollArea, QSplitter, QTabWidget,
+    QProgressBar, QGraphicsOpacityEffect,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QColor, QFont, QPixmap
+
+from src.ui.widgets.image_utils import get_team_logo, make_placeholder_logo
+from src.ui.widgets.nba_colors import get_team_colors
 
 logger = logging.getLogger(__name__)
 
@@ -36,30 +40,60 @@ class _PredictWorker(QObject):
 
 
 class PredictionCard(QFrame):
-    """Card showing a single prediction value."""
+    """Broadcast-styled card showing a single prediction value."""
 
-    def __init__(self, title: str, value: str = "—"):
+    def __init__(self, title: str, value: str = "—", accent: str = "#00e5ff"):
         super().__init__()
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(
-            "PredictionCard { background: #1e293b; border: 1px solid #334155; "
-            "border-radius: 8px; padding: 10px; }"
-        )
+        self.setProperty("class", "broadcast-card")
+        self.setMinimumHeight(90)
+        self._accent = accent
+
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(4)
 
-        self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #64748b; font-size: 11px;")
+        self.title_label = QLabel(title.upper())
+        self.title_label.setStyleSheet(
+            "color: #64748b; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 2px; background: transparent;"
+        )
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.value_label = QLabel(value)
-        self.value_label.setStyleSheet("color: #e2e8f0; font-size: 22px; font-weight: 700;")
+        self.value_label.setStyleSheet(
+            f"color: {accent}; font-size: 26px; font-weight: 700; "
+            f"font-family: 'Oswald'; background: transparent;"
+        )
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.value_label)
 
-    def set_value(self, val: str):
+        # Opacity effect deferred to animate_in() to avoid QFont warnings
+        self._opacity_effect = None
+
+    def animate_in(self, delay_ms: int = 0):
+        """Fade in with optional delay for stagger effect."""
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._opacity_effect)
+        self._anim = QPropertyAnimation(self._opacity_effect, b"opacity")
+        self._anim.setDuration(400)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.finished.connect(lambda: self.setGraphicsEffect(None))
+        if delay_ms > 0:
+            QTimer.singleShot(delay_ms, self._anim.start)
+        else:
+            self._anim.start()
+
+    def set_value(self, val: str, color: str = None):
+        if color:
+            self.value_label.setStyleSheet(
+                f"color: {color}; font-size: 26px; font-weight: 700; "
+                f"font-family: 'Oswald'; background: transparent;"
+            )
         self.value_label.setText(val)
 
 
@@ -71,34 +105,75 @@ class MatchupView(QWidget):
         self.main_window = parent
         self._worker_thread = None
         self._worker = None
+        self._team_id_map = {}  # abbreviation -> team_id (for logo lookup)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(10)
 
         header = QLabel("Matchup Predictions")
         header.setProperty("class", "header")
         layout.addWidget(header)
 
-        # Team selectors
-        sel_layout = QHBoxLayout()
-        sel_layout.addWidget(QLabel("Home:"))
-        self.home_combo = QComboBox()
-        self.home_combo.setMinimumWidth(200)
-        sel_layout.addWidget(self.home_combo)
+        # ── Team selector row with logos ──
+        sel_frame = QFrame()
+        sel_frame.setProperty("class", "broadcast-card")
+        sel_inner = QHBoxLayout(sel_frame)
+        sel_inner.setContentsMargins(12, 8, 12, 8)
 
-        sel_layout.addWidget(QLabel("Away:"))
+        # Away side
+        self._away_logo_label = QLabel()
+        self._away_logo_label.setFixedSize(48, 48)
+        self._away_logo_label.setStyleSheet("background: transparent;")
+        sel_inner.addWidget(self._away_logo_label)
+
+        away_col = QVBoxLayout()
+        away_lbl = QLabel("AWAY")
+        away_lbl.setProperty("class", "muted")
+        away_col.addWidget(away_lbl)
         self.away_combo = QComboBox()
         self.away_combo.setMinimumWidth(200)
-        sel_layout.addWidget(self.away_combo)
+        self.away_combo.currentIndexChanged.connect(self._on_team_changed)
+        away_col.addWidget(self.away_combo)
+        sel_inner.addLayout(away_col)
 
+        # VS separator
+        vs_label = QLabel("VS")
+        vs_label.setStyleSheet(
+            "color: #64748b; font-size: 18px; font-weight: 700; "
+            "font-family: 'Oswald'; padding: 0 16px; background: transparent;"
+        )
+        vs_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sel_inner.addWidget(vs_label)
+
+        # Home side
+        home_col = QVBoxLayout()
+        home_lbl = QLabel("HOME")
+        home_lbl.setProperty("class", "muted")
+        home_col.addWidget(home_lbl)
+        self.home_combo = QComboBox()
+        self.home_combo.setMinimumWidth(200)
+        self.home_combo.currentIndexChanged.connect(self._on_team_changed)
+        home_col.addWidget(self.home_combo)
+        sel_inner.addLayout(home_col)
+
+        self._home_logo_label = QLabel()
+        self._home_logo_label.setFixedSize(48, 48)
+        self._home_logo_label.setStyleSheet("background: transparent;")
+        sel_inner.addWidget(self._home_logo_label)
+
+        sel_inner.addSpacing(16)
         self.predict_btn = QPushButton("Predict")
+        self.predict_btn.setProperty("class", "success")
         self.predict_btn.clicked.connect(self._on_predict)
-        sel_layout.addWidget(self.predict_btn)
-        sel_layout.addStretch()
-        layout.addLayout(sel_layout)
+        sel_inner.addWidget(self.predict_btn)
+        sel_inner.addStretch()
+        layout.addWidget(sel_frame)
 
         # Game selector from schedule
         game_layout = QHBoxLayout()
-        game_layout.addWidget(QLabel("Or pick a game:"))
+        pick_lbl = QLabel("Or pick a game:")
+        pick_lbl.setProperty("class", "muted")
+        game_layout.addWidget(pick_lbl)
         self.game_combo = QComboBox()
         self.game_combo.setMinimumWidth(350)
         self.game_combo.currentIndexChanged.connect(self._on_game_picked)
@@ -106,14 +181,15 @@ class MatchupView(QWidget):
         game_layout.addStretch()
         layout.addLayout(game_layout)
 
-        # Prediction cards
+        # ── Prediction cards with stagger animation ──
         cards_layout = QGridLayout()
-        self.spread_card = PredictionCard("Spread")
-        self.total_card = PredictionCard("Total")
-        self.home_card = PredictionCard("Home Score")
-        self.away_card = PredictionCard("Away Score")
-        self.winner_card = PredictionCard("Win Probability")
-        self.confidence_card = PredictionCard("Confidence")
+        cards_layout.setSpacing(8)
+        self.spread_card = PredictionCard("Spread", accent="#00e5ff")
+        self.total_card = PredictionCard("Total", accent="#a78bfa")
+        self.home_card = PredictionCard("Home Score", accent="#22c55e")
+        self.away_card = PredictionCard("Away Score", accent="#f59e0b")
+        self.winner_card = PredictionCard("Win Probability", accent="#3b82f6")
+        self.confidence_card = PredictionCard("Confidence", accent="#00e5ff")
 
         cards_layout.addWidget(self.spread_card, 0, 0)
         cards_layout.addWidget(self.total_card, 0, 1)
@@ -122,6 +198,15 @@ class MatchupView(QWidget):
         cards_layout.addWidget(self.winner_card, 1, 0, 1, 2)
         cards_layout.addWidget(self.confidence_card, 1, 2, 1, 2)
         layout.addLayout(cards_layout)
+
+        # Confidence progress bar
+        self._confidence_bar = QProgressBar()
+        self._confidence_bar.setProperty("class", "confidence")
+        self._confidence_bar.setRange(0, 100)
+        self._confidence_bar.setValue(0)
+        self._confidence_bar.setFormat("%v% Confidence")
+        self._confidence_bar.setFixedHeight(22)
+        layout.addWidget(self._confidence_bar)
 
         # Breakdown table
         self.breakdown_table = QTableWidget()
@@ -149,9 +234,18 @@ class MatchupView(QWidget):
         home_roster_layout.setContentsMargins(0, 0, 0, 0)
         self._home_roster_header = QLabel("Home Roster")
         self._home_roster_header.setStyleSheet(
-            "color: #e2e8f0; font-size: 13px; font-weight: 700; padding: 4px;"
+            "color: #ffffff; font-size: 13px; font-weight: 700; padding: 6px 10px; "
+            "border-radius: 4px; font-family: 'Oswald'; text-transform: uppercase; "
+            "letter-spacing: 1px;"
         )
-        home_roster_layout.addWidget(self._home_roster_header)
+        self._home_roster_logo = QLabel()
+        self._home_roster_logo.setFixedSize(28, 28)
+        self._home_roster_logo.setStyleSheet("background: transparent;")
+        home_hdr_row = QHBoxLayout()
+        home_hdr_row.addWidget(self._home_roster_logo)
+        home_hdr_row.addWidget(self._home_roster_header)
+        home_hdr_row.addStretch()
+        home_roster_layout.addLayout(home_hdr_row)
         self._home_roster_table = self._make_roster_table()
         home_roster_layout.addWidget(self._home_roster_table)
         roster_splitter.addWidget(home_roster_panel)
@@ -162,9 +256,18 @@ class MatchupView(QWidget):
         away_roster_layout.setContentsMargins(0, 0, 0, 0)
         self._away_roster_header = QLabel("Away Roster")
         self._away_roster_header.setStyleSheet(
-            "color: #e2e8f0; font-size: 13px; font-weight: 700; padding: 4px;"
+            "color: #ffffff; font-size: 13px; font-weight: 700; padding: 6px 10px; "
+            "border-radius: 4px; font-family: 'Oswald'; text-transform: uppercase; "
+            "letter-spacing: 1px;"
         )
-        away_roster_layout.addWidget(self._away_roster_header)
+        self._away_roster_logo = QLabel()
+        self._away_roster_logo.setFixedSize(28, 28)
+        self._away_roster_logo.setStyleSheet("background: transparent;")
+        away_hdr_row = QHBoxLayout()
+        away_hdr_row.addWidget(self._away_roster_logo)
+        away_hdr_row.addWidget(self._away_roster_header)
+        away_hdr_row.addStretch()
+        away_roster_layout.addLayout(away_hdr_row)
         self._away_roster_table = self._make_roster_table()
         away_roster_layout.addWidget(self._away_roster_table)
         roster_splitter.addWidget(away_roster_panel)
@@ -172,8 +275,43 @@ class MatchupView(QWidget):
         layout.addWidget(roster_splitter, 1)
 
         # Load teams (DB only — fast) then defer network call
+        self._build_team_map()
         self._load_teams()
         QTimer.singleShot(600, self._load_games)
+
+    def _build_team_map(self):
+        """Build abbreviation -> team_id map for logo lookup."""
+        try:
+            from src.database import db
+            teams = db.fetch_all("SELECT team_id, abbreviation FROM teams")
+            for t in teams:
+                self._team_id_map[t["abbreviation"]] = t["team_id"]
+        except Exception:
+            pass
+
+    def _on_team_changed(self, idx: int):
+        """Update team logos when combo selection changes."""
+        self._update_team_logos()
+
+    def _update_team_logos(self):
+        """Refresh the team logo labels based on current combo selections."""
+        for combo, logo_label in [
+            (self.away_combo, self._away_logo_label),
+            (self.home_combo, self._home_logo_label),
+        ]:
+            team_id = combo.currentData()
+            if team_id:
+                logo = get_team_logo(team_id, 48)
+                if logo:
+                    logo_label.setPixmap(logo)
+                else:
+                    # Get abbreviation from combo text
+                    text = combo.currentText()
+                    abbr = text.split(" — ")[0] if " — " in text else "?"
+                    primary, _ = get_team_colors(team_id)
+                    logo_label.setPixmap(make_placeholder_logo(abbr, 48, primary))
+            else:
+                logo_label.clear()
 
     def _load_teams(self):
         """Populate team dropdowns."""
@@ -239,8 +377,12 @@ class MatchupView(QWidget):
             return
         if home_id == away_id:
             return
-        if self._worker_thread and self._worker_thread.isRunning():
-            return
+        try:
+            if self._worker_thread is not None and self._worker_thread.isRunning():
+                return
+        except RuntimeError:
+            # C++ object already deleted — safe to proceed
+            self._worker_thread = None
 
         self.predict_btn.setEnabled(False)
         self.predict_btn.setText("Predicting...")
@@ -254,9 +396,17 @@ class MatchupView(QWidget):
         self._worker.error.connect(self._on_error, _QC)
         self._worker.finished.connect(self._worker_thread.quit)
         self._worker.error.connect(self._worker_thread.quit)
-        self._worker_thread.finished.connect(self._worker_thread.deleteLater)
-        self._worker_thread.finished.connect(self._worker.deleteLater)
+        self._worker_thread.finished.connect(self._cleanup_worker)
         self._worker_thread.start()
+
+    def _cleanup_worker(self):
+        """Clean up worker and thread after completion."""
+        if self._worker_thread is not None:
+            self._worker_thread.deleteLater()
+        if self._worker is not None:
+            self._worker.deleteLater()
+        self._worker_thread = None
+        self._worker = None
 
     def _on_error(self, msg: str):
         self.predict_btn.setEnabled(True)
@@ -276,14 +426,25 @@ class MatchupView(QWidget):
         away_score = result.get("predicted_away_score", 0)
         confidence = result.get("confidence", 0)
 
-        self.spread_card.set_value(f"{spread:+.1f}")
+        # Color spread based on which team is favored
+        spread_color = "#22c55e" if spread < 0 else "#ef4444" if spread > 0 else "#e2e8f0"
+        self.spread_card.set_value(f"{spread:+.1f}", color=spread_color)
         self.total_card.set_value(f"{total:.1f}")
         self.home_card.set_value(f"{home_score:.1f}")
         self.away_card.set_value(f"{away_score:.1f}")
 
         winner = result.get("winner", "")
         self.winner_card.set_value(winner if winner else "—")
-        self.confidence_card.set_value(f"{confidence * 100:.0f}%")
+        conf_pct = int(confidence * 100)
+        self.confidence_card.set_value(f"{conf_pct}%")
+        self._confidence_bar.setValue(conf_pct)
+
+        # Stagger card entrance animations
+        for i, card in enumerate([
+            self.spread_card, self.total_card, self.home_card,
+            self.away_card, self.winner_card, self.confidence_card,
+        ]):
+            card.animate_in(delay_ms=i * 80)
 
         # Breakdown — show all non-zero parameters
         all_adjustments = [
@@ -334,6 +495,26 @@ class MatchupView(QWidget):
 
         self._home_roster_header.setText(f"{home_team} Roster")
         self._away_roster_header.setText(f"{away_team} Roster")
+
+        # Apply team color gradient to roster headers
+        for tid, header_lbl, logo_lbl, team_abbr in [
+            (home_id, self._home_roster_header, self._home_roster_logo, home_team),
+            (away_id, self._away_roster_header, self._away_roster_logo, away_team),
+        ]:
+            if tid:
+                primary, secondary = get_team_colors(tid)
+                header_lbl.setStyleSheet(
+                    f"color: #ffffff; font-size: 13px; font-weight: 700; padding: 6px 10px; "
+                    f"border-radius: 4px; font-family: 'Oswald'; text-transform: uppercase; "
+                    f"letter-spacing: 1px; "
+                    f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                    f"stop:0 {primary}, stop:1 {secondary});"
+                )
+                logo = get_team_logo(tid, 28)
+                if logo:
+                    logo_lbl.setPixmap(logo)
+                else:
+                    logo_lbl.setPixmap(make_placeholder_logo(team_abbr, 28, primary))
 
         self.injury_label.setText("")  # clear before populating
         self._populate_team_roster(home_id, home_team, self._home_roster_table)

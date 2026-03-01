@@ -59,7 +59,7 @@
     {% if prediction.error %}
     <div class="alert alert-danger">{{ prediction.error }}</div>
     {% else %}
-    <div class="prediction-card mb-4 fade-in">
+    <div class="prediction-card mb-4 scale-in">
         <div class="team-side">
             {% if away_team %}
             <img src="/images/logos/{{ away_team }}.svg" class="team-logo-pred" alt="{{ prediction.get('away_team', 'Away') }}" onerror="this.style.display='none'">
