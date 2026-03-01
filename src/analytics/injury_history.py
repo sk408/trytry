@@ -8,18 +8,33 @@ from src.database import db
 logger = logging.getLogger(__name__)
 
 
+def _get_seasons_in_db() -> List[str]:
+    """Return distinct seasons present in player_stats, sorted chronologically."""
+    rows = db.fetch_all(
+        "SELECT DISTINCT season FROM player_stats ORDER BY season ASC"
+    )
+    return [r["season"] for r in rows] if rows else []
+
+
 def infer_injuries_from_logs(callback: Optional[Callable] = None) -> Dict[str, Any]:
     """Detect missed games by comparing team schedule vs player game logs.
-    
+
     For each player, find team games where the player has no stats entry.
     Consecutive missed games form an "injury stint".
     Records individual game-date rows in injury_history.
+
+    Processes each season independently to avoid false positives from
+    off-season gaps between seasons.
     """
     # Get all teams (cached singleton)
     from src.analytics.stats_engine import get_team_abbreviations
     abbr_map = get_team_abbreviations()
     teams = [{"team_id": tid, "abbreviation": abbr} for tid, abbr in abbr_map.items()]
     if not teams:
+        return {"stints_found": 0, "records": 0}
+
+    seasons = _get_seasons_in_db()
+    if not seasons:
         return {"stints_found": 0, "records": 0}
 
     total_stints = 0
@@ -29,89 +44,95 @@ def infer_injuries_from_logs(callback: Optional[Callable] = None) -> Dict[str, A
         tid = team["team_id"]
         abbr = team["abbreviation"]
 
-        # Get team's game dates (from player_stats via players join)
-        team_game_dates = db.fetch_all("""
-            SELECT DISTINCT ps.game_date FROM player_stats ps
-            JOIN players p ON ps.player_id = p.player_id
-            WHERE p.team_id = ?
-            ORDER BY ps.game_date ASC
-        """, (tid,))
-        game_dates = [r["game_date"] for r in team_game_dates]
-
-        if len(game_dates) < 5:
-            continue
-
-        # Get all players on this team
-        players = db.fetch_all("""
-            SELECT DISTINCT ps.player_id, p.name as player_name
-            FROM player_stats ps
-            JOIN players p ON ps.player_id = p.player_id
-            WHERE p.team_id = ?
-        """, (tid,))
-
-        for player in players:
-            pid = player["player_id"]
-
-            # Get dates this player played
-            played_rows = db.fetch_all("""
+        for season in seasons:
+            # Get team's game dates for THIS season only
+            team_game_dates = db.fetch_all("""
                 SELECT DISTINCT ps.game_date FROM player_stats ps
+                WHERE ps.season = ?
+                  AND EXISTS (
+                      SELECT 1 FROM player_stats ps2
+                      JOIN players p ON ps2.player_id = p.player_id
+                      WHERE p.team_id = ? AND ps2.game_date = ps.game_date
+                        AND ps2.season = ?
+                  )
+                ORDER BY ps.game_date ASC
+            """, (season, tid, season))
+            game_dates = [r["game_date"] for r in team_game_dates]
+
+            if len(game_dates) < 5:
+                continue
+
+            # Get all players who played for this team THIS season
+            players = db.fetch_all("""
+                SELECT DISTINCT ps.player_id
+                FROM player_stats ps
                 JOIN players p ON ps.player_id = p.player_id
-                WHERE ps.player_id = ? AND p.team_id = ?
-            """, (pid, tid))
-            played_dates = set(r["game_date"] for r in played_rows)
+                WHERE p.team_id = ? AND ps.season = ?
+            """, (tid, season))
 
-            if not played_dates:
-                continue
+            for player in players:
+                pid = player["player_id"]
 
-            # Find first and last game the player appeared in
-            sorted_played = sorted(played_dates)
-            first_game = sorted_played[0]
-            last_game = sorted_played[-1]
+                # Get dates this player played THIS season
+                played_rows = db.fetch_all("""
+                    SELECT DISTINCT ps.game_date FROM player_stats ps
+                    JOIN players p ON ps.player_id = p.player_id
+                    WHERE ps.player_id = ? AND p.team_id = ? AND ps.season = ?
+                """, (pid, tid, season))
+                played_dates = set(r["game_date"] for r in played_rows)
 
-            # Only consider dates in player's active window
-            active_dates = [d for d in game_dates if first_game <= d <= last_game]
+                if not played_dates:
+                    continue
 
-            # Find missed dates
-            missed = [d for d in active_dates if d not in played_dates]
+                # Find first and last game the player appeared in this season
+                sorted_played = sorted(played_dates)
+                first_game = sorted_played[0]
+                last_game = sorted_played[-1]
 
-            if not missed:
-                continue
+                # Only consider dates in player's active window
+                active_dates = [d for d in game_dates if first_game <= d <= last_game]
 
-            # Group consecutive missed games into stints
-            stints = []
-            current_stint_dates = []
+                # Find missed dates
+                missed = [d for d in active_dates if d not in played_dates]
 
-            for date in sorted(missed):
-                if not current_stint_dates:
-                    current_stint_dates = [date]
-                else:
-                    # Check if consecutive (within team's schedule)
-                    prev_date = current_stint_dates[-1]
-                    prev_idx = game_dates.index(prev_date) if prev_date in game_dates else -1
-                    curr_idx = game_dates.index(date) if date in game_dates else -1
+                if not missed:
+                    continue
 
-                    if curr_idx == prev_idx + 1:
-                        current_stint_dates.append(date)
-                    else:
-                        if len(current_stint_dates) >= 2:
-                            stints.append(list(current_stint_dates))
+                # Group consecutive missed games into stints
+                stints = []
+                current_stint_dates = []
+
+                for date in sorted(missed):
+                    if not current_stint_dates:
                         current_stint_dates = [date]
+                    else:
+                        # Check if consecutive (within team's schedule)
+                        prev_date = current_stint_dates[-1]
+                        prev_idx = game_dates.index(prev_date) if prev_date in game_dates else -1
+                        curr_idx = game_dates.index(date) if date in game_dates else -1
 
-            # Don't forget last stint
-            if len(current_stint_dates) >= 2:
-                stints.append(list(current_stint_dates))
+                        if curr_idx == prev_idx + 1:
+                            current_stint_dates.append(date)
+                        else:
+                            if len(current_stint_dates) >= 2:
+                                stints.append(list(current_stint_dates))
+                            current_stint_dates = [date]
 
-            # Save individual game-date rows (only stints of 2+ games)
-            for stint_dates in stints:
-                total_stints += 1
-                for game_date in stint_dates:
-                    db.execute("""
-                        INSERT INTO injury_history 
-                            (player_id, team_id, game_date, was_out, reason)
-                        VALUES (?, ?, ?, 1, ?)
-                        ON CONFLICT DO NOTHING
-                    """, (pid, tid, game_date, "inferred"))
-                    total_entries += 1
+                # Don't forget last stint
+                if len(current_stint_dates) >= 2:
+                    stints.append(list(current_stint_dates))
+
+                # Save individual game-date rows (only stints of 2+ games)
+                for stint_dates in stints:
+                    total_stints += 1
+                    for game_date in stint_dates:
+                        db.execute("""
+                            INSERT INTO injury_history
+                                (player_id, team_id, game_date, was_out, reason)
+                            VALUES (?, ?, ?, 1, ?)
+                            ON CONFLICT DO NOTHING
+                        """, (pid, tid, game_date, "inferred"))
+                        total_entries += 1
 
         if callback:
             callback(f"Processed {abbr}")
