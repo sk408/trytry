@@ -875,11 +875,25 @@ class GamecastView(QWidget):
             self.court.set_teams(home_team_id, away_team_id)
 
         # Feed new plays to court animation (only new ones)
+        home_espn_id = home_comp.get("team", {}).get("id", "")
+        away_espn_id = away_comp.get("team", {}).get("id", "")
         flat_plays = self._flatten_plays(plays)
         is_initial_load = (self._known_play_count == 0)
         new_plays = flat_plays[self._known_play_count:]
-        
+
         for play in new_plays:
+            # Resolve ESPN fields to clean values for court widget
+            espn_tid = str(play.get("team", {}).get("id", ""))
+            if espn_tid == str(home_espn_id):
+                play["team_id"] = home_team_id
+            elif espn_tid == str(away_espn_id):
+                play["team_id"] = away_team_id
+            clock_raw = play.get("clock", {})
+            if isinstance(clock_raw, dict):
+                play["clock"] = clock_raw.get("displayValue", "")
+            per_raw = play.get("period", {})
+            if isinstance(per_raw, dict):
+                play["period"] = per_raw.get("number", 0)
             self.court.add_play(play)
 
         if new_plays and not is_initial_load:
@@ -941,9 +955,6 @@ class GamecastView(QWidget):
             status_state, period, clock_str,
         )
         self.info_panel.update_odds(odds)
-
-        home_espn_id = home_comp.get("team", {}).get("id", "")
-        away_espn_id = away_comp.get("team", {}).get("id", "")
 
         # Calculate Game Flow Stats
         home_drives = 0

@@ -1776,7 +1776,7 @@ function updateCourt(plays) {
     if (!plays) return;
     const newShots = [];
     plays.forEach(function(p) {
-        if (p.coordinate && typeof p.coordinate.x === 'number' && typeof p.coordinate.y === 'number') {
+        if ((p.shootingPlay || p.scoring) && p.coordinate && typeof p.coordinate.x === 'number' && typeof p.coordinate.y === 'number') {
             if (Math.abs(p.coordinate.x) < 200 && Math.abs(p.coordinate.y) < 200) {
                 newShots.push({ x: p.coordinate.x, y: p.coordinate.y, made: !!p.scoring, team_id: p.team_id, text: p.text || '', clock: p.clock || '', period: p.period || '' });
             }
