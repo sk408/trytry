@@ -42,7 +42,7 @@ EXTREME_RANGES = {
     "four_factors_scale":    (10.0, 2500.0),
     "clutch_scale":          (0.0,    3.0),
     "hustle_effort_mult":    (0.0,   10.0),
-    "ff_efg_weight":         (0.0,    8.0),
+    "ff_efg_weight":         (0.0,   15.0),
     "ff_tov_weight":         (0.0,    6.0),
     "ff_oreb_weight":        (0.0,    6.0),
     "ff_fta_weight":         (0.0,    5.0),
