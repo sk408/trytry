@@ -109,6 +109,9 @@ class MainWindow(QMainWindow):
         widget = self.tabs.widget(index)
         if not widget:
             return
+        # Stop any running tab animation before starting a new one
+        if self._tab_fade_anim is not None:
+            self._tab_fade_anim.stop()
         effect = QGraphicsOpacityEffect(widget)
         effect.setOpacity(0.3)
         widget.setGraphicsEffect(effect)

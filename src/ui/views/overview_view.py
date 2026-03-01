@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
 )
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtGui import QColor, QFont
 
 from src.ui.workers import start_overview_worker
@@ -47,8 +47,6 @@ class OverviewView(QWidget):
             "", "Away", "@", "Home", "",
             "Status", "Pred Spread", "Vegas Spread", "Pred Total", "Sharp",
         ])
-        self.table.setIconSize(Qt.QSize(28, 28) if hasattr(Qt, 'QSize') else __import__('PySide6.QtCore', fromlist=['QSize']).QSize(28, 28))
-        from PySide6.QtCore import QSize
         self.table.setIconSize(QSize(28, 28))
 
         header_view = self.table.horizontalHeader()

@@ -1,5 +1,5 @@
 /* NBA Game Prediction System — Dark Theme */
-/* Mobile-first, responsive, 968 lines dark theme */
+/* Responsive: mobile-first with desktop/4K scaling */
 
 :root {
     --bg-dark: #0b0f19;
@@ -20,9 +20,11 @@
     --shadow: rgba(0, 0, 0, 0.5);
     --radius: 4px;
     --radius-lg: 8px;
+    --radius-xl: 12px;
     --transition: 0.2s ease;
     --font-mono: 'Cascadia Code', 'Fira Code', monospace;
     --font-heading: 'Oswald', 'Segoe UI', sans-serif;
+    --container-max: 1400px;
 }
 
 *, *::before, *::after {
@@ -32,7 +34,8 @@
 }
 
 html {
-    font-size: 16px;
+    /* Fluid base: 16px at 768px → 19px at 2560px */
+    font-size: clamp(16px, calc(15px + 0.2vw), 20px);
     scroll-behavior: smooth;
 }
 
@@ -68,7 +71,7 @@ body.oled-mode {
 .nav-brand a {
     color: var(--accent);
     text-decoration: none;
-    font-size: 1.25rem;
+    font-size: clamp(1.25rem, 1.1rem + 0.3vw, 1.6rem);
     font-weight: 700;
     font-family: var(--font-heading);
     text-transform: uppercase;
@@ -98,6 +101,7 @@ body.oled-mode {
     display: flex;
     list-style: none;
     gap: 0.25rem;
+    align-items: center;
 }
 
 .nav-links a {
@@ -108,6 +112,23 @@ body.oled-mode {
     font-size: 0.875rem;
     font-weight: 500;
     transition: var(--transition);
+}
+
+/* Nav link icons (inline SVG) */
+.nav-links a .nav-link-icon {
+    display: none;
+}
+
+.nav-links a .nav-link-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: -3px;
+    margin-right: 6px;
 }
 
 .nav-links a:hover {
@@ -122,7 +143,7 @@ body.oled-mode {
 
 /* ---- Container ---- */
 .container {
-    max-width: 1400px;
+    max-width: var(--container-max);
     margin: 0 auto;
     padding: 1.5rem;
 }
@@ -158,6 +179,7 @@ body.oled-mode {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
     gap: 1rem;
+    max-width: 1200px;
 }
 
 .stat-card {
@@ -170,7 +192,7 @@ body.oled-mode {
 
 .stat-card .stat-value {
     font-family: var(--font-heading);
-    font-size: 2rem;
+    font-size: clamp(2rem, 1.8rem + 0.4vw, 2.75rem);
     font-weight: 700;
     color: var(--accent);
     line-height: 1.2;
@@ -409,13 +431,13 @@ textarea:focus {
 }
 
 .team-side .team-name {
-    font-size: 1.25rem;
+    font-size: clamp(1.25rem, 1.1rem + 0.3vw, 1.75rem);
     font-weight: 700;
     margin-bottom: 0.5rem;
 }
 
 .team-side .team-score {
-    font-size: 2.5rem;
+    font-size: clamp(2.5rem, 2rem + 1vw, 4rem);
     font-weight: 800;
     color: var(--accent);
 }
@@ -428,7 +450,7 @@ textarea:focus {
 }
 
 .prediction-center .spread {
-    font-size: 1.5rem;
+    font-size: clamp(1.5rem, 1.3rem + 0.4vw, 2.2rem);
     font-weight: 700;
     color: var(--success);
 }
@@ -460,7 +482,7 @@ textarea:focus {
 
 /* ---- Section Headers ---- */
 .section-header {
-    font-size: 1.5rem;
+    font-size: clamp(1.5rem, 1.3rem + 0.5vw, 2.2rem);
     font-weight: 700;
     margin-bottom: 1.5rem;
     color: var(--text-primary);
@@ -1070,6 +1092,11 @@ textarea:focus {
     padding: 0 5px;
 }
 
+#notifToggle:hover svg {
+    stroke: var(--accent);
+    transition: stroke 0.2s ease;
+}
+
 /* ---- Accuracy Page ---- */
 .accuracy-grid {
     display: grid;
@@ -1113,7 +1140,10 @@ textarea:focus {
 .team-select .vs-label {
     text-align: center;
     color: var(--text-muted);
-    font-weight: 600;
+    font-family: var(--font-heading);
+    font-size: clamp(1rem, 0.9rem + 0.3vw, 1.5rem);
+    font-weight: 700;
+    letter-spacing: 0.1em;
     padding-bottom: 0.625rem;
 }
 
@@ -1221,8 +1251,8 @@ textarea:focus {
 }
 
 .player-thumb {
-    width: 28px;
-    height: 28px;
+    width: clamp(28px, 2vw, 40px);
+    height: clamp(28px, 2vw, 40px);
     border-radius: 50%;
     object-fit: cover;
 }
@@ -1233,18 +1263,18 @@ textarea:focus {
 }
 
 .team-logo-sm {
-    width: 22px;
-    height: 22px;
+    width: clamp(22px, 1.6vw, 34px);
+    height: clamp(22px, 1.6vw, 34px);
 }
 
 .team-logo-xs {
-    width: 20px;
-    height: 20px;
+    width: clamp(20px, 1.5vw, 32px);
+    height: clamp(20px, 1.5vw, 32px);
 }
 
 .team-logo-pred {
-    width: 48px;
-    height: 48px;
+    width: clamp(48px, 3.5vw, 80px);
+    height: clamp(48px, 3.5vw, 80px);
     margin-bottom: 0.5rem;
 }
 
@@ -1332,6 +1362,19 @@ textarea:focus {
     font-size: 1.25rem;
     line-height: 1;
     transition: transform 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.bottom-nav a .nav-icon svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .bottom-nav a.active {
@@ -1601,8 +1644,8 @@ textarea:focus {
 }
 
 .game-card .game-teams img {
-    width: 28px;
-    height: 28px;
+    width: clamp(28px, 2vw, 40px);
+    height: clamp(28px, 2vw, 40px);
 }
 
 .game-card .game-score {
@@ -1735,13 +1778,13 @@ textarea:focus {
 }
 
 .team-logo-lg {
-    width: 60px;
-    height: 60px;
+    width: clamp(60px, 4vw, 90px);
+    height: clamp(60px, 4vw, 90px);
 }
 
 .team-abbr {
     font-family: var(--font-heading);
-    font-size: 1.5rem;
+    font-size: clamp(1.5rem, 1.2rem + 0.5vw, 2.2rem);
     line-height: 1;
     font-weight: 700;
     color: #e2e8f0;
@@ -1751,7 +1794,7 @@ textarea:focus {
 .team-score {
     color: #ffffff;
     font-family: var(--font-heading);
-    font-size: 4rem;
+    font-size: clamp(3.5rem, 3rem + 1.5vw, 6rem);
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
     text-align: center;
     line-height: 1;
@@ -1766,13 +1809,13 @@ textarea:focus {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    width: 40px;
+    width: clamp(40px, 3vw, 60px);
     margin: 0 5px;
 }
 
 .vs-text {
     font-family: var(--font-heading);
-    font-size: 1.2rem;
+    font-size: clamp(1.2rem, 1rem + 0.3vw, 1.8rem);
     color: rgba(255, 255, 255, 0.4);
     font-weight: 700;
 }
@@ -2192,6 +2235,7 @@ textarea:focus {
 
 .card:hover {
     border-color: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 /* Glass effect for key cards */
@@ -2199,4 +2243,320 @@ textarea:focus {
     background: rgba(20, 30, 45, 0.6);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+}
+
+/* Reduced motion: disable animations and ensure visibility */
+@media (prefers-reduced-motion: reduce) {
+    .stagger-in > *, .scale-in, .fade-in {
+        opacity: 1 !important;
+        animation: none !important;
+    }
+    .live-dot::before, .live-badge::before {
+        animation: none !important;
+    }
+}
+
+/* ==================================================================
+   DESKTOP ENHANCEMENTS (1440px+)
+   ================================================================== */
+@media (min-width: 1440px) {
+    :root {
+        --container-max: 1600px;
+        --radius: 6px;
+        --radius-lg: 10px;
+    }
+
+    .navbar {
+        padding: 1rem 2.5rem;
+    }
+
+    .nav-links {
+        gap: 0.5rem;
+    }
+
+    .nav-links a {
+        padding: 0.6rem 1.1rem;
+        font-size: 0.95rem;
+    }
+
+    /* Show SVG icons next to desktop nav links */
+    .nav-links a .nav-link-icon {
+        display: inline;
+    }
+
+    .container {
+        padding: 2rem;
+    }
+
+    .card {
+        padding: 1.75rem;
+        border-radius: var(--radius-lg);
+    }
+
+    .card-header {
+        font-size: 1.25rem;
+    }
+
+    /* Larger stat cards */
+    .stat-card {
+        padding: 1.75rem;
+    }
+
+    .stat-card .stat-label {
+        font-size: 0.85rem;
+    }
+
+    /* Tables */
+    table {
+        font-size: 0.95rem;
+    }
+
+    thead th {
+        font-size: 0.8rem;
+        padding: 0.875rem 1.25rem;
+    }
+
+    tbody td {
+        padding: 0.75rem 1.25rem;
+    }
+
+    /* Prediction card */
+    .prediction-card {
+        padding: 2rem;
+        gap: 2rem;
+    }
+
+    .prediction-center {
+        padding: 0 1.5rem;
+    }
+
+    /* Score card */
+    .score-card {
+        min-height: 260px;
+        border-radius: var(--radius-xl);
+    }
+
+    .score-display {
+        padding: 50px 24px 24px 24px;
+    }
+
+    /* Game cards */
+    .game-card {
+        padding: 16px 24px;
+        gap: 16px;
+    }
+
+    .game-card .game-teams {
+        font-size: 1rem;
+    }
+
+    .game-card .game-score {
+        font-size: 1.25rem;
+    }
+
+    .game-card .game-status {
+        font-size: 0.85rem;
+    }
+
+    /* Buttons */
+    .btn {
+        padding: 0.625rem 1.25rem;
+        font-size: 0.95rem;
+    }
+
+    .btn-group {
+        gap: 0.75rem;
+    }
+
+    /* Log output */
+    .log-output {
+        font-size: 0.85rem;
+    }
+
+    /* Player thumb in roster tables */
+    .player-thumb {
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Pred summary */
+    .pred-item .pred-value {
+        font-size: 1.5rem;
+    }
+
+    .pred-item .pred-label {
+        font-size: 0.75rem;
+    }
+}
+
+/* ==================================================================
+   ULTRAWIDE / 4K ENHANCEMENTS (2000px+)
+   ================================================================== */
+@media (min-width: 2000px) {
+    :root {
+        --container-max: 1900px;
+        --radius: 8px;
+        --radius-lg: 12px;
+        --radius-xl: 16px;
+    }
+
+    .navbar {
+        padding: 1.1rem 3rem;
+    }
+
+    .nav-links a {
+        padding: 0.75rem 1.25rem;
+        font-size: 1rem;
+    }
+
+    .nav-links a .nav-link-icon svg {
+        width: 20px;
+        height: 20px;
+    }
+
+    .container {
+        padding: 2.5rem;
+    }
+
+    .card {
+        padding: 2rem;
+    }
+
+    .card-header {
+        font-size: 1.35rem;
+    }
+
+    /* Stat cards */
+    .stat-card {
+        padding: 2rem;
+    }
+
+    /* Tables */
+    table {
+        font-size: 1rem;
+    }
+
+    thead th {
+        font-size: 0.875rem;
+        padding: 1rem 1.5rem;
+    }
+
+    tbody td {
+        padding: 0.875rem 1.5rem;
+    }
+
+    /* Score card */
+    .score-card {
+        min-height: 320px;
+    }
+
+    .score-display {
+        padding: 60px 32px 28px 32px;
+    }
+
+    .score-status-banner {
+        padding: 6px 28px;
+        font-size: 0.9rem;
+        min-width: 180px;
+    }
+
+    .quarter-scores-inner {
+        font-size: 0.95rem;
+        padding: 8px 16px;
+    }
+
+    /* Game cards */
+    .game-card {
+        padding: 18px 28px;
+    }
+
+    .game-card .game-teams {
+        font-size: 1.05rem;
+    }
+
+    .game-card .game-score {
+        font-size: 1.35rem;
+        min-width: 80px;
+    }
+
+    /* Prediction */
+    .prediction-card {
+        padding: 2.5rem;
+        gap: 2.5rem;
+    }
+
+    /* Win probability */
+    .win-prob-bar {
+        height: 14px;
+        border-radius: 7px;
+    }
+
+    .win-prob-labels {
+        font-size: 0.85rem;
+    }
+
+    /* Sub overlay */
+    .sub-overlay {
+        gap: 35px;
+        padding: 28px 40px;
+    }
+
+    .sub-player {
+        width: 120px;
+    }
+
+    .sub-photo {
+        width: 100px;
+        height: 100px;
+    }
+
+    .sub-name {
+        font-size: 15px;
+    }
+
+    /* Player thumb */
+    .player-thumb {
+        width: 40px;
+        height: 40px;
+    }
+
+    /* Odds grid */
+    .odds-grid {
+        gap: 12px;
+    }
+
+    /* Pred summary */
+    .pred-item {
+        padding: 12px;
+    }
+
+    .pred-item .pred-value {
+        font-size: 1.6rem;
+    }
+
+    .pred-item .pred-label {
+        font-size: 0.8rem;
+    }
+}
+
+/* ==================================================================
+   FULL 4K (2560px+)
+   ================================================================== */
+@media (min-width: 2560px) {
+    :root {
+        --container-max: 2200px;
+    }
+
+    .navbar {
+        padding: 1.25rem 4rem;
+    }
+
+    .nav-links a {
+        padding: 0.75rem 1.5rem;
+        font-size: 1.05rem;
+    }
+
+    .container {
+        padding: 3rem;
+    }
 }

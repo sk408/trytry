@@ -85,7 +85,8 @@ class DashboardView(QWidget):
         header.setProperty("class", "header")
         layout.addWidget(header)
 
-        # Stat cards
+        # Stat cards — reset accent index so colors are consistent on re-creation
+        StatCard._idx = 0
         cards_layout = QGridLayout()
         self.teams_card = StatCard("Teams")
         self.players_card = StatCard("Players")

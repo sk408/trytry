@@ -56,13 +56,12 @@ class ScoreboardWidget(QWidget):
         self._away_flash_alpha = 0.0
         self._home_flash_alpha = 0.0
 
-        # Pulsing live dot
+        # Pulsing live dot — timer starts on demand when game is live
         self._live_pulse_alpha = 1.0
         self._live_pulse_growing = False
         self._live_pulse_timer = QTimer(self)
-        self._live_pulse_timer.setInterval(50)
+        self._live_pulse_timer.setInterval(80)
         self._live_pulse_timer.timeout.connect(self._on_live_pulse)
-        self._live_pulse_timer.start()
 
         # Animations
         self._anim_away = QVariantAnimation(self)
@@ -302,6 +301,11 @@ class ScoreboardWidget(QWidget):
         self._home_quarters = home_quarters or []
         self._status_text = status_text
         self._status_state = status_state
+        # Start/stop pulse timer based on live state
+        if status_state == "in" and not self._live_pulse_timer.isActive():
+            self._live_pulse_timer.start()
+        elif status_state != "in" and self._live_pulse_timer.isActive():
+            self._live_pulse_timer.stop()
         self._clock = clock
         self._period = period
         self._away_timeouts = away_timeouts

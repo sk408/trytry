@@ -28,15 +28,15 @@
             <a href="/dashboard">NBA Predictor</a>
         </div>
         <ul class="nav-links" id="navLinks">
-            <li><a href="/dashboard" {% if active == 'dashboard' %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
-            <li><a href="/gamecast" {% if active == 'gamecast' %}class="active" aria-current="page"{% endif %}>Gamecast</a></li>
-            <li><a href="/players" {% if active == 'players' %}class="active" aria-current="page"{% endif %}>Players</a></li>
-            <li><a href="/matchups" {% if active == 'matchups' %}class="active" aria-current="page"{% endif %}>Matchups</a></li>
-            <li><a href="/schedule" {% if active == 'schedule' %}class="active" aria-current="page"{% endif %}>Schedule</a></li>
+            <li><a href="/dashboard" {% if active == 'dashboard' %}class="active" aria-current="page"{% endif %}><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>Dashboard</a></li>
+            <li><a href="/gamecast" {% if active == 'gamecast' %}class="active" aria-current="page"{% endif %}><span class="nav-link-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/><line x1="12" y1="7" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="12"/></svg></span>Gamecast</a></li>
+            <li><a href="/players" {% if active == 'players' %}class="active" aria-current="page"{% endif %}><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Players</a></li>
+            <li><a href="/matchups" {% if active == 'matchups' %}class="active" aria-current="page"{% endif %}><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>Matchups</a></li>
+            <li><a href="/schedule" {% if active == 'schedule' %}class="active" aria-current="page"{% endif %}><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>Schedule</a></li>
             <li style="position:relative;">
                 <button onclick="toggleNotifications(event)" aria-label="Notifications" aria-expanded="false" id="notifToggle"
-                        style="background:none;border:none;cursor:pointer;padding:0.5rem 0.75rem;position:relative;font-size:1rem;">
-                    <span aria-hidden="true">&#x1F514;</span>
+                        style="background:none;border:none;cursor:pointer;padding:0.5rem 0.75rem;position:relative;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                     <span class="sr-only">Notifications</span>
                     <span id="notifBadge" class="notif-badge" style="display:none;position:absolute;top:0;right:-4px;" aria-live="polite">0</span>
                 </button>
@@ -62,24 +62,24 @@
     <nav class="bottom-nav" aria-label="Mobile navigation">
         <div class="bottom-nav-inner">
             <a href="/dashboard" {% if active == 'dashboard' %}class="active"{% endif %}>
-                <span class="nav-icon">&#x1F4CA;</span>
+                <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
                 <span>Dashboard</span>
             </a>
             <a href="/gamecast" {% if active == 'gamecast' %}class="active"{% endif %}>
-                <span class="nav-icon">&#x1F3C0;</span>
+                <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/><line x1="12" y1="7" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="12"/></svg></span>
                 <span>Live</span>
                 <span class="live-dot" id="mobileliveDot" style="display:none;"></span>
             </a>
             <a href="/matchups" {% if active == 'matchups' %}class="active"{% endif %}>
-                <span class="nav-icon">&#x2694;&#xFE0F;</span>
+                <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg></span>
                 <span>Matchups</span>
             </a>
             <a href="/players" {% if active == 'players' %}class="active"{% endif %}>
-                <span class="nav-icon">&#x1F464;</span>
+                <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
                 <span>Players</span>
             </a>
             <a href="/schedule" {% if active == 'schedule' %}class="active"{% endif %}>
-                <span class="nav-icon">&#x1F4C5;</span>
+                <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
                 <span>Schedule</span>
             </a>
         </div>

@@ -74,6 +74,10 @@ class PredictionCard(QFrame):
 
     def animate_in(self, delay_ms: int = 0):
         """Fade in with optional delay for stagger effect."""
+        # Stop any running animation first
+        if self._opacity_effect is not None:
+            self.setGraphicsEffect(None)
+            self._opacity_effect = None
         self._opacity_effect = QGraphicsOpacityEffect(self)
         self._opacity_effect.setOpacity(0.0)
         self.setGraphicsEffect(self._opacity_effect)
