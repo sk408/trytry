@@ -225,10 +225,10 @@ OPTIMIZER_RANGES = {
     "four_factors_scale": (50.0, 2000.0),    # sensitivity: optimal 1100-1500, widened ceiling
     "clutch_scale": (0.01, 2.0),             # sensitivity: optimal ~0.13 (in range)
     "hustle_effort_mult": (0.0, 8.0),        # sensitivity: optimal ~4.8, was capped at 5.0, widened
-    "ff_efg_weight": (0.0, 12.0),            # CD finds ~7.7 with 3-season data, was capped at 6.0
-    "ff_tov_weight": (0.0, 4.0),             # sensitivity: optimal ~2.6, was capped at 2.0
-    "ff_oreb_weight": (0.0, 4.0),            # sensitivity: optimal ~2.0, headroom added
-    "ff_fta_weight": (0.0, 4.0),             # sensitivity: optimal ~0.84-3.1, was capped at 2.0
+    "ff_efg_weight": (0.0, 15.0),            # widened for 3-season optimizer
+    "ff_tov_weight": (0.0, 15.0),            # widened for 3-season optimizer
+    "ff_oreb_weight": (0.0, 15.0),           # widened for 3-season optimizer
+    "ff_fta_weight": (0.0, 15.0),            # widened for 3-season optimizer
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
     "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
