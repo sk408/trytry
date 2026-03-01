@@ -548,8 +548,8 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
 
         try:
             if len(study.trials) > 0 and callback:
-                import optuna.importance
-                importances = optuna.importance.get_param_importances(study)
+                from optuna.importance import get_param_importances, MeanDecreaseImpurityImportanceEvaluator
+                importances = get_param_importances(study, evaluator=MeanDecreaseImpurityImportanceEvaluator())
                 top_params = sorted(importances.items(), key=lambda x: x[1], reverse=True)[:5]
                 param_str = ", ".join([f"{k}: {v:.2f}" for k, v in top_params])
                 callback(f"Top 5 impact parameters: {param_str}")

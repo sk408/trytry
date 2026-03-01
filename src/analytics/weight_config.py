@@ -231,7 +231,7 @@ OPTIMIZER_RANGES = {
     "ff_fta_weight": (0.0, 4.0),             # sensitivity: optimal ~0.84-3.1, was capped at 2.0
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
-    "sharp_money_weight": (0.0, 10.0),       # sensitivity: optimal ~7.9 for ML ROI, was capped at 5.0
+    "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
     "ats_edge_threshold": (0.5, 6.0),        # sensitivity: optimal 0.5, lowered floor
 }
 

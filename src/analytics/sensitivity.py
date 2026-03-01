@@ -33,48 +33,30 @@ _OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sensi
 # Default extreme sweep ranges per parameter type
 # These intentionally go WAY beyond optimizer bounds to find hidden value
 EXTREME_RANGES = {
-    # Signs locked to match basketball logic — no sign flips allowed.
-    # spread_clamp is fixed at 30 — not tunable (prevents compression cheating).
-    "def_factor_dampening":  (0.1,    5.0),
-    "turnover_margin_mult":  (0.0,   10.0),
-    "rebound_diff_mult":     (0.0,   10.0),
-    "rating_matchup_mult":   (0.0,   20.0),
-    "four_factors_scale":    (10.0, 1500.0),
-    "clutch_scale":          (0.0,    5.0),
-    "hustle_effort_mult":    (0.0,    5.0),
-    "pace_mult":             (0.0,   10.0),
-    "fatigue_total_mult":    (0.0,    5.0),
-    "espn_model_weight":     (0.0,    1.0),
-    "espn_weight":           (0.0,    1.0),
-    "ml_ensemble_weight":    (0.0,    5.0),
-    "ml_disagree_damp":      (0.0,    3.0),
-    "ff_efg_weight":         (0.0,    5.0),
-    "ff_tov_weight":         (0.0,    8.0),
-    "ff_oreb_weight":        (0.0,    5.0),
+    # Aligned with OPTIMIZER_RANGES but wider for exploration.
+    # Dead weight params removed (ESPN, ML ensemble, fatigue subs, pace_mult, oreb_mult).
+    "def_factor_dampening":  (0.1,    8.0),
+    "turnover_margin_mult":  (0.0,   12.0),
+    "rebound_diff_mult":     (0.0,    5.0),
+    "rating_matchup_mult":   (0.0,    5.0),
+    "four_factors_scale":    (10.0, 2500.0),
+    "clutch_scale":          (0.0,    3.0),
+    "hustle_effort_mult":    (0.0,   10.0),
+    "ff_efg_weight":         (0.0,    8.0),
+    "ff_tov_weight":         (0.0,    6.0),
+    "ff_oreb_weight":        (0.0,    6.0),
     "ff_fta_weight":         (0.0,    5.0),
-    "fatigue_b2b":           (0.0,   15.0),
-    "fatigue_3in4":          (0.0,   10.0),
-    "fatigue_4in6":          (0.0,   10.0),
-    "pace_baseline":         (85.0, 110.0),
-    "steals_penalty":        (0.0,    3.0),
-    "blocks_penalty":        (0.0,    3.0),
-    "oreb_mult":             (0.0,    5.0),
-    "sharp_money_weight":    (0.0,   10.0),
+    "steals_penalty":        (0.0,    5.0),
+    "blocks_penalty":        (0.0,    5.0),
+    "sharp_money_weight":    (0.0,   12.0),
     "ats_edge_threshold":    (0.5,    8.0),
+    "fatigue_total_mult":    (0.0,    3.0),
 }
 
 # Parameters NOT used by VectorizedGames.evaluate()
-# These are only used in the full predict_matchup() pipeline or during precomputation.
-# Including them in vectorized sweeps produces meaningless noise.
-VECTORIZED_EXCLUDED = {
-    "ml_ensemble_weight",   # ML ensemble blend — only in predict_matchup()
-    "ml_disagree_damp",     # ML disagreement damping — only in predict_matchup()
-    "espn_model_weight",    # ESPN model blend — only in predict_matchup()
-    "espn_weight",          # ESPN BPI weight — only in predict_matchup()
-    "fatigue_b2b",          # Fatigue sub-penalty — baked into precomputed data
-    "fatigue_3in4",         # Fatigue sub-penalty — baked into precomputed data
-    "fatigue_4in6",         # Fatigue sub-penalty — baked into precomputed data
-}
+# Dead weight params (ESPN, ML ensemble, fatigue subs, pace_mult, oreb_mult)
+# are no longer in EXTREME_RANGES and don't need exclusion.
+VECTORIZED_EXCLUDED = set()
 
 # Parameters that are sweepable (float fields on WeightConfig)
 SWEEPABLE_PARAMS = [f.name for f in fields(WeightConfig) if f.type is float or f.type == "float"]
@@ -96,7 +78,7 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
                     steps: int = 200, games: Optional[List[PrecomputedGame]] = None,
                     vg: Optional[VectorizedGames] = None,
                     callback: Optional[Callable] = None,
-                    target: str = "ml") -> List[Dict]:
+                    target: str = "value") -> List[Dict]:
     """Sweep a single parameter through [min_val, max_val] in `steps` increments.
 
     Args:
@@ -147,7 +129,7 @@ def sweep_parameter(param_name: str, min_val: float, max_val: float,
 
 def sweep_all_parameters(steps: int = 100,
                          callback: Optional[Callable] = None,
-                         target: str = "ml") -> Dict[str, List[Dict]]:
+                         target: str = "value") -> Dict[str, List[Dict]]:
     """Sweep every sweepable parameter and return results keyed by param name.
 
     Args:
@@ -246,7 +228,7 @@ def format_ascii_chart(param_name: str, results: List[Dict],
 
 
 def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
-                      target: str = "ml") -> str:
+                      target: str = "value") -> str:
     """Run sensitivity sweep on all parameters, export CSVs, print summary.
 
     Args:
@@ -265,10 +247,10 @@ def run_full_analysis(steps: int = 100, callback: Optional[Callable] = None,
     for param_name, results in all_results.items():
         export_sweep_csv(param_name, results)
 
-    # Build summary
+    # Build summary — use actual DB weights, not dataclass defaults
     summary_lines = ["=" * 80, "SENSITIVITY ANALYSIS SUMMARY", "=" * 80, ""]
 
-    base_w = WeightConfig()
+    base_w = get_weight_config()
     for param_name in sorted(all_results.keys()):
         results = all_results[param_name]
         current_val = getattr(base_w, param_name)
@@ -514,117 +496,219 @@ def coordinate_descent(params: Optional[List[str]] = None,
                        max_rounds: int = 10,
                        convergence_threshold: float = 0.005,
                        callback: Optional[Callable] = None,
-                       target: str = "ml") -> Dict[str, Any]:
+                       target: str = "value",
+                       save: bool = True) -> Dict[str, Any]:
     """Iteratively sweep each parameter and lock in the best value.
 
-    This is far more effective than individual sweeps because it captures
-    parameter interactions: after changing param A, the optimal for param B
-    may shift. Repeats until convergence or max_rounds.
+    Uses the same walk-forward split as the Optuna optimizer so both methods
+    are evaluated fairly on identical held-out validation data.
+
+    Sweeps are performed on the training set.  After each round the full
+    config is validated on the hold-out set.  If a round hurts validation,
+    its changes are rolled back.  Final weights are only saved when they
+    improve validation loss vs the starting baseline.
 
     Args:
         params: List of parameter names to optimize. Defaults to EXTREME_RANGES keys.
         steps: Sweep steps per parameter per round.
         max_rounds: Maximum descent rounds before stopping.
-        convergence_threshold: Stop when round-over-round loss improvement < this.
+        convergence_threshold: Stop when round-over-round val improvement < this.
         callback: Progress callback.
-        target: Optimization target — "ats", "roi", or "ml".
+        target: Optimization target — "value", "ml", "ats", or "roi".
+        save: If True, save improved weights to DB.
 
     Returns:
         Dict with 'weights' (final WeightConfig dict), 'history' (per-round metrics),
-        'changes' (param -> old, new), 'rounds' (count), 'final_loss' (best loss).
+        'changes' (param -> old, new), 'rounds' (count), 'final_loss' (best val loss).
     """
+    from src.analytics.weight_optimizer import WALK_FORWARD_SPLIT
+
     if params is None:
         params = sorted(p for p in EXTREME_RANGES.keys() if p not in VECTORIZED_EXCLUDED)
 
     games = _load_games(callback)
-    vg = VectorizedGames(games)
+
+    # ── Walk-forward split (identical to optimizer) ──
+    sorted_games = sorted(games, key=lambda g: g.game_date)
+    split_idx = int(len(sorted_games) * WALK_FORWARD_SPLIT)
+    train_games = sorted_games[:split_idx]
+    val_games = sorted_games[split_idx:]
+
+    vg_train = VectorizedGames(train_games)
+    vg_val = VectorizedGames(val_games)
+
+    if callback:
+        callback(f"Walk-forward: {len(train_games)} train "
+                 f"({train_games[0].game_date} to {train_games[-1].game_date}), "
+                 f"{len(val_games)} validation "
+                 f"({val_games[0].game_date} to {val_games[-1].game_date})")
 
     # Start from current weights
     w = get_weight_config()
     w_dict = w.to_dict()
-    initial_metrics = vg.evaluate(w, target=target)
-    initial_loss = initial_metrics["loss"]
+    initial_train = vg_train.evaluate(w, target=target)
+    initial_val = vg_val.evaluate(w, target=target)
+
     if callback:
         callback(f"Starting coordinate descent: {len(params)} params, {max_rounds} max rounds, target={target}")
-        callback(f"Initial loss: {initial_loss:.4f}, ATS={initial_metrics['ats_rate']:.1f}%, "
-                 f"ATS ROI={initial_metrics['ats_roi']:.1f}%, ML ROI={initial_metrics['ml_roi']:.1f}%")
+        callback(f"Baseline (train): loss={initial_train['loss']:.4f}, "
+                 f"DogHit={initial_train['dog_hit_rate']:.1f}%, "
+                 f"DogROI={initial_train['dog_roi']:+.1f}%, "
+                 f"ML Win={initial_train['ml_win_rate']:.1f}%")
+        callback(f"Baseline (valid): loss={initial_val['loss']:.4f}, "
+                 f"DogHit={initial_val['dog_hit_rate']:.1f}%, "
+                 f"DogROI={initial_val['dog_roi']:+.1f}%, "
+                 f"ML Win={initial_val['ml_win_rate']:.1f}%")
 
+    best_val_loss = initial_val["loss"]
+    best_w_dict = w_dict.copy()
     history = []
     all_changes = {}
 
     for round_num in range(1, max_rounds + 1):
-        round_start_loss = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)["loss"]
-        improved_count = 0
+        round_start_val_loss = best_val_loss
+        accepted_count = 0
+        rejected_count = 0
 
+        # Sweep each param on TRAINING set, validate per-param
         for pi, param_name in enumerate(params):
             lo, hi = EXTREME_RANGES.get(param_name, (-10, 10))
             values = np.linspace(lo, hi, steps)
 
-            best_loss = float("inf")
-            best_val = w_dict[param_name]
+            # Find best value on training set
+            best_train_loss = float("inf")
+            best_param_val = w_dict[param_name]
 
             for val in values:
                 test_dict = w_dict.copy()
                 test_dict[param_name] = float(val)
                 test_w = WeightConfig.from_dict(test_dict)
-                metrics = vg.evaluate(test_w, target=target)
-                if metrics["loss"] < best_loss:
-                    best_loss = metrics["loss"]
-                    best_val = float(val)
+                metrics = vg_train.evaluate(test_w, target=target)
+                if metrics["loss"] < best_train_loss:
+                    best_train_loss = metrics["loss"]
+                    best_param_val = float(val)
 
             old_val = w_dict[param_name]
-            if abs(best_val - old_val) > 0.0001:
-                w_dict[param_name] = best_val
-                improved_count += 1
+            if abs(best_param_val - old_val) < 0.0001:
+                continue
+
+            # Per-parameter validation gate
+            test_dict = w_dict.copy()
+            test_dict[param_name] = best_param_val
+            test_val = vg_val.evaluate(WeightConfig.from_dict(test_dict), target=target)
+
+            if test_val["loss"] < best_val_loss:
+                # This param change improves validation — keep it
+                w_dict[param_name] = best_param_val
+                best_val_loss = test_val["loss"]
+                best_w_dict = w_dict.copy()
+                accepted_count += 1
                 if param_name not in all_changes:
                     all_changes[param_name] = {"old": old_val}
-                all_changes[param_name]["new"] = best_val
+                all_changes[param_name]["new"] = best_param_val
+                if callback:
+                    callback(f"    {param_name}: {old_val:.4f} -> {best_param_val:.4f} "
+                             f"(val loss {test_val['loss']:.4f}) KEPT")
+            else:
+                # This param change hurts validation — revert just this param
+                rejected_count += 1
 
             if callback and (pi + 1) % 5 == 0:
-                callback(f"  Round {round_num}: {pi + 1}/{len(params)} params swept")
+                callback(f"  Round {round_num}: {pi + 1}/{len(params)} params "
+                         f"({accepted_count} kept, {rejected_count} rejected)")
 
-        round_end_metrics = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)
-        round_end_loss = round_end_metrics["loss"]
-        improvement = round_start_loss - round_end_loss
+        # Round summary
+        round_train = vg_train.evaluate(WeightConfig.from_dict(w_dict), target=target)
+        round_val = vg_val.evaluate(WeightConfig.from_dict(w_dict), target=target)
+        val_improvement = round_start_val_loss - best_val_loss
+
+        if callback:
+            callback(f"  Round {round_num} complete: {accepted_count} kept, "
+                     f"{rejected_count} rejected, val improvement={val_improvement:+.4f}")
+            callback(f"    Train:  DogHit={round_train['dog_hit_rate']:.1f}%, "
+                     f"DogROI={round_train['dog_roi']:+.1f}%, "
+                     f"ML Win={round_train['ml_win_rate']:.1f}%, "
+                     f"loss={round_train['loss']:.4f}")
+            callback(f"    Valid:  DogHit={round_val['dog_hit_rate']:.1f}%, "
+                     f"DogROI={round_val['dog_roi']:+.1f}%, "
+                     f"ML Win={round_val['ml_win_rate']:.1f}%, "
+                     f"loss={round_val['loss']:.4f}")
 
         history.append({
             "round": round_num,
-            "loss": round_end_loss,
-            "spread_mae": round_end_metrics["spread_mae"],
-            "winner_pct": round_end_metrics["winner_pct"],
-            "ats_rate": round_end_metrics["ats_rate"],
-            "ats_roi": round_end_metrics["ats_roi"],
-            "ml_win_rate": round_end_metrics["ml_win_rate"],
-            "ml_roi": round_end_metrics["ml_roi"],
-            "improvement": improvement,
-            "params_changed": improved_count,
+            "train_loss": round_train["loss"],
+            "val_loss": round_val["loss"],
+            "best_val_loss": best_val_loss,
+            "spread_mae": round_val["spread_mae"],
+            "winner_pct": round_val["winner_pct"],
+            "ats_rate": round_val["ats_rate"],
+            "ats_roi": round_val["ats_roi"],
+            "ml_win_rate": round_val["ml_win_rate"],
+            "ml_roi": round_val["ml_roi"],
+            "dog_hit_rate": round_val["dog_hit_rate"],
+            "dog_roi": round_val["dog_roi"],
+            "accepted": accepted_count,
+            "rejected": rejected_count,
         })
 
-        if callback:
-            callback(f"  Round {round_num} complete: loss={round_end_loss:.4f} "
-                     f"(delta={improvement:+.4f}), {improved_count} params moved, "
-                     f"MAE={round_end_metrics['spread_mae']:.2f}, ATS={round_end_metrics['ats_rate']:.1f}%, "
-                     f"ATS ROI={round_end_metrics['ats_roi']:.1f}%, ML ROI={round_end_metrics['ml_roi']:.1f}%")
-
-        if improvement < convergence_threshold:
+        # Convergence: no params accepted this round, or tiny val improvement
+        if accepted_count == 0:
             if callback:
-                callback(f"Converged after {round_num} rounds (improvement {improvement:.6f} < {convergence_threshold})")
+                callback(f"Converged after {round_num} rounds (no params improved validation)")
+            break
+        if round_num >= 2 and val_improvement < convergence_threshold:
+            if callback:
+                callback(f"Converged after {round_num} rounds "
+                         f"(val improvement {val_improvement:.6f} < {convergence_threshold})")
             break
 
-    final_metrics = vg.evaluate(WeightConfig.from_dict(w_dict), target=target)
+    # Use the best validated weights
+    w_dict = best_w_dict
+    final_train = vg_train.evaluate(WeightConfig.from_dict(w_dict), target=target)
+    final_val = vg_val.evaluate(WeightConfig.from_dict(w_dict), target=target)
+
+    if callback:
+        callback(f"-- Coordinate descent results --")
+        callback(f"  Train:  DogHit={final_train['dog_hit_rate']:.1f}%, "
+                 f"DogROI={final_train['dog_roi']:+.1f}%, "
+                 f"ML Win={final_train['ml_win_rate']:.1f}%, "
+                 f"Loss={final_train['loss']:.3f}")
+        callback(f"  Valid:  DogHit={final_val['dog_hit_rate']:.1f}%, "
+                 f"DogROI={final_val['dog_roi']:+.1f}%, "
+                 f"ML Win={final_val['ml_win_rate']:.1f}%, "
+                 f"Loss={final_val['loss']:.3f}")
+
+    # Save decision: must improve validation vs initial baseline
+    improved = final_val["loss"] < initial_val["loss"]
+    if save and improved:
+        new_w = WeightConfig.from_dict(w_dict)
+        save_weight_config(new_w)
+        invalidate_weight_cache()
+        if callback:
+            callback(f"Saved CD weights (val loss {initial_val['loss']:.3f} -> "
+                     f"{final_val['loss']:.3f})")
+    elif save:
+        if callback:
+            callback("Validation did not improve — keeping current weights")
 
     return {
         "weights": w_dict,
         "history": history,
         "changes": all_changes,
         "rounds": len(history),
-        "initial_loss": initial_loss,
-        "final_loss": final_metrics["loss"],
-        "final_mae": final_metrics["spread_mae"],
-        "final_winner_pct": final_metrics["winner_pct"],
-        "final_ats_rate": final_metrics["ats_rate"],
-        "final_ats_roi": final_metrics["ats_roi"],
-        "final_ml_roi": final_metrics["ml_roi"],
+        "initial_train_loss": initial_train["loss"],
+        "initial_val_loss": initial_val["loss"],
+        "final_train_loss": final_train["loss"],
+        "final_val_loss": final_val["loss"],
+        "final_loss": final_val["loss"],
+        "final_mae": final_val["spread_mae"],
+        "final_winner_pct": final_val["winner_pct"],
+        "final_ats_rate": final_val["ats_rate"],
+        "final_ats_roi": final_val["ats_roi"],
+        "final_ml_roi": final_val["ml_roi"],
+        "final_dog_hit_rate": final_val["dog_hit_rate"],
+        "final_dog_roi": final_val["dog_roi"],
+        "improved": improved,
     }
 
 
@@ -1159,9 +1243,9 @@ def main():
                         help="Run 3-parameter triplet interaction analysis")
     parser.add_argument("--anchor", type=str, default="ff_tov_weight",
                         help="Anchor parameter for triplet analysis (default: ff_tov_weight)")
-    parser.add_argument("--target", type=str, default="ml",
+    parser.add_argument("--target", type=str, default="value",
                         choices=["ml", "value", "ats", "roi"],
-                        help="Optimization target for loss calculation (default: ml)")
+                        help="Optimization target for loss calculation (default: value)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)

@@ -56,8 +56,8 @@ class SensitivityView(QWidget):
 
         ctrl.addWidget(QLabel("Target:"))
         self.target_combo = QComboBox()
-        self.target_combo.addItem("Moneyline", "ml")
         self.target_combo.addItem("Value (underdog)", "value")
+        self.target_combo.addItem("Moneyline", "ml")
         self.target_combo.addItem("ATS (spread betting)", "ats")
         self.target_combo.addItem("ROI (max return)", "roi")
         ctrl.addWidget(self.target_combo)
@@ -101,9 +101,10 @@ class SensitivityView(QWidget):
 
         cd_ctrl.addWidget(QLabel("Target:"))
         self.cd_target_combo = QComboBox()
+        self.cd_target_combo.addItem("Value (underdog)", "value")
+        self.cd_target_combo.addItem("Moneyline", "ml")
         self.cd_target_combo.addItem("ATS (spread betting)", "ats")
         self.cd_target_combo.addItem("ROI (max return)", "roi")
-        self.cd_target_combo.addItem("Moneyline", "ml")
         cd_ctrl.addWidget(self.cd_target_combo)
 
         cd_ctrl.addWidget(QLabel("Steps:"))
@@ -121,10 +122,10 @@ class SensitivityView(QWidget):
 
         cd_ctrl.addWidget(QLabel("Convergence:"))
         self.cd_conv_spin = QDoubleSpinBox()
+        self.cd_conv_spin.setDecimals(4)
+        self.cd_conv_spin.setSingleStep(0.0005)
         self.cd_conv_spin.setRange(0.0001, 1.0)
         self.cd_conv_spin.setValue(0.005)
-        self.cd_conv_spin.setDecimals(4)
-        self.cd_conv_spin.setSingleStep(0.001)
         cd_ctrl.addWidget(self.cd_conv_spin)
 
         self.cd_apply_check = QCheckBox("Apply results")

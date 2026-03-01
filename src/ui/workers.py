@@ -30,7 +30,12 @@ class BaseWorker(QObject):
 
     def isRunning(self) -> bool:
         if hasattr(self, '_thread_ref') and self._thread_ref is not None:
-            return self._thread_ref.isRunning()
+            try:
+                return self._thread_ref.isRunning()
+            except RuntimeError:
+                # C++ QThread already deleted via deleteLater
+                self._thread_ref = None
+                return False
         return False
 
     def _check_stop(self) -> bool:
@@ -179,14 +184,14 @@ def start_odds_sync_worker(on_progress=None, on_done=None, force: bool = False):
 def start_nuke_resync_worker(on_progress=None, on_done=None):
     return _start_worker(NukeResyncWorker(), on_progress, on_done)
 
-def start_sensitivity_worker(param: str, steps: int = 100, target: str = "ml",
+def start_sensitivity_worker(param: str, steps: int = 100, target: str = "value",
                              on_progress=None, on_done=None):
     return _start_worker(SensitivityWorker(param, steps, target), on_progress, on_done)
 
 
 def start_coordinate_descent_worker(steps: int = 100, max_rounds: int = 10,
                                     convergence: float = 0.005,
-                                    target: str = "ml",
+                                    target: str = "value",
                                     apply_results: bool = True,
                                     on_progress=None, on_done=None):
     return _start_worker(
@@ -600,7 +605,7 @@ class SensitivityWorker(BaseWorker):
                     self.progress.emit(f"\nSaved CSV: {path}\n")
 
                     # Chart the target-specific ROI metric
-                    roi_metric = "ml_roi" if self.target == "ml" else "ats_roi"
+                    roi_metric = "dog_roi" if self.target in ("value", "ml") else "ats_roi"
                     chart1 = format_ascii_chart(self.param, results, metric=roi_metric)
                     chart2 = format_ascii_chart(self.param, results, metric="loss")
                     self.progress.emit(chart1 + "\n\n" + chart2)
@@ -625,9 +630,7 @@ class CoordinateDescentWorker(BaseWorker):
     def run(self):
         try:
             from src.analytics.sensitivity import coordinate_descent
-            from src.analytics.weight_config import (
-                WeightConfig, save_weight_config, invalidate_weight_cache, save_snapshot,
-            )
+            from src.analytics.weight_config import save_snapshot
             from src.database.db import thread_local_db
 
             cb = lambda msg: self.progress.emit(msg)
@@ -639,28 +642,22 @@ class CoordinateDescentWorker(BaseWorker):
                     convergence_threshold=self.convergence,
                     callback=cb,
                     target=self.target,
+                    save=self.apply_results,
                 )
 
-                if self.apply_results and result.get("final_loss", float("inf")) < result.get("initial_loss", 0):
-                    w = WeightConfig.from_dict(result["weights"])
-                    save_weight_config(w)
-                    invalidate_weight_cache()
+                if result.get("improved") and self.apply_results:
                     save_snapshot(
                         f"coord_descent_{self.target}",
                         notes=f"Coordinate descent ({self.target}): "
-                              f"loss {result['initial_loss']:.3f} -> {result['final_loss']:.3f}",
+                              f"val loss {result['initial_val_loss']:.3f} -> {result['final_val_loss']:.3f}",
                         metrics={
-                            "ats_rate": result.get("final_ats_rate", 0),
-                            "ats_roi": result.get("final_ats_roi", 0),
+                            "dog_roi": result.get("final_dog_roi", 0),
+                            "dog_hit_rate": result.get("final_dog_hit_rate", 0),
                             "ml_roi": result.get("final_ml_roi", 0),
                         },
                     )
-                    self.progress.emit(f"Weights saved & snapshot created. "
-                                       f"Loss: {result['initial_loss']:.3f} -> {result['final_loss']:.3f}")
-                elif self.apply_results:
-                    self.progress.emit("No improvement found — weights unchanged.")
-                else:
-                    self.progress.emit(f"Dry run complete. Best loss: {result['final_loss']:.3f}")
+                elif not self.apply_results:
+                    self.progress.emit(f"Dry run complete. Best val loss: {result['final_val_loss']:.3f}")
 
                 # Report top parameter changes
                 changes = result.get("changes", {})
