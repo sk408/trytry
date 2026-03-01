@@ -32,9 +32,11 @@ _fatigue_cache_lock = threading.Lock()
 # team abbreviation singleton
 _team_abbr_cache: Optional[Dict[int, str]] = None
 _team_name_cache: Optional[Dict[int, str]] = None
+_team_cache_lock = threading.Lock()
 
 # home court advantage cache: team_id → float
 _hca_cache: Dict[int, float] = {}
+_hca_cache_lock = threading.Lock()
 
 
 def invalidate_stats_caches():
@@ -47,38 +49,42 @@ def invalidate_stats_caches():
         _streak_cache.clear()
     with _fatigue_cache_lock:
         _fatigue_cache.clear()
-    _hca_cache.clear()
-    _team_abbr_cache = None
-    _team_name_cache = None
+    with _hca_cache_lock:
+        _hca_cache.clear()
+    with _team_cache_lock:
+        _team_abbr_cache = None
+        _team_name_cache = None
     logger.info("All stats engine caches invalidated")
 
 
 def get_team_abbreviations() -> Dict[int, str]:
     """Return {team_id: abbreviation} singleton (loaded once, never changes)."""
     global _team_abbr_cache
-    if _team_abbr_cache is not None:
+    with _team_cache_lock:
+        if _team_abbr_cache is not None:
+            return _team_abbr_cache
+        store = get_store()
+        if store.teams is not None and not store.teams.empty:
+            _team_abbr_cache = dict(zip(store.teams["team_id"], store.teams["abbreviation"]))
+        else:
+            rows = db.fetch_all("SELECT team_id, abbreviation FROM teams")
+            _team_abbr_cache = {r["team_id"]: r["abbreviation"] for r in rows}
         return _team_abbr_cache
-    store = get_store()
-    if store.teams is not None and not store.teams.empty:
-        _team_abbr_cache = dict(zip(store.teams["team_id"], store.teams["abbreviation"]))
-    else:
-        rows = db.fetch_all("SELECT team_id, abbreviation FROM teams")
-        _team_abbr_cache = {r["team_id"]: r["abbreviation"] for r in rows}
-    return _team_abbr_cache
 
 
 def get_team_names() -> Dict[int, str]:
     """Return {team_id: name} singleton (loaded once, never changes)."""
     global _team_name_cache
-    if _team_name_cache is not None:
+    with _team_cache_lock:
+        if _team_name_cache is not None:
+            return _team_name_cache
+        store = get_store()
+        if store.teams is not None and not store.teams.empty:
+            _team_name_cache = dict(zip(store.teams["team_id"], store.teams["name"]))
+        else:
+            rows = db.fetch_all("SELECT team_id, name FROM teams")
+            _team_name_cache = {r["team_id"]: r["name"] for r in rows}
         return _team_name_cache
-    store = get_store()
-    if store.teams is not None and not store.teams.empty:
-        _team_name_cache = dict(zip(store.teams["team_id"], store.teams["name"]))
-    else:
-        rows = db.fetch_all("SELECT team_id, name FROM teams")
-        _team_name_cache = {r["team_id"]: r["name"] for r in rows}
-    return _team_name_cache
 
 # ──────────────────── Constants ────────────────────
 TEAM_MINUTES_PER_GAME = 240.0
@@ -384,8 +390,9 @@ def get_home_court_advantage(team_id: int, season: Optional[str] = None) -> floa
     LeagueDashTeamStats with per_mode=PerGame), so we must NOT divide by GP.
     Results cached in memory per team_id.
     """
-    if team_id in _hca_cache:
-        return _hca_cache[team_id]
+    with _hca_cache_lock:
+        if team_id in _hca_cache:
+            return _hca_cache[team_id]
 
     from src.config import get_season
     if season is None:
@@ -395,14 +402,16 @@ def get_home_court_advantage(team_id: int, season: Optional[str] = None) -> floa
         (team_id, season)
     )
     if not row or not row["home_gp"] or not row["road_gp"]:
-        _hca_cache[team_id] = _HOME_COURT_FALLBACK
+        with _hca_cache_lock:
+            _hca_cache[team_id] = _HOME_COURT_FALLBACK
         return _HOME_COURT_FALLBACK
 
     home_ppg = row["home_pts"]   # already per-game
     road_ppg = row["road_pts"]   # already per-game
     hca = home_ppg - road_ppg
     result = max(_HOME_COURT_CLAMP[0], min(_HOME_COURT_CLAMP[1], hca))
-    _hca_cache[team_id] = result
+    with _hca_cache_lock:
+        _hca_cache[team_id] = result
     return result
 
 
@@ -535,10 +544,12 @@ def detect_roster_change(team_id: int) -> Dict[str, Any]:
            JOIN players p ON ps.player_id = p.player_id
            WHERE p.team_id = ?
            AND ps.game_date IN (
-             SELECT DISTINCT game_date FROM player_stats ps2
-             JOIN players p2 ON ps2.player_id = p2.player_id
-             WHERE p2.team_id = ?
-             ORDER BY game_date DESC LIMIT 5
+             SELECT game_date FROM (
+               SELECT DISTINCT game_date FROM player_stats ps2
+               JOIN players p2 ON ps2.player_id = p2.player_id
+               WHERE p2.team_id = ?
+               ORDER BY game_date DESC LIMIT 5
+             )
            )""",
         (team_id, team_id)
     )
@@ -552,7 +563,7 @@ def detect_roster_change(team_id: int) -> Dict[str, Any]:
     high_impact = False
     for pid in added | removed:
         avg_row = db.fetch_one(
-            "SELECT AVG(minutes) as avg_min FROM player_stats WHERE player_id = ? ORDER BY game_date DESC LIMIT 10",
+            "SELECT AVG(minutes) as avg_min FROM (SELECT minutes FROM player_stats WHERE player_id = ? ORDER BY game_date DESC LIMIT 10)",
             (pid,)
         )
         if avg_row and avg_row["avg_min"] and avg_row["avg_min"] >= _ROSTER_CHANGE_HIGH_IMPACT_MPG:
@@ -587,18 +598,20 @@ def get_team_matchup_stats(team_id: int, opponent_team_id: int,
 
         # Location-specific ppg
         loc_rows = db.fetch_all(
-            """SELECT AVG(points) as ppg FROM player_stats
+            """SELECT AVG(points) as ppg FROM (
+               SELECT points FROM player_stats
                WHERE player_id = ? AND is_home = ?
-               ORDER BY game_date DESC LIMIT 10""",
+               ORDER BY game_date DESC LIMIT 10)""",
             (pid, is_home)
         )
         loc_ppg = loc_rows[0]["ppg"] if loc_rows and loc_rows[0]["ppg"] else splits["points"]
 
         # vs-opponent ppg
         vs_rows = db.fetch_all(
-            """SELECT AVG(points) as ppg FROM player_stats
+            """SELECT AVG(points) as ppg FROM (
+               SELECT points FROM player_stats
                WHERE player_id = ? AND opponent_team_id = ?
-               ORDER BY game_date DESC LIMIT 10""",
+               ORDER BY game_date DESC LIMIT 10)""",
             (pid, opponent_team_id)
         )
         vs_ppg = vs_rows[0]["ppg"] if vs_rows and vs_rows[0]["ppg"] else splits["points"]

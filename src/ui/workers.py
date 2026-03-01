@@ -490,18 +490,18 @@ class PipelineWorker(BaseWorker):
 class RetuneWorker(BaseWorker):
     """Skip data sync, force-run autotune + ML + optimize + backtest."""
     def run(self):
+        from src.database.db import thread_local_db
         try:
-            from src.database.db import thread_local_db
-            thread_local_db()
-            from src.analytics.pipeline import run_retune
-            self.progress.emit("Starting retune (no data sync)...")
-            results = run_retune(
-                callback=lambda msg: self.progress.emit(msg)
-            )
-            bt = results.get("backtest", {})
-            if bt and bt.get("total_games", 0) > 0:
-                self.result.emit(bt)
-            self.progress.emit("Retune complete")
+            with thread_local_db():
+                from src.analytics.pipeline import run_retune
+                self.progress.emit("Starting retune (no data sync)...")
+                results = run_retune(
+                    callback=lambda msg: self.progress.emit(msg)
+                )
+                bt = results.get("backtest", {})
+                if bt and bt.get("total_games", 0) > 0:
+                    self.result.emit(bt)
+                self.progress.emit("Retune complete")
         except Exception as e:
             self.progress.emit(f"Error: {e}")
         self.finished.emit()
@@ -515,18 +515,18 @@ class OvernightWorker(BaseWorker):
         self.reset_weights = reset_weights
 
     def run(self):
+        from src.database.db import thread_local_db
         try:
-            from src.database.db import thread_local_db
-            thread_local_db()
-            from src.analytics.pipeline import run_overnight
-            results = run_overnight(
-                max_hours=self.max_hours,
-                reset_weights=self.reset_weights,
-                callback=lambda msg: self.progress.emit(msg)
-            )
-            bt = results.get("backtest", {})
-            if bt and bt.get("total_games", 0) > 0:
-                self.result.emit(bt)
+            with thread_local_db():
+                from src.analytics.pipeline import run_overnight
+                results = run_overnight(
+                    max_hours=self.max_hours,
+                    reset_weights=self.reset_weights,
+                    callback=lambda msg: self.progress.emit(msg)
+                )
+                bt = results.get("backtest", {})
+                if bt and bt.get("total_games", 0) > 0:
+                    self.result.emit(bt)
         except Exception as e:
             self.progress.emit(f"Error: {e}")
         self.finished.emit()

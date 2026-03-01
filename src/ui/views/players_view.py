@@ -104,7 +104,7 @@ def _days_until_return(expected_return: str) -> int | None:
                     except ValueError:
                         continue
     except Exception as e:
-        logger.warning("Return date parse failed for '%s': %s", raw, e)
+        logger.warning("Return date parse failed for '%s': %s", expected_return, e)
     return None
 
 
@@ -235,9 +235,10 @@ class PlayersView(QWidget):
                 "SELECT i.player_id, i.player_name, t.abbreviation, i.status, "
                 "       i.reason, i.expected_return, i.injury_keyword, "
                 "       COALESCE(("
-                "           SELECT AVG(ps.minutes) FROM player_stats ps "
-                "           WHERE ps.player_id = i.player_id "
-                "           ORDER BY ps.game_date DESC LIMIT 10"
+                "           SELECT AVG(minutes) FROM ("
+                "               SELECT minutes FROM player_stats ps "
+                "               WHERE ps.player_id = i.player_id "
+                "               ORDER BY ps.game_date DESC LIMIT 10)"
                 "       ), 0) as mpg "
                 "FROM injuries i "
                 "LEFT JOIN teams t ON i.team_id = t.team_id "
@@ -424,6 +425,8 @@ class PlayersView(QWidget):
             self._on_sync_done, Qt.ConnectionType.QueuedConnection
         )
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker_thread.deleteLater)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.start()
 
     def _on_sync_progress(self, msg: str):

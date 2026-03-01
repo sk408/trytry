@@ -63,6 +63,8 @@ class _RWLock:
 
 _rwlock = _RWLock()                       # guards all db access
 _disk_local = threading.local()           # thread-local disk connections
+_disk_conns: List[sqlite3.Connection] = []  # track all disk connections for cleanup
+_disk_conns_lock = threading.Lock()
 _mem_conn: Optional[sqlite3.Connection] = None   # single shared memory db
 _init_lock = threading.Lock()             # one-shot init guard
 
@@ -89,6 +91,8 @@ def _get_disk_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         _disk_local.conn = conn
+        with _disk_conns_lock:
+            _disk_conns.append(conn)
     return _disk_local.conn
 
 
@@ -120,12 +124,13 @@ def _get_mem_conn() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 def get_connection() -> sqlite3.Connection:
-    """Return the shared in-memory connection (for migrations/init_db)."""
-    _rwlock.write_acquire()
-    try:
-        return _get_mem_conn()
-    finally:
-        _rwlock.write_release()
+    """Return the shared in-memory connection.
+
+    WARNING: internal use only (migrations/init_db).  The write lock is NOT
+    held after return — callers must use execute()/execute_script() for
+    thread-safe access.
+    """
+    return _get_mem_conn()
 
 
 def execute(sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -180,7 +185,12 @@ def execute_many(sql: str, params_list: List[tuple]) -> None:
 
 
 def execute_script(sql: str) -> None:
-    """Execute a multi-statement SQL script on BOTH disk and memory."""
+    """Execute a multi-statement SQL script on BOTH disk and memory.
+
+    NOTE: SQLite's executescript() issues an implicit COMMIT before running,
+    so partial failures cannot be rolled back.  Only use for idempotent DDL
+    (CREATE TABLE IF NOT EXISTS).  For non-idempotent DML use execute().
+    """
     _rwlock.write_acquire()
     try:
         disk = _get_disk_conn()
@@ -300,34 +310,60 @@ def reload_memory() -> None:
 def _reload_memory_unlocked() -> None:
     """Reload without acquiring write lock (caller must hold it)."""
     global _mem_conn
-    if _mem_conn is not None:
-        try:
-            _mem_conn.close()
-        except Exception:
-            pass
-    _mem_conn = sqlite3.connect(":memory:", check_same_thread=False)
-    _mem_conn.execute("PRAGMA foreign_keys=ON")
-    _mem_conn.row_factory = sqlite3.Row
+    old_conn = _mem_conn
+
+    # Build new connection first — if backup fails, keep old connection
+    new_conn = sqlite3.connect(":memory:", check_same_thread=False)
+    new_conn.execute("PRAGMA foreign_keys=ON")
+    new_conn.row_factory = sqlite3.Row
 
     db_path = _get_db_path()
     if os.path.exists(db_path):
         disk = sqlite3.connect(db_path, timeout=DB_BUSY_TIMEOUT / 1000)
-        disk.backup(_mem_conn)
+        try:
+            disk.backup(new_conn)
+        except Exception:
+            disk.close()
+            new_conn.close()
+            logger.error("Failed to backup disk DB to memory — keeping previous state")
+            return
         disk.close()
+
+    # Swap atomically then close old
+    _mem_conn = new_conn
+    if old_conn is not None:
+        try:
+            old_conn.close()
+        except Exception:
+            pass
     logger.info("In-memory database reloaded from disk")
 
 
 def close_connection():
-    """Close the thread-local disk connection."""
+    """Close the thread-local disk connection and remove from tracking list."""
     if hasattr(_disk_local, "conn") and _disk_local.conn is not None:
-        _disk_local.conn.close()
+        conn = _disk_local.conn
         _disk_local.conn = None
+        with _disk_conns_lock:
+            try:
+                _disk_conns.remove(conn)
+            except ValueError:
+                pass
+        conn.close()
 
 
 def close_all():
-    """Close disk + memory connections (for shutdown)."""
+    """Close ALL disk + memory connections (for shutdown)."""
     global _mem_conn
-    close_connection()
+    # Close all tracked disk connections from every thread
+    with _disk_conns_lock:
+        for conn in _disk_conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _disk_conns.clear()
+    _disk_local.conn = None
     _rwlock.write_acquire()
     try:
         if _mem_conn is not None:
@@ -356,9 +392,20 @@ def get_db_size() -> str:
 def delete_database():
     """Delete the database file, WAL/SHM files, and reset memory."""
     global _mem_conn
-    close_connection()
+
+    # Acquire write lock FIRST to block concurrent execute() calls,
+    # then close all disk connections safely inside the lock.
     _rwlock.write_acquire()
     try:
+        with _disk_conns_lock:
+            for conn in _disk_conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _disk_conns.clear()
+        _disk_local.conn = None
+
         if _mem_conn is not None:
             try:
                 _mem_conn.close()

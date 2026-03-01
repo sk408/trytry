@@ -254,6 +254,8 @@ class MatchupView(QWidget):
         self._worker.error.connect(self._on_error, _QC)
         self._worker.finished.connect(self._worker_thread.quit)
         self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker_thread.deleteLater)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.start()
 
     def _on_error(self, msg: str):

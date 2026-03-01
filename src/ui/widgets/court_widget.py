@@ -142,12 +142,12 @@ class CourtWidget(QWidget):
         if self._ball_anim and self._ball_anim.state() == QPropertyAnimation.State.Running:
             self._ball_anim.stop()
 
-        anim_x = QPropertyAnimation(self, b"ball_x")
-        anim_x.setDuration(600)
-        anim_x.setStartValue(from_x)
-        anim_x.setEndValue(_HOOP_X)
-        anim_x.setEasingCurve(QEasingCurve.Type.OutQuad)
-        anim_x.start()
+        self._ball_anim_x = QPropertyAnimation(self, b"ball_x")
+        self._ball_anim_x.setDuration(600)
+        self._ball_anim_x.setStartValue(from_x)
+        self._ball_anim_x.setEndValue(_HOOP_X)
+        self._ball_anim_x.setEasingCurve(QEasingCurve.Type.OutQuad)
+        self._ball_anim_x.start()
 
         anim_y = QPropertyAnimation(self, b"ball_y")
         anim_y.setDuration(600)

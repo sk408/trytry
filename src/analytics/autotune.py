@@ -171,6 +171,9 @@ def autotune_team(team_id: int, games: List[Dict],
 
     # Min threshold
     home_correction = np.clip(home_shift, -max_abs_correction, max_abs_correction)
+    # Away correction is negated so the DB stores it in the opposite sign convention
+    # from home.  Downstream: prediction.py uses net_tune = ht_corr - at_corr,
+    # so a negative stored value effectively *adds* points to the away team.
     away_correction = np.clip(-away_shift, -max_abs_correction, max_abs_correction)
 
     if abs(home_correction) < DEFAULT_MIN_THRESHOLD:

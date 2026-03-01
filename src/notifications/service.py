@@ -4,6 +4,7 @@ import json
 import logging
 import subprocess
 import sys
+import threading
 from typing import List, Dict, Any, Optional, Callable
 
 from src.database import db
@@ -13,23 +14,28 @@ logger = logging.getLogger(__name__)
 
 # Listeners for real-time UI updates
 _listeners: List[Callable] = []
+_listeners_lock = threading.Lock()
 
 
 def add_listener(fn: Callable):
     """Register a notification listener."""
-    if fn not in _listeners:
-        _listeners.append(fn)
+    with _listeners_lock:
+        if fn not in _listeners:
+            _listeners.append(fn)
 
 
 def remove_listener(fn: Callable):
     """Remove a notification listener."""
-    if fn in _listeners:
-        _listeners.remove(fn)
+    with _listeners_lock:
+        if fn in _listeners:
+            _listeners.remove(fn)
 
 
 def _notify_listeners(notification: Dict):
     """Notify all registered listeners."""
-    for fn in _listeners:
+    with _listeners_lock:
+        snapshot = list(_listeners)
+    for fn in snapshot:
         try:
             fn(notification)
         except Exception as e:
@@ -155,6 +161,9 @@ def _push_toast(notif: Dict):
     try:
         title = notif.get("title", "NBA Alert")
         message = notif.get("message", "")
+        # Escape double quotes and dollar signs to prevent PowerShell injection
+        title = title.replace('"', '`"').replace("$", "`$")
+        message = message.replace('"', '`"').replace("$", "`$")
         cmd = f'New-BurntToastNotification -Text "{title}", "{message}"'
         subprocess.run(
             ["powershell", "-Command", cmd],

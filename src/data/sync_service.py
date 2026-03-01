@@ -95,7 +95,7 @@ def nuke_synced_data(callback: Optional[Callable] = None):
         "game_odds", "game_quarter_scores", "sync_meta",
         # Also clear derived/tuning tables so they rebuild cleanly
         "team_tuning", "model_weights", "team_weight_overrides",
-        "residual_calibration", "predictions",
+        "predictions",
     ]
     for table in tables:
         try:
@@ -232,17 +232,20 @@ def sync_player_game_logs(callback: Optional[Callable] = None, force: bool = Fal
                 player_info[pid]["latest"] = log["game_date"]
 
         now_iso = now.isoformat()
-        for pid, info in player_info.items():
-            db.execute(
-                """INSERT INTO player_sync_cache (player_id, last_synced_at, games_synced, latest_game_date)
-                   VALUES (?,?,?,?)
-                   ON CONFLICT(player_id) DO UPDATE SET
-                     last_synced_at=excluded.last_synced_at,
-                     games_synced=excluded.games_synced,
-                     latest_game_date=MAX(excluded.latest_game_date,
-                         COALESCE(player_sync_cache.latest_game_date, ''))""",
-                (pid, now_iso, info["count"], info["latest"])
-            )
+        cache_batch = [
+            (pid, now_iso, info["count"], info["latest"])
+            for pid, info in player_info.items()
+        ]
+        db.execute_many(
+            """INSERT INTO player_sync_cache (player_id, last_synced_at, games_synced, latest_game_date)
+               VALUES (?,?,?,?)
+               ON CONFLICT(player_id) DO UPDATE SET
+                 last_synced_at=excluded.last_synced_at,
+                 games_synced=excluded.games_synced,
+                 latest_game_date=MAX(excluded.latest_game_date,
+                     COALESCE(player_sync_cache.latest_game_date, ''))""",
+            cache_batch
+        )
 
         if callback:
             callback(f"Saved {len(logs)} game log entries for {len(player_info)} players")
@@ -416,6 +419,7 @@ def _update_opponent_stats(season, now, callback):
 def _update_home_road_stats(season, location, now, callback):
     data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Base", location=location)
     prefix = "home" if location == "Home" else "road"
+    assert prefix in ("home", "road"), f"unexpected location: {location}"
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -504,6 +508,7 @@ def sync_player_impact(callback: Optional[Callable] = None, force: bool = False)
             callback(f"On/off: {i + 1}/{len(team_rows)} teams...")
 
     players = db.fetch_all("SELECT player_id, team_id FROM players")
+    batch = []
     for p in players:
         pid = p["player_id"]
         tid = p["team_id"]
@@ -521,7 +526,23 @@ def sync_player_impact(callback: Optional[Callable] = None, force: bool = False)
         net_diff = on_net - off_net
         on_min = float(on_data.get("MIN", 0) or 0)
 
-        db.execute(
+        batch.append((
+            pid, tid, season,
+            on_off_r, on_def_r, on_net,
+            off_off_r, off_def_r, off_net,
+            net_diff, on_min,
+            float(e.get("E_USG_PCT", 0) or 0),
+            float(e.get("E_OFF_RATING", 0) or 0),
+            float(e.get("E_DEF_RATING", 0) or 0),
+            float(e.get("E_NET_RATING", 0) or 0),
+            float(e.get("E_PACE", 0) or 0),
+            float(e.get("E_AST_RATIO", 0) or 0),
+            float(e.get("E_OREB_PCT", 0) or 0),
+            float(e.get("E_DREB_PCT", 0) or 0),
+            now,
+        ))
+    if batch:
+        db.execute_many(
             """INSERT INTO player_impact
                (player_id, team_id, season,
                 on_court_off_rating, on_court_def_rating, on_court_net_rating,
@@ -549,19 +570,7 @@ def sync_player_impact(callback: Optional[Callable] = None, force: bool = False)
                  e_oreb_pct=excluded.e_oreb_pct,
                  e_dreb_pct=excluded.e_dreb_pct,
                  last_synced_at=excluded.last_synced_at""",
-            (pid, tid, season,
-             on_off_r, on_def_r, on_net,
-             off_off_r, off_def_r, off_net,
-             net_diff, on_min,
-             float(e.get("E_USG_PCT", 0) or 0),
-             float(e.get("E_OFF_RATING", 0) or 0),
-             float(e.get("E_DEF_RATING", 0) or 0),
-             float(e.get("E_NET_RATING", 0) or 0),
-             float(e.get("E_PACE", 0) or 0),
-             float(e.get("E_AST_RATIO", 0) or 0),
-             float(e.get("E_OREB_PCT", 0) or 0),
-             float(e.get("E_DREB_PCT", 0) or 0),
-             now)
+            batch,
         )
 
     _set_sync_meta("player_impact", current_gc, _get_last_game_date())

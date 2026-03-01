@@ -237,7 +237,8 @@ class AccuracyView(QWidget):
             color = "#22c55e"
         elif "%" in msg or "progress" in msg.lower():
             color = "#3b82f6"
-        self.log.append(f'<span style="color:{color}">{msg}</span>')
+        import html
+        self.log.append(f'<span style="color:{color}">{html.escape(msg)}</span>')
 
     def _on_results(self, results: dict):
         """Handle backtest results (full dict from run_backtest)."""

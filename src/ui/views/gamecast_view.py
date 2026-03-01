@@ -9,6 +9,7 @@ Architecture:
 """
 
 import logging
+import threading
 import time
 from typing import Dict, Optional
 
@@ -37,7 +38,8 @@ from src.data.gamecast import normalize_espn_abbr  # noqa: E402
 # ──────────────────────────────────────────────────────────────
 
 _espn_headshot_cache: Dict[tuple, QPixmap] = {}   # (url, size) → QPixmap
-_espn_headshot_data: Dict[str, bytes] = {}            # url → raw image bytes (thread-safe)
+_espn_headshot_data: Dict[str, bytes] = {}            # url → raw image bytes
+_headshot_lock = threading.Lock()                      # guards both headshot caches
 
 _CACHE_TTL_LIVE = 8         # seconds — live games refresh often
 _CACHE_TTL_PRE = 55         # seconds — pre-game (odds may update)
@@ -47,37 +49,40 @@ class _GameCache:
     """Thread-safe in-memory cache for parsed game data."""
 
     def __init__(self):
+        self._lock = threading.Lock()
         self._data: Dict[str, dict] = {}       # game_id -> parsed data
         self._ts: Dict[str, float] = {}         # game_id -> timestamp
         self._state: Dict[str, str] = {}        # game_id -> "pre"/"in"/"post"
 
     def get(self, game_id: str) -> Optional[dict]:
         """Return cached data if still fresh, else None."""
-        if game_id not in self._data:
-            return None
-        age = time.time() - self._ts.get(game_id, 0)
-        ttl = self._ttl_for(game_id)
-        if age > ttl:
-            return None
-        return self._data[game_id]
+        with self._lock:
+            if game_id not in self._data:
+                return None
+            age = time.time() - self._ts.get(game_id, 0)
+            ttl = self._ttl_for(game_id)
+            if age > ttl:
+                return None
+            return self._data[game_id]
 
     def put(self, game_id: str, data: dict, state: str = ""):
         """Store parsed data with current timestamp."""
-        self._data[game_id] = data
-        self._ts[game_id] = time.time()
-        if state:
-            self._state[game_id] = state
+        with self._lock:
+            self._data[game_id] = data
+            self._ts[game_id] = time.time()
+            if state:
+                self._state[game_id] = state
 
     def is_final(self, game_id: str) -> bool:
-        state = self._state.get(game_id)
-        if state == "post":
-            return True
-        # also check data just in case state got out of sync
-        if game_id in self._data:
-            if self._data[game_id].get("status_state") == "post":
-                self._state[game_id] = "post"
+        with self._lock:
+            state = self._state.get(game_id)
+            if state == "post":
                 return True
-        return False
+            if game_id in self._data:
+                if self._data[game_id].get("status_state") == "post":
+                    self._state[game_id] = "post"
+                    return True
+            return False
 
     def _ttl_for(self, game_id: str) -> float:
         s = self._state.get(game_id, "")
@@ -88,9 +93,10 @@ class _GameCache:
         return _CACHE_TTL_PRE
 
     def clear(self):
-        self._data.clear()
-        self._ts.clear()
-        self._state.clear()
+        with self._lock:
+            self._data.clear()
+            self._ts.clear()
+            self._state.clear()
 
 
 _cache = _GameCache()
@@ -472,12 +478,12 @@ class GamecastView(QWidget):
                     time_str = short_detail.replace(" ET", "").strip()
                     et_time = datetime.strptime(time_str, "%I:%M %p")
                     et_tz = ZoneInfo("America/New_York")
-                    local_tz = ZoneInfo("America/Los_Angeles")
+                    local_tz = datetime.now().astimezone().tzinfo
                     now = datetime.now()
                     et_dt = now.replace(hour=et_time.hour, minute=et_time.minute,
                                         second=0, microsecond=0, tzinfo=et_tz)
                     local_dt = et_dt.astimezone(local_tz)
-                    display_detail = local_dt.strftime("%I:%M %p PT").lstrip("0")
+                    display_detail = local_dt.strftime("%I:%M %p").lstrip("0")
                 except Exception:
                     display_detail = short_detail
 
@@ -544,7 +550,9 @@ class GamecastView(QWidget):
             self._stop_websocket()
             self._status_hint.setText("")
             self.court.clear_shots()
-            self.info_panel.update_info(None, "HOME", "AWAY", 0, 0, 50.0, None)
+            self.info_panel.update_prediction(None)
+            self.info_panel.update_odds({})
+            self.info_panel.update_win_probability(50.0)
             
             # Clear scoreboard and other parts
             self.scoreboard.update_data(
@@ -650,7 +658,7 @@ class GamecastView(QWidget):
         cached = _cache.get(gid)
         state = cached.get("status_state", "") if cached else ""
         if state == "post":
-            _cache._state[gid] = "post"
+            _cache.put(gid, cached, state="post")
             self.live_timer.stop()
             self._stop_websocket()
             self._status_hint.setText("Final")
@@ -1088,8 +1096,9 @@ class GamecastView(QWidget):
     def _fetch_espn_headshot(url: str, size: int) -> Optional[QPixmap]:
         """Download ESPN player headshot and return as circular QPixmap."""
         cache_key = (url, size)
-        if cache_key in _espn_headshot_cache:
-            return _espn_headshot_cache[cache_key]
+        with _headshot_lock:
+            if cache_key in _espn_headshot_cache:
+                return _espn_headshot_cache[cache_key]
         try:
             import requests
             resp = requests.get(url, timeout=5)
@@ -1106,7 +1115,8 @@ class GamecastView(QWidget):
             )
             from src.ui.widgets.image_utils import _make_circle_pixmap
             pixmap = _make_circle_pixmap(pixmap)
-            _espn_headshot_cache[cache_key] = pixmap
+            with _headshot_lock:
+                _espn_headshot_cache[cache_key] = pixmap
             return pixmap
         except Exception:
             return None
@@ -1117,7 +1127,10 @@ class GamecastView(QWidget):
         The image will appear on the next UI refresh once cached.
         """
         cache_key = (url, size)
-        if cache_key in _espn_headshot_cache or url in self._pending_headshots:
+        with _headshot_lock:
+            if cache_key in _espn_headshot_cache:
+                return
+        if url in self._pending_headshots:
             return
         self._pending_headshots.add(url)
 
@@ -1135,7 +1148,8 @@ class GamecastView(QWidget):
                     if resp.status_code == 200 and resp.content:
                         # Store raw bytes only — QPixmap MUST be created on
                         # the main/GUI thread (Qt requirement).
-                        _espn_headshot_data[self.url] = resp.content
+                        with _headshot_lock:
+                            _espn_headshot_data[self.url] = resp.content
                 except Exception:
                     pass
 
@@ -1313,22 +1327,27 @@ class GamecastView(QWidget):
                         pass
 
                     # Tier 1: main-thread pixmap cache (already converted)
-                    if not pixmap and headshot_url and (headshot_url, 28) in _espn_headshot_cache:
-                        pixmap = _espn_headshot_cache[(headshot_url, 28)]
+                    if not pixmap and headshot_url:
+                        with _headshot_lock:
+                            pixmap = _espn_headshot_cache.get((headshot_url, 28))
 
                     # Tier 2: raw bytes downloaded in background → convert on main thread
-                    if not pixmap and headshot_url and headshot_url in _espn_headshot_data:
-                        from src.ui.widgets.image_utils import _make_circle_pixmap
-                        img = QImage()
-                        img.loadFromData(_espn_headshot_data[headshot_url])
-                        if not img.isNull():
-                            pix = QPixmap.fromImage(img).scaled(
-                                28, 28,
-                                Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation,
-                            )
-                            pixmap = _make_circle_pixmap(pix)
-                            _espn_headshot_cache[(headshot_url, 28)] = pixmap
+                    if not pixmap and headshot_url:
+                        with _headshot_lock:
+                            raw_bytes = _espn_headshot_data.get(headshot_url)
+                        if raw_bytes:
+                            from src.ui.widgets.image_utils import _make_circle_pixmap
+                            img = QImage()
+                            img.loadFromData(raw_bytes)
+                            if not img.isNull():
+                                pix = QPixmap.fromImage(img).scaled(
+                                    28, 28,
+                                    Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation,
+                                )
+                                pixmap = _make_circle_pixmap(pix)
+                                with _headshot_lock:
+                                    _espn_headshot_cache[(headshot_url, 28)] = pixmap
 
                     if pixmap:
                         photo_item.setData(Qt.ItemDataRole.DecorationRole, pixmap)

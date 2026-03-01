@@ -109,13 +109,22 @@ class VectorizedGames:
         self.vegas_home_ml = np.array([g.vegas_home_ml for g in games])
         self.vegas_away_ml = np.array([g.vegas_away_ml for g in games])
         
-        # Default to 50/50 split if missing to avoid division by zero or skewed data
+        # Default to 50/50 split if missing
         self.spread_home_public = np.array([g.spread_home_public if g.spread_home_public else 50.0 for g in games], dtype=float)
         self.spread_home_money = np.array([g.spread_home_money if g.spread_home_money else 50.0 for g in games], dtype=float)
-        
+
         # Calculate sharp money edge (Money % - Ticket %)
         # Positive means sharp money is on the home team
-        self.sharp_money_edge = (self.spread_home_money - self.spread_home_public) / 100.0
+        # Zero out edge when EITHER value is missing to avoid false signal
+        has_both = np.array([
+            bool(g.spread_home_public) and bool(g.spread_home_money)
+            for g in games
+        ])
+        self.sharp_money_edge = np.where(
+            has_both,
+            (self.spread_home_money - self.spread_home_public) / 100.0,
+            0.0
+        )
 
     @staticmethod
     def _load_tuning(games: List[PrecomputedGame]):

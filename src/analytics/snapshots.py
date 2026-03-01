@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 logger = logging.getLogger(__name__)
 
 SNAPSHOTS_DIR = os.path.join("data", "snapshots")
-DB_PATH = os.path.join("data", "nba.db")
+DB_PATH = os.path.join("data", "nba_analytics.db")
 TUNING_PATH = os.path.join("src", "analytics", "tuning.py")
 
 def _ensure_dir():

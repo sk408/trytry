@@ -68,11 +68,14 @@ class InMemoryDataStore:
         except Exception as e:
             logger.error(f"Failed to load memory store: {e}")
 
+    _reload_lock = threading.Lock()
+
     def reload(self):
-        """Reload all data."""
-        self._loaded = False
-        self.precomputed_games = None
-        self.load()
+        """Reload all data (thread-safe: concurrent readers see old or new, never partial)."""
+        with self._reload_lock:
+            self._loaded = False
+            self.precomputed_games = None
+            self.load()
 
     @property
     def is_loaded(self) -> bool:

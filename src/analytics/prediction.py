@@ -1267,10 +1267,12 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     a_eff = g.away_hustle.get("deflections", 0) + g.away_hustle.get("contested", 0) * w.hustle_contested_wt
     spread += (h_eff - a_eff) * w.hustle_effort_mult
 
-    # Sharp Money
-    sh_pub = g.spread_home_public if g.spread_home_public else 50.0
-    sh_mon = g.spread_home_money if g.spread_home_money else 50.0
-    sharp_money_edge = (sh_mon - sh_pub) / 100.0
+    # Sharp Money — zero out when either value is missing (consistent with VectorizedGames)
+    has_both = bool(g.spread_home_public) and bool(g.spread_home_money)
+    if has_both:
+        sharp_money_edge = (g.spread_home_money - g.spread_home_public) / 100.0
+    else:
+        sharp_money_edge = 0.0
     spread += sharp_money_edge * w.sharp_money_weight
 
     # Total

@@ -147,7 +147,8 @@ class DashboardView(QWidget):
         elif "progress" in msg.lower() or "step" in msg.lower():
             color = "#3b82f6"
 
-        self.log.append(f'<span style="color:{color}">{msg}</span>')
+        import html
+        self.log.append(f'<span style="color:{color}">{html.escape(msg)}</span>')
 
     def _on_full_sync(self):
         self.log.clear()

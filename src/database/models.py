@@ -214,7 +214,7 @@ class Notification:
     category: str = "info"
     severity: str = "info"
     title: str = ""
-    body: str = ""
+    message: str = ""
     data: str = "{}"
     created_at: str = ""
     read: int = 0

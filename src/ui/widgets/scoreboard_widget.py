@@ -113,7 +113,7 @@ class ScoreboardWidget(QWidget):
                         r = requests.get(self.url, timeout=5)
                         if r.status_code == 200 and r.content:
                             _espn_headshot_data[self.url] = r.content
-                except:
+                except Exception:
                     pass
 
         for key, url_key, name_key in [("in_pixmap", "in_url", "in_name"), ("out_pixmap", "out_url", "out_name")]:

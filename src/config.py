@@ -2,10 +2,12 @@
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
 _SETTINGS_PATH = Path("data") / "app_settings.json"
+_settings_lock = threading.Lock()
 
 _DEFAULTS: Dict[str, Any] = {
     "db_path": "data/nba_analytics.db",
@@ -33,32 +35,34 @@ def _ensure_dir():
 def load_settings() -> Dict[str, Any]:
     """Load settings from disk, merging with defaults."""
     global _cache
-    if _cache is not None:
-        return _cache
-    _ensure_dir()
-    if _SETTINGS_PATH.exists():
-        try:
-            with open(_SETTINGS_PATH, "r") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
+    with _settings_lock:
+        if _cache is not None:
+            return _cache
+        _ensure_dir()
+        if _SETTINGS_PATH.exists():
+            try:
+                with open(_SETTINGS_PATH, "r") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                data = {}
+        else:
             data = {}
-    else:
-        data = {}
-    merged = {**_DEFAULTS, **data}
-    _cache = merged
-    return merged
+        merged = {**_DEFAULTS, **data}
+        _cache = merged
+        return merged
 
 
 def save_settings(settings: Dict[str, Any] | None = None):
     """Persist current settings to disk."""
     global _cache
-    if settings is not None:
-        _cache = settings
-    if _cache is None:
-        _cache = dict(_DEFAULTS)
-    _ensure_dir()
-    with open(_SETTINGS_PATH, "w") as f:
-        json.dump(_cache, f, indent=2)
+    with _settings_lock:
+        if settings is not None:
+            _cache = settings
+        if _cache is None:
+            _cache = dict(_DEFAULTS)
+        _ensure_dir()
+        with open(_SETTINGS_PATH, "w") as f:
+            json.dump(_cache, f, indent=2)
 
 
 def get(key: str, default: Any = None) -> Any:
@@ -86,7 +90,8 @@ def get_season_year() -> str:
 
 def invalidate_cache():
     global _cache
-    _cache = None
+    with _settings_lock:
+        _cache = None
 
 
 def get_config() -> Dict[str, Any]:

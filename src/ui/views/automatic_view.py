@@ -266,8 +266,9 @@ class AutomaticView(QWidget):
                     break
 
         # Append to terminal
+        import html as _html
         self.terminal.moveCursor(QTextCursor.MoveOperation.End)
-        self.terminal.insertHtml(f'<div style="color:{color}; font-family:Consolas; white-space:pre-wrap;">{msg}</div><br>')
+        self.terminal.insertHtml(f'<div style="color:{color}; font-family:Consolas; white-space:pre-wrap;">{_html.escape(msg)}</div><br>')
         self.terminal.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_results(self, results: dict):

@@ -212,11 +212,14 @@ class AutotuneView(QWidget):
             self._on_done, Qt.ConnectionType.QueuedConnection
         )
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker_thread.deleteLater)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.start()
 
     def _on_progress(self, msg: str):
         """Append a progress message to the log (runs on main thread)."""
-        self.log.append(f'<span style="color:#94a3b8">{msg}</span>')
+        import html
+        self.log.append(f'<span style="color:#94a3b8">{html.escape(msg)}</span>')
 
     def _on_done(self):
         self._load_corrections()
@@ -230,4 +233,5 @@ class AutotuneView(QWidget):
             self._load_corrections()
             self.log.append('<span style="color:#22c55e">All corrections cleared</span>')
         except Exception as e:
-            self.log.append(f'<span style="color:#ef4444">Error: {e}</span>')
+            import html
+            self.log.append(f'<span style="color:#ef4444">Error: {html.escape(str(e))}</span>')

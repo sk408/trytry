@@ -46,12 +46,14 @@ class InjuryMonitor:
         """Load current injury state from DB."""
         rows = db.fetch_all("""
             SELECT i.player_id, i.player_name, i.team_id, i.status, i.reason,
-                   COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
-                             WHERE ps.player_id = i.player_id
-                             ORDER BY ps.game_date DESC LIMIT 20), 0) as mpg,
-                   COALESCE((SELECT AVG(ps.points) FROM player_stats ps
-                             WHERE ps.player_id = i.player_id
-                             ORDER BY ps.game_date DESC LIMIT 20), 0) as ppg
+                   COALESCE((SELECT AVG(minutes) FROM (
+                       SELECT minutes FROM player_stats ps
+                       WHERE ps.player_id = i.player_id
+                       ORDER BY ps.game_date DESC LIMIT 20)), 0) as mpg,
+                   COALESCE((SELECT AVG(points) FROM (
+                       SELECT points FROM player_stats ps
+                       WHERE ps.player_id = i.player_id
+                       ORDER BY ps.game_date DESC LIMIT 20)), 0) as ppg
             FROM injuries i
         """)
         with self._lock:
@@ -82,12 +84,14 @@ class InjuryMonitor:
         # Get current state
         rows = db.fetch_all("""
             SELECT i.player_id, i.player_name, i.team_id, i.status, i.reason,
-                   COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
-                             WHERE ps.player_id = i.player_id
-                             ORDER BY ps.game_date DESC LIMIT 20), 0) as mpg,
-                   COALESCE((SELECT AVG(ps.points) FROM player_stats ps
-                             WHERE ps.player_id = i.player_id
-                             ORDER BY ps.game_date DESC LIMIT 20), 0) as ppg,
+                   COALESCE((SELECT AVG(minutes) FROM (
+                       SELECT minutes FROM player_stats ps
+                       WHERE ps.player_id = i.player_id
+                       ORDER BY ps.game_date DESC LIMIT 20)), 0) as mpg,
+                   COALESCE((SELECT AVG(points) FROM (
+                       SELECT points FROM player_stats ps
+                       WHERE ps.player_id = i.player_id
+                       ORDER BY ps.game_date DESC LIMIT 20)), 0) as ppg,
                    t.abbreviation
             FROM injuries i
             LEFT JOIN teams t ON i.team_id = t.team_id

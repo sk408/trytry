@@ -423,26 +423,36 @@ def resolve_opponent_team_id(opponent_abbr: str) -> int:
 
 
 def save_teams(teams: List[Dict[str, Any]]):
-    """Upsert teams into the database."""
-    for t in teams:
-        db.execute(
+    """Upsert teams into the database (batched)."""
+    batch = [
+        (t.get("id", t.get("team_id")),
+         t.get("full_name", t.get("name", "")),
+         t.get("abbreviation", ""),
+         t.get("conference", t.get("state", "")))
+        for t in teams
+    ]
+    if batch:
+        db.execute_many(
             """INSERT INTO teams (team_id, name, abbreviation, conference)
                VALUES (?, ?, ?, ?)
                ON CONFLICT(team_id) DO UPDATE SET
                  name=excluded.name,
                  abbreviation=excluded.abbreviation,
                  conference=excluded.conference""",
-            (t.get("id", t.get("team_id")),
-             t.get("full_name", t.get("name", "")),
-             t.get("abbreviation", ""),
-             t.get("conference", t.get("state", "")))
+            batch,
         )
 
 
 def save_players(players: List[Dict[str, Any]]):
-    """Upsert players into the database."""
-    for p in players:
-        db.execute(
+    """Upsert players into the database (batched)."""
+    batch = [
+        (p["player_id"], p["name"], p["team_id"], p.get("position", ""),
+         p.get("height", ""), p.get("weight", ""),
+         p.get("age", 0), p.get("experience", 0))
+        for p in players
+    ]
+    if batch:
+        db.execute_many(
             """INSERT INTO players (player_id, name, team_id, position, height, weight, age, experience)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(player_id) DO UPDATE SET
@@ -453,35 +463,38 @@ def save_players(players: List[Dict[str, Any]]):
                  weight=excluded.weight,
                  age=excluded.age,
                  experience=excluded.experience""",
-            (p["player_id"], p["name"], p["team_id"], p.get("position", ""),
-             p.get("height", ""), p.get("weight", ""),
-             p.get("age", 0), p.get("experience", 0))
+            batch,
         )
 
 
 def save_game_logs(logs: List[Dict[str, Any]]):
-    """Insert game logs into player_stats with conflict ignore."""
+    """Insert game logs into player_stats with conflict ignore (batched)."""
+    batch = []
     for log in logs:
         opp_id = log.get("opponent_team_id", 0)
         if opp_id == 0:
             opp_id = resolve_opponent_team_id(log.get("opponent_abbr", ""))
         if opp_id == 0:
             continue
-        db.execute(
+        batch.append((
+            log["player_id"], opp_id, log["is_home"], log["game_date"],
+            log.get("game_id", ""),
+            log["points"], log["rebounds"], log["assists"], log["minutes"],
+            log.get("steals", 0), log.get("blocks", 0), log.get("turnovers", 0),
+            log.get("fg_made", 0), log.get("fg_attempted", 0),
+            log.get("fg3_made", 0), log.get("fg3_attempted", 0),
+            log.get("ft_made", 0), log.get("ft_attempted", 0),
+            log.get("oreb", 0), log.get("dreb", 0),
+            log.get("plus_minus", 0), log.get("win_loss", ""),
+            log.get("personal_fouls", 0),
+        ))
+    if batch:
+        db.execute_many(
             """INSERT OR IGNORE INTO player_stats
                (player_id, opponent_team_id, is_home, game_date, game_id,
                 points, rebounds, assists, minutes, steals, blocks, turnovers,
                 fg_made, fg_attempted, fg3_made, fg3_attempted, ft_made, ft_attempted,
                 oreb, dreb, plus_minus, win_loss, personal_fouls)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (log["player_id"], opp_id, log["is_home"], log["game_date"],
-             log.get("game_id", ""),
-             log["points"], log["rebounds"], log["assists"], log["minutes"],
-             log.get("steals", 0), log.get("blocks", 0), log.get("turnovers", 0),
-             log.get("fg_made", 0), log.get("fg_attempted", 0),
-             log.get("fg3_made", 0), log.get("fg3_attempted", 0),
-             log.get("ft_made", 0), log.get("ft_attempted", 0),
-             log.get("oreb", 0), log.get("dreb", 0),
-             log.get("plus_minus", 0), log.get("win_loss", ""),
-             log.get("personal_fouls", 0))
+            batch,
         )

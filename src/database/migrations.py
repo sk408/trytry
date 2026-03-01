@@ -470,9 +470,11 @@ def _fix_game_date_formats():
                 )
                 _log.info("Phase 1: Migrated %d remaining text dates to YYYY-MM-DD", len(updates))
 
-        # ── Phase 2: Fix dates with wrong year (< 2024) ──
+        # ── Phase 2: Fix dates with wrong year (before the season) ──
+        cutoff = f"{season_start_year - 1}-01-01"
         wrong_year = fetch_all(
-            "SELECT id, game_date FROM player_stats WHERE game_date < '2024-01-01' LIMIT 20000"
+            "SELECT id, game_date FROM player_stats WHERE game_date < ? LIMIT 20000",
+            (cutoff,)
         )
         if wrong_year:
             updates2 = []

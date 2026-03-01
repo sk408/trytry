@@ -49,11 +49,9 @@ def _interpolate_weights(minute: float) -> Dict[str, float]:
 
 
 @lru_cache(maxsize=64)
-def _cached_pregame(home_team_id: int, away_team_id: int) -> Dict[str, Any]:
-    """Cached pregame prediction."""
-    from datetime import datetime
-    today = datetime.now().strftime("%Y-%m-%d")
-    result = predict_matchup(home_team_id, away_team_id, game_date=today)
+def _cached_pregame(home_team_id: int, away_team_id: int, date_key: str = "") -> Dict[str, Any]:
+    """Cached pregame prediction (date_key busts cache at midnight)."""
+    result = predict_matchup(home_team_id, away_team_id, game_date=date_key)
     return result.__dict__
 
 
@@ -162,7 +160,9 @@ def live_predict(home_team_id: int, away_team_id: int,
     weights = _interpolate_weights(minutes_elapsed)
 
     # Signal 1: Pregame model
-    pregame = _cached_pregame(home_team_id, away_team_id)
+    from datetime import datetime
+    pregame = _cached_pregame(home_team_id, away_team_id,
+                              date_key=datetime.now().strftime("%Y-%m-%d"))
     pg_home = pregame.get("predicted_home_score", 112)
     pg_away = pregame.get("predicted_away_score", 112)
 

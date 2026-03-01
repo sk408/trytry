@@ -44,6 +44,11 @@ _sync_cancel = threading.Event()
 _optimize_cancel = threading.Event()
 _pipeline_cancel = threading.Event()
 
+# Locks to prevent concurrent SSE operations on the same endpoint
+_sync_lock = threading.Lock()
+_optimize_lock = threading.Lock()
+_pipeline_lock = threading.Lock()
+
 
 # ---- Helper: SSE generator ----
 class NumpyEncoder(json.JSONEncoder):
@@ -55,8 +60,12 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super().default(obj)
 
-def _sse_generator(fn, cancel_event=None):
-    """Run fn in a thread, yield SSE events from its callback."""
+def _sse_generator(fn, cancel_event=None, lock=None):
+    """Run fn in a thread, yield SSE events from its callback.
+
+    If *lock* is provided it is released when the stream finishes (the caller
+    must have already acquired it before calling this function).
+    """
     import queue
     q = queue.Queue()
     done = threading.Event()
@@ -77,26 +86,30 @@ def _sse_generator(fn, cancel_event=None):
     t.start()
 
     async def generate():
-        while not done.is_set() or not q.empty():
-            try:
-                msg = q.get(timeout=0.5)
+        try:
+            while not done.is_set() or not q.empty():
+                try:
+                    msg = q.get(timeout=0.5)
+                    yield f"data: {msg}\n\n"
+                except Exception:
+                    pass
+                if cancel_event and cancel_event.is_set():
+                    yield "data: [CANCELLED]\n\n"
+                    break
+            # Flush remaining
+            while not q.empty():
+                msg = q.get_nowait()
                 yield f"data: {msg}\n\n"
-            except Exception:
-                pass
-            if cancel_event and cancel_event.is_set():
-                yield "data: [CANCELLED]\n\n"
-                break
-        # Flush remaining
-        while not q.empty():
-            msg = q.get_nowait()
-            yield f"data: {msg}\n\n"
-        # Send result as JSON if available
-        if result[0] is not None:
-            try:
-                yield f"data: [RESULTS_JSON]{json.dumps(result[0], cls=NumpyEncoder)}\n\n"
-            except Exception:
-                pass
-        yield "data: [DONE]\n\n"
+            # Send result as JSON if available
+            if result[0] is not None:
+                try:
+                    yield f"data: [RESULTS_JSON]{json.dumps(result[0], cls=NumpyEncoder)}\n\n"
+                except Exception:
+                    pass
+            yield "data: [DONE]\n\n"
+        finally:
+            if lock is not None:
+                lock.release()
 
     return generate()
 
@@ -398,19 +411,22 @@ async def matchups_page(request: Request,
                     SELECT p.player_id, p.name as player_name, p.position,
                            t.abbreviation,
                            i.status as injury_status, i.reason as injury_reason,
-                           COALESCE((SELECT AVG(ps.points) FROM player_stats ps
+                           COALESCE((SELECT AVG(points) FROM (
+                                     SELECT points FROM player_stats ps
                                      WHERE ps.player_id = p.player_id
-                                     ORDER BY ps.game_date DESC LIMIT 15), 0) as ppg,
-                           COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
+                                     ORDER BY ps.game_date DESC LIMIT 15)), 0) as ppg,
+                           COALESCE((SELECT AVG(minutes) FROM (
+                                     SELECT minutes FROM player_stats ps
                                      WHERE ps.player_id = p.player_id
-                                     ORDER BY ps.game_date DESC LIMIT 10), 0) as mpg
+                                     ORDER BY ps.game_date DESC LIMIT 10)), 0) as mpg
                     FROM players p
                     LEFT JOIN teams t ON p.team_id = t.team_id
                     LEFT JOIN injuries i ON p.player_id = i.player_id
                     WHERE p.team_id = ?
-                    ORDER BY COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
+                    ORDER BY COALESCE((SELECT AVG(minutes) FROM (
+                                       SELECT minutes FROM player_stats ps
                                        WHERE ps.player_id = p.player_id
-                                       ORDER BY ps.game_date DESC LIMIT 10), 0) DESC
+                                       ORDER BY ps.game_date DESC LIMIT 10)), 0) DESC
                 """, (tid,))
                 roster_list = []
                 for pl in players:
@@ -530,12 +546,14 @@ async def gamecast_page(request: Request, game_id: Optional[str] = None):
 
 @app.get("/api/sync/data")
 async def sse_sync_data(force: bool = False):
+    if not _sync_lock.acquire(blocking=False):
+        return JSONResponse({"error": "Sync already running"}, status_code=409)
     _sync_cancel.clear()
     from src.data.sync_service import full_sync
     from functools import partial
     fn = partial(full_sync, force=force) if force else full_sync
     return StreamingResponse(
-        _sse_generator(fn, _sync_cancel),
+        _sse_generator(fn, _sync_cancel, lock=_sync_lock),
         media_type="text/event-stream",
     )
 
@@ -635,6 +653,8 @@ async def sse_backtest():
 
 @app.get("/api/optimize")
 async def sse_optimize(continuous: bool = False, target: str = "ats"):
+    if not _optimize_lock.acquire(blocking=False):
+        return JSONResponse({"error": "Optimize already running"}, status_code=409)
     _optimize_cancel.clear()
 
     def _run(callback):
@@ -697,7 +717,7 @@ async def sse_optimize(continuous: bool = False, target: str = "ats"):
         return last_result
 
     return StreamingResponse(
-        _sse_generator(_run, _optimize_cancel),
+        _sse_generator(_run, _optimize_cancel, lock=_optimize_lock),
         media_type="text/event-stream",
     )
 
@@ -785,7 +805,7 @@ async def sse_fft_analysis():
             return {"error": "no_data"}
 
         import numpy as np
-        errors = [g["spread_error"] for g in per_game]
+        errors = [g.get("spread_error", 0) for g in per_game]
         if len(errors) < 10:
             return {"error": "insufficient_data"}
 
@@ -841,6 +861,8 @@ async def sse_team_refinement():
 
 @app.get("/api/continuous-optimize")
 async def sse_continuous_optimize():
+    if not _optimize_lock.acquire(blocking=False):
+        return JSONResponse({"error": "Optimize already running"}, status_code=409)
     _optimize_cancel.clear()
 
     def _run(callback):
@@ -867,7 +889,7 @@ async def sse_continuous_optimize():
         return {"iterations": iteration, "best_loss": best_loss}
 
     return StreamingResponse(
-        _sse_generator(_run, _optimize_cancel),
+        _sse_generator(_run, _optimize_cancel, lock=_optimize_lock),
         media_type="text/event-stream",
     )
 
@@ -896,20 +918,24 @@ async def sse_optimize_all():
 
 @app.get("/api/full-pipeline")
 async def sse_full_pipeline():
+    if not _pipeline_lock.acquire(blocking=False):
+        return JSONResponse({"error": "Pipeline already running"}, status_code=409)
     _pipeline_cancel.clear()
     from src.analytics.pipeline import run_full_pipeline
     return StreamingResponse(
-        _sse_generator(run_full_pipeline, _pipeline_cancel),
+        _sse_generator(run_full_pipeline, _pipeline_cancel, lock=_pipeline_lock),
         media_type="text/event-stream",
     )
 
 
 @app.get("/api/retune")
 async def sse_retune():
+    if not _pipeline_lock.acquire(blocking=False):
+        return JSONResponse({"error": "Pipeline already running"}, status_code=409)
     _pipeline_cancel.clear()
     from src.analytics.pipeline import run_retune
     return StreamingResponse(
-        _sse_generator(run_retune, _pipeline_cancel),
+        _sse_generator(run_retune, _pipeline_cancel, lock=_pipeline_lock),
         media_type="text/event-stream",
     )
 
@@ -1296,6 +1322,12 @@ async def sse_gamecast_stream(game_id: str):
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
+            # Stop streaming for finished games after sending final data
+            if status_state == "post":
+                if ws:
+                    ws.stop()
+                return
+
             # Wait for WebSocket change notification or fallback timeout
             ws_event.clear()
             fallback_sec = 10 if status_state == "in" else 30
@@ -1352,8 +1384,14 @@ async def get_weights():
 
 @app.get("/api/calibration")
 async def get_calibration():
-    spread = db.fetch_all("SELECT * FROM residual_calibration ORDER BY bin_low")
-    total = db.fetch_all("SELECT * FROM residual_calibration_total ORDER BY bin_low")
+    try:
+        spread = db.fetch_all("SELECT * FROM residual_calibration ORDER BY bin_low")
+    except Exception:
+        spread = []
+    try:
+        total = db.fetch_all("SELECT * FROM residual_calibration_total ORDER BY bin_low")
+    except Exception:
+        total = []
     return JSONResponse({
         "spread": [dict(r) for r in spread] if spread else [],
         "total": [dict(r) for r in total] if total else [],
