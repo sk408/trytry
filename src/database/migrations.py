@@ -333,6 +333,7 @@ CREATE INDEX IF NOT EXISTS idx_quarter_scores_team_date ON game_quarter_scores(t
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, id DESC);
 CREATE INDEX IF NOT EXISTS idx_injuries_team ON injuries(team_id);
 CREATE INDEX IF NOT EXISTS idx_injuries_player ON injuries(player_id);
+CREATE INDEX IF NOT EXISTS idx_player_stats_season ON player_stats(season, game_date);
 """
 
 
