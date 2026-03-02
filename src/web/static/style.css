@@ -3,20 +3,21 @@
 
 :root {
     --bg-dark: #0b0f19;
-    --bg-card: rgba(20, 30, 45, 0.8);
+    --bg-card: rgba(22, 34, 52, 0.85);
     --bg-input: rgba(15, 23, 42, 0.9);
     --bg-hover: rgba(59, 130, 246, 0.2);
+    --text: #e2e8f0;
     --text-primary: #e2e8f0;
     --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    --text-muted: #7e8fa4;
     --accent: #00e5ff;
     --accent-hover: #00b8cc;
     --success: #22c55e;
     --warning: #f59e0b;
     --danger: #ef4444;
     --info: #06b6d4;
-    --border: rgba(255, 255, 255, 0.1);
-    --border-light: rgba(255, 255, 255, 0.15);
+    --border: rgba(255, 255, 255, 0.13);
+    --border-light: rgba(255, 255, 255, 0.2);
     --shadow: rgba(0, 0, 0, 0.5);
     --radius: 4px;
     --radius-lg: 8px;
@@ -49,8 +50,10 @@ body {
 
 body.oled-mode {
     --bg-dark: #000000;
-    --bg-card: #000000;
-    --bg-input: #000000;
+    --bg-card: rgba(10, 12, 18, 1);
+    --bg-input: rgba(8, 10, 14, 1);
+    --border: rgba(255, 255, 255, 0.16);
+    --border-light: rgba(255, 255, 255, 0.24);
 }
 
 /* ---- Navbar ---- */
@@ -151,7 +154,7 @@ body.oled-mode {
 /* ---- Cards ---- */
 .card {
     background: var(--bg-card);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
     padding: 1.5rem;
     margin-bottom: 1rem;
@@ -164,6 +167,9 @@ body.oled-mode {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--accent);
+    padding-bottom: 0.5rem;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
 }
 
 .card-header {
@@ -702,7 +708,7 @@ textarea:focus {
 /* ---- Quarter Scores ---- */
 .quarter-scores {
     font-size: 0.75rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
 }
 
 .quarter-scores table {
@@ -1693,7 +1699,7 @@ textarea:focus {
     position: relative;
     overflow: hidden;
     background: rgba(15, 20, 30, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-lg);
     padding: 0;
     min-height: 220px;
@@ -1737,7 +1743,7 @@ textarea:focus {
     z-index: 2;
     text-align: center;
     min-width: 140px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border-light);
     border-top: none;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
 }
@@ -1833,7 +1839,7 @@ textarea:focus {
 .quarter-scores-inner {
     text-align: center;
     font-size: 0.85rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     background: rgba(0, 0, 0, 0.6);
     padding: 6px 12px;
     border-radius: 6px;
@@ -2057,7 +2063,7 @@ textarea:focus {
 
 .pred-item .pred-label {
     font-size: 0.65rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
@@ -2087,7 +2093,7 @@ textarea:focus {
 
 .odds-item .odds-label {
     font-size: 0.65rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
@@ -2119,7 +2125,7 @@ textarea:focus {
 
 .flow-stat-label {
     font-size: 0.75rem;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-transform: uppercase;
     font-weight: 700;
     letter-spacing: 0.03em;

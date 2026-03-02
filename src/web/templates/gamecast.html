@@ -253,14 +253,15 @@
     align-items: center;
     padding: 12px;
     border-radius: 8px;
-    background: rgba(255,255,255,0.02);
+    background: rgba(255,255,255,0.04);
     text-decoration: none;
-    color: var(--text);
+    color: var(--text-primary);
     transition: background 0.2s, transform 0.1s, border 0.2s;
-    border: 1px solid transparent;
+    border: 1px solid var(--border);
 }
 .game-row:hover {
-    background: rgba(255,255,255,0.05);
+    background: rgba(255,255,255,0.08);
+    border-color: var(--border-light);
 }
 .game-row.active {
     border-color: var(--accent);
@@ -279,7 +280,7 @@
     filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 .at {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-weight: 400;
     font-size: 0.8rem;
     margin: 0 4px;
@@ -335,8 +336,8 @@
 }
 
 .final-badge {
-  background: var(--border);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
   padding: 4px 12px;
   border-radius: 20px;
   font-size: 0.75rem;
@@ -388,17 +389,17 @@
 }
 
 .odds-item {
-  background: var(--bg-dark);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   text-align: center;
-  box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
 }
 
 .odds-label {
   display: block;
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   margin-bottom: 4px;
   font-weight: 600;
@@ -408,7 +409,7 @@
   display: block;
   font-size: 1.25rem;
   font-weight: 800;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 /* Prediction Summary */
@@ -420,17 +421,17 @@
 }
 
 .pred-item {
-  background: var(--bg-dark);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px;
   text-align: center;
-  box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
 }
 
 .pred-label {
   display: block;
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-transform: uppercase;
   margin-bottom: 4px;
   font-weight: 600;
@@ -446,13 +447,12 @@
   max-height: 400px;
   overflow-y: auto;
   border-radius: 6px;
-  background: var(--bg-dark);
-  box-shadow: inset 0 2px 8px rgba(0,0,0,0.2);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .play-item {
   padding: 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-light);
   transition: background 0.3s;
 }
 
@@ -461,20 +461,20 @@
 }
 
 .play-item.new {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .play-meta {
   display: flex;
   gap: 8px;
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
 .play-period {
   font-weight: 800;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 .play-body {
@@ -494,7 +494,7 @@
   border-radius: 4px;
   letter-spacing: 0.3px;
   background: rgba(255,255,255,0.1);
-  color: var(--text);
+  color: #fff;
 }
 
 .play-text {
@@ -506,7 +506,7 @@
 .play-score {
   font-size: 0.875rem;
   font-weight: 800;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
@@ -565,14 +565,14 @@
 .box-table th {
   font-size: 0.75rem;
   padding: 10px 8px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 700;
-  border-bottom: 2px solid var(--border);
+  border-bottom: 2px solid var(--border-light);
 }
 
 .box-table td {
   padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-light);
 }
 
 /* ---- Shot Chart Court Card ---- */
@@ -590,6 +590,8 @@
 
 .court-header h2 {
   margin: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .court-toggle {
@@ -603,7 +605,7 @@
 .court-toggle-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 0.75rem;
   font-weight: 700;
   padding: 5px 12px;
@@ -618,13 +620,13 @@
 }
 
 .court-toggle-btn:hover {
-  color: var(--text);
+  color: var(--text-primary);
   background: rgba(255,255,255,0.05);
 }
 
 .court-toggle-btn.active {
   background: rgba(255,255,255,0.12);
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 .court-toggle-dot {
@@ -1012,7 +1014,7 @@ function updateScoreboard(s) {
             runEl.style.color = 'var(--warning)';
         } else {
             runEl.textContent = 'None';
-            runEl.style.color = 'var(--text)';
+            runEl.style.color = 'var(--text-secondary)';
         }
     }
 
@@ -1026,8 +1028,8 @@ function updateScoreboard(s) {
         }
         let html = '';
         for(let i=0; i<7; i++) {
-            const opacity = i < count ? '1' : '0.2';
-            html += `<div style="width:6px; height:3px; background:rgba(255,255,255,${opacity}); border-radius:1px;"></div>`;
+            const opacity = i < count ? '1' : '0.3';
+            html += `<div style="width:8px; height:4px; background:rgba(255,255,255,${opacity}); border-radius:2px;"></div>`;
         }
         container.innerHTML = html;
     };
@@ -1041,10 +1043,10 @@ function updateScoreboard(s) {
         let headers = hq.map(function(_, i) { return i < 4 ? 'Q' + (i+1) : 'OT' + (i-3); }).join('</th><th style="padding:4px 6px;text-align:center;">');
         let html = '<table style="width:auto;margin:0 auto;font-size:0.8rem;border-collapse:collapse;white-space:nowrap;">' +
             '<tr><th></th><th style="padding:4px 6px;text-align:center;">' + headers + '</th><th style="padding:4px 6px;text-align:center;">T</th></tr>' +
-            '<tr style="border-bottom:1px solid var(--border);"><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.away_team + '<span style="margin-left:6px;font-size:0.65rem;color:var(--text-muted);font-weight:600;">F:' + (s.away_fouls||0) + '</span></td>' +
+            '<tr style="border-bottom:1px solid var(--border);"><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.away_team + '<span style="margin-left:6px;font-size:0.7rem;color:var(--text-secondary);font-weight:600;">F:' + (s.away_fouls||0) + '</span></td>' +
             aq.map(function(q) { return '<td style="padding:4px 6px;text-align:center;">' + q + '</td>'; }).join('') +
             '<td class="font-bold" style="padding:4px 6px;text-align:center;color:var(--team-away);">' + s.away_score + '</td></tr>' +
-            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.home_team + '<span style="margin-left:6px;font-size:0.65rem;color:var(--text-muted);font-weight:600;">F:' + (s.home_fouls||0) + '</span></td>' +
+            '<tr><td class="font-bold" style="padding:4px 8px;text-align:right;">' + s.home_team + '<span style="margin-left:6px;font-size:0.7rem;color:var(--text-secondary);font-weight:600;">F:' + (s.home_fouls||0) + '</span></td>' +
             hq.map(function(q) { return '<td style="padding:4px 6px;text-align:center;">' + q + '</td>'; }).join('') +
             '<td class="font-bold" style="padding:4px 6px;text-align:center;color:var(--team-home);">' + s.home_score + '</td></tr>' +
             '</table>';
@@ -1135,7 +1137,7 @@ function updateOdds(odds) {
             signalColor = Math.abs(edge) >= 10 ? '#22c55e' : '#eab308';
         }
         sharpHtml = `
-        <div style="grid-column: 1 / -1; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="grid-column: 1 / -1; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-light);">
             <div style="color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px;">Sharp Money</div>
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
                 <div class="odds-item">
@@ -1401,7 +1403,7 @@ function updatePlays(plays, s) {
                 </div>
                 <div class="play-body">
                     ${p.team_id ? `<img src="/images/logos/${p.team_id}.svg" style="width:24px;height:24px;object-fit:contain;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.3));" onerror="this.style.display='none'">` : ''}
-                    <span class="play-text" style="${p.scoring ? 'font-weight:600;color:var(--text);' : ''}">${p.text || ''}</span>
+                    <span class="play-text" style="${p.scoring ? 'font-weight:600;color:#fff;' : ''}">${p.text || ''}</span>
                 </div>
                 ${(p.away_score || p.home_score) ? `<div class="play-score">${awayAbbr || 'AWAY'} ${p.away_score} - ${p.home_score} ${homeAbbr || 'HOME'}</div>` : ''}
             </div>

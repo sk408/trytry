@@ -74,7 +74,7 @@ class WeightConfig:
     ats_edge_threshold: float = 3.0
 
     # Clamps
-    spread_clamp: float = 30.0
+    spread_clamp: float = 20.0
     total_min: float = 140.0
     total_max: float = 280.0
 
@@ -225,7 +225,7 @@ OPTIMIZER_RANGES = {
     "four_factors_scale": (50.0, 2000.0),    # sensitivity: optimal 1100-1500, widened ceiling
     "clutch_scale": (0.01, 2.0),             # sensitivity: optimal ~0.13 (in range)
     "hustle_effort_mult": (0.0, 8.0),        # sensitivity: optimal ~4.8, was capped at 5.0, widened
-    "ff_efg_weight": (0.0, 15.0),            # widened for 3-season optimizer
+    "ff_efg_weight": (0.0, 25.0),            # widened for 3-season optimizer
     "ff_tov_weight": (0.0, 15.0),            # widened for 3-season optimizer
     "ff_oreb_weight": (0.0, 15.0),           # widened for 3-season optimizer
     "ff_fta_weight": (0.0, 15.0),            # widened for 3-season optimizer
