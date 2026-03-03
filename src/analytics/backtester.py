@@ -653,6 +653,12 @@ def _aggregate_backtest(per_game: List[Dict], callback=None,
                 mult = (1.0 + 100.0 / abs(dog_ml)) if dog_ml < 0 else (1.0 + dog_ml / 100.0)
                 total_profit += (mult - 1.0) if g.get("dog_correct") else -1.0
             else:
+                logger.warning(
+                    "Dog ROI: missing moneyline for %s %s vs %s — using 1.5x fallback",
+                    g.get("game_date", "?"),
+                    g.get("home_team", "?"),
+                    g.get("away_team", "?"),
+                )
                 total_profit += 1.5 if g.get("dog_correct") else -1.0
         dog_roi = round(total_profit / len(dog_picks) * 100, 1)
     else:

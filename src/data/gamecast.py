@@ -15,21 +15,7 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
 }
 
-# ESPN uses shorter/different abbreviations than the NBA standard stored in our DB
-ESPN_TO_NBA_ABBR: Dict[str, str] = {
-    "GS":   "GSW",
-    "SA":   "SAS",
-    "NY":   "NYK",
-    "NO":   "NOP",
-    "WSH":  "WAS",
-    "UTAH": "UTA",
-    "PHO":  "PHX",
-    "BK":   "BKN",
-}
-
-def normalize_espn_abbr(abbr: str) -> str:
-    """Translate an ESPN abbreviation to the NBA/DB standard."""
-    return ESPN_TO_NBA_ABBR.get(abbr.upper(), abbr)
+from src.utils.team_mapper import normalize_espn_abbr, normalize_action_abbr
 
 
 def fetch_espn_scoreboard() -> List[Dict[str, Any]]:
@@ -181,6 +167,7 @@ class FastcastWebSocket:
         self._last_notify = 0.0
         self._debounce_sec = 1.5  # min seconds between notifications
         self._connected = False
+        self._reconnect_attempt = 0
 
     def start(self):
         """Connect and start receiving in a daemon background thread."""
@@ -246,13 +233,17 @@ class FastcastWebSocket:
 
             self._connected = False
             if self._running:
-                logger.info("Fastcast reconnecting in 5s...")
-                _time.sleep(5)
+                delay = min(60, 2 ** self._reconnect_attempt)
+                logger.info("Fastcast reconnecting in %ds (attempt %d)...",
+                            delay, self._reconnect_attempt + 1)
+                _time.sleep(delay)
+                self._reconnect_attempt += 1
 
     # -- WebSocket callbacks (run on WS background thread) --
 
     def _on_open(self, ws):
         logger.info(f"Fastcast connected for game {self.game_id}")
+        self._reconnect_attempt = 0
         ws.send(json.dumps({"op": "C"}))
 
     def _on_message(self, ws, raw):
@@ -307,12 +298,8 @@ def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
     import time
     global _an_odds_cache, _an_last_fetch
     
-    # Simple mapping for Action Network abbreviations just in case
-    # (Usually they match standard NBA abbreviations perfectly)
-    an_mapper = {"NO": "NOP", "NY": "NYK", "SA": "SAS", "GS": "GSW"}
-    
-    home_query = an_mapper.get(home_abbr, home_abbr)
-    away_query = an_mapper.get(away_abbr, away_abbr)
+    home_query = normalize_action_abbr(home_abbr)
+    away_query = normalize_action_abbr(away_abbr)
     
     now = time.time()
     if not _an_odds_cache or (now - _an_last_fetch) > 10.0:

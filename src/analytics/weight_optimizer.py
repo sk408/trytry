@@ -105,6 +105,13 @@ class VectorizedGames:
         ])
         self.combined_fatigue = self.home_fatigue + self.away_fatigue
 
+        # Rest / altitude
+        self.net_rest = np.array([g.home_rest_days - g.away_rest_days for g in games], dtype=float)
+        self.away_b2b_at_altitude = np.array([
+            1.0 if g.away_b2b and g.home_team_id in (1610612743, 1610612762) else 0.0
+            for g in games
+        ])
+
         self.vegas_spread = np.array([g.vegas_spread for g in games])
         self.vegas_home_ml = np.array([g.vegas_home_ml for g in games])
         self.vegas_away_ml = np.array([g.vegas_away_ml for g in games])
@@ -190,6 +197,11 @@ class VectorizedGames:
         # We only apply sharp money edge if there's an actual edge recorded (i.e. not the default 0.0)
         # sharp_money_edge is positive when money > tickets for the home team.
         spread += self.sharp_money_edge * w.sharp_money_weight
+
+        # Net rest advantage — positive = home more rested
+        spread += self.net_rest * w.rest_advantage_mult
+        # Altitude B2B — away team on B2B at DEN/UTA
+        spread -= self.away_b2b_at_altitude * w.altitude_b2b_penalty
 
         # Total
         total = home_base + away_base

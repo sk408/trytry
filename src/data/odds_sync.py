@@ -23,19 +23,7 @@ def fetch_action_odds(date_str: str) -> list:
         logger.error(f"Error fetching Action Network odds for {date_str}: {e}")
         return []
 
-def _map_action_abbrev(abbr: str) -> str:
-    """Map Action Network abbreviations to standard NBA API ones if they differ."""
-    if not abbr:
-        return ""
-    mapping = {
-        "NO": "NOP",
-        "NY": "NYK",
-        "SA": "SAS",
-        "WSH": "WAS",
-        "GS": "GSW",
-        "UTAH": "UTA",
-    }
-    return mapping.get(abbr.upper(), abbr.upper())
+from src.utils.team_mapper import normalize_action_abbr as _map_action_abbrev
 
 def sync_odds_for_date(game_date: str, callback: Optional[Callable] = None) -> int:
     """Fetch and store odds for all games on a date (YYYY-MM-DD)."""

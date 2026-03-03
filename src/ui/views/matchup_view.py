@@ -110,6 +110,7 @@ class MatchupView(QWidget):
         self._worker_thread = None
         self._worker = None
         self._team_id_map = {}  # abbreviation -> team_id (for logo lookup)
+        self._injury_overrides = {}  # player_id -> overridden status string
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -189,11 +190,17 @@ class MatchupView(QWidget):
         cards_layout = QGridLayout()
         cards_layout.setSpacing(8)
         self.spread_card = PredictionCard("Spread", accent="#00e5ff")
+        self.spread_card.setToolTip("Predicted point spread (negative = home favored)")
         self.total_card = PredictionCard("Total", accent="#a78bfa")
+        self.total_card.setToolTip("Predicted combined score of both teams")
         self.home_card = PredictionCard("Home Score", accent="#22c55e")
+        self.home_card.setToolTip("Predicted home team score")
         self.away_card = PredictionCard("Away Score", accent="#f59e0b")
+        self.away_card.setToolTip("Predicted away team score")
         self.winner_card = PredictionCard("Win Probability", accent="#3b82f6")
+        self.winner_card.setToolTip("Predicted winner based on spread direction and magnitude")
         self.confidence_card = PredictionCard("Confidence", accent="#00e5ff")
+        self.confidence_card.setToolTip("Model confidence: higher = stronger edge over Vegas line")
 
         cards_layout.addWidget(self.spread_card, 0, 0)
         cards_layout.addWidget(self.total_card, 0, 1)
@@ -216,12 +223,20 @@ class MatchupView(QWidget):
         self.breakdown_table = QTableWidget()
         self.breakdown_table.setColumnCount(3)
         self.breakdown_table.setHorizontalHeaderLabels(["Factor", "Home", "Away"])
-        self.breakdown_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        hdr = self.breakdown_table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setToolTip("Breakdown of each adjustment factor contributing to the spread and total")
         self.breakdown_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.breakdown_table.setMaximumHeight(250)
         layout.addWidget(self.breakdown_table)
+
+        # What-if injury override button
+        self._whatif_btn = QPushButton("Recalculate with Overrides")
+        self._whatif_btn.setProperty("class", "warning")
+        self._whatif_btn.setToolTip("Toggle player statuses in the roster tables below, then click to re-predict")
+        self._whatif_btn.clicked.connect(self._on_whatif_predict)
+        self._whatif_btn.setVisible(False)
+        layout.addWidget(self._whatif_btn)
 
         # Injury impact summary
         self.injury_label = QLabel("")
@@ -381,6 +396,9 @@ class MatchupView(QWidget):
             return
         if home_id == away_id:
             return
+        # Clear what-if overrides on fresh prediction
+        self._injury_overrides.clear()
+        self._whatif_btn.setVisible(False)
         try:
             if self._worker_thread is not None and self._worker_thread.isRunning():
                 return
@@ -460,6 +478,8 @@ class MatchupView(QWidget):
             ("Four Factors", result.get("four_factors_adj", 0)),
             ("Clutch", result.get("clutch_adj", 0)),
             ("Hustle (Spread)", result.get("hustle_adj", 0)),
+            ("Rest Advantage", result.get("rest_advantage", 0)),
+            ("Altitude B2B", -result.get("altitude_penalty", 0)),
             ("Pace (Total)", result.get("pace_adj", 0)),
             ("Def. Disruption (Total)", result.get("defensive_disruption", 0)),
             ("OREB Boost (Total)", result.get("oreb_boost", 0)),
@@ -529,9 +549,8 @@ class MatchupView(QWidget):
 
     # ──────────────────────── ROSTER / INJURY HELPERS ────────────────
 
-    @staticmethod
-    def _make_roster_table() -> QTableWidget:
-        """Create a styled roster table with injury columns."""
+    def _make_roster_table(self) -> QTableWidget:
+        """Create a styled roster table with injury columns (clickable Status)."""
         table = QTableWidget()
         table.setColumnCount(7)
         table.setHorizontalHeaderLabels([
@@ -546,6 +565,7 @@ class MatchupView(QWidget):
         table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
         table.setAlternatingRowColors(True)
+        table.cellClicked.connect(self._on_roster_cell_clicked)
         return table
 
     def _populate_team_roster(self, team_id, team_abbr: str, table: QTableWidget):
@@ -627,6 +647,23 @@ class MatchupView(QWidget):
                     impact_text = ""
                     inj_status = "Active"
 
+                # Check for what-if override
+                overridden_status = self._injury_overrides.get(pid)
+                if overridden_status is not None:
+                    inj_status = overridden_status
+                    status_lower = inj_status.lower()
+                    # Recalculate display based on override
+                    if "out" in status_lower:
+                        row_color = _RED
+                        impact_text = f"-{stats['ppg']:.1f} pts"
+                    elif "questionable" in status_lower:
+                        row_color = _YELLOW
+                        impact_text = f"~-{stats['ppg'] * 0.4:.1f} pts"
+                    else:
+                        row_color = _GREEN
+                        impact_text = ""
+                        inj_status = "Active"
+
                 items = [
                     name, pos,
                     f"{stats['ppg']:.1f}", f"{stats['mpg']:.1f}",
@@ -634,6 +671,8 @@ class MatchupView(QWidget):
                 ]
                 for col, text in enumerate(items):
                     item = QTableWidgetItem(text)
+                    if col == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, pid)
                     if col >= 4 and inj_status != "Active":
                         item.setForeground(row_color)
                         if col == 4:
@@ -669,3 +708,106 @@ class MatchupView(QWidget):
         except Exception as e:
             logger.error(f"Roster load error for team {team_id}: {e}")
             table.setRowCount(0)
+
+    _STATUS_CYCLE = ["Active", "Out", "Questionable"]
+
+    def _on_roster_cell_clicked(self, row: int, col: int):
+        """Cycle player injury status when Status column (col 4) is clicked."""
+        if col != 4:
+            return
+        table = self.sender()
+        if not isinstance(table, QTableWidget):
+            return
+        name_item = table.item(row, 0)
+        if name_item is None:
+            return
+        pid = name_item.data(Qt.ItemDataRole.UserRole)
+        if pid is None:
+            return
+
+        current = table.item(row, 4).text() if table.item(row, 4) else "Active"
+        try:
+            idx = self._STATUS_CYCLE.index(current)
+        except ValueError:
+            idx = 0
+        next_status = self._STATUS_CYCLE[(idx + 1) % len(self._STATUS_CYCLE)]
+
+        # Store override (remove if back to Active with no original injury)
+        if next_status == "Active":
+            self._injury_overrides.pop(pid, None)
+        else:
+            self._injury_overrides[pid] = next_status
+
+        # Update cell display
+        status_item = table.item(row, 4)
+        if status_item:
+            status_item.setText(next_status)
+            if next_status == "Out":
+                status_item.setForeground(QColor(239, 68, 68))
+            elif next_status == "Questionable":
+                status_item.setForeground(QColor(234, 179, 8))
+            else:
+                status_item.setForeground(QColor(226, 232, 240))
+
+        self._whatif_btn.setVisible(bool(self._injury_overrides))
+
+    def _on_whatif_predict(self):
+        """Re-run prediction with injury overrides applied."""
+        home_id = self.home_combo.currentData()
+        away_id = self.away_combo.currentData()
+        if not home_id or not away_id or home_id == away_id:
+            return
+        try:
+            if self._worker_thread is not None and self._worker_thread.isRunning():
+                return
+        except RuntimeError:
+            self._worker_thread = None
+
+        # Build injured_players dict from overrides
+        injured = {}
+        for pid, status in self._injury_overrides.items():
+            if status == "Out":
+                injured[pid] = 0.0
+            elif status == "Questionable":
+                injured[pid] = 0.5
+
+        self.predict_btn.setEnabled(False)
+        self.predict_btn.setText("Recalculating...")
+
+        self._worker = _WhatIfWorker(home_id, away_id, injured)
+        self._worker_thread = QThread()
+        self._worker.moveToThread(self._worker_thread)
+        self._worker_thread.started.connect(self._worker.run)
+        _QC = Qt.ConnectionType.QueuedConnection
+        self._worker.finished.connect(self._on_result, _QC)
+        self._worker.error.connect(self._on_error, _QC)
+        self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._cleanup_worker)
+        self._worker_thread.start()
+
+
+class _WhatIfWorker(QObject):
+    """Background worker for what-if injury prediction."""
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, home_id: int, away_id: int, injured: dict):
+        super().__init__()
+        self.home_id = home_id
+        self.away_id = away_id
+        self.injured = injured
+
+    def run(self):
+        try:
+            from datetime import datetime
+            from src.analytics.prediction import predict_matchup
+            today = datetime.now().strftime("%Y-%m-%d")
+            result = predict_matchup(
+                self.home_id, self.away_id,
+                game_date=today,
+                injured_players=self.injured,
+            )
+            self.finished.emit(result.__dict__)
+        except Exception as e:
+            self.error.emit(str(e))

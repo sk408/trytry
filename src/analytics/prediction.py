@@ -49,6 +49,8 @@ class MatchupPrediction:
     defensive_disruption: float = 0.0
     oreb_boost: float = 0.0
     hustle_total_adj: float = 0.0
+    rest_advantage: float = 0.0
+    altitude_penalty: float = 0.0
     home_proj: Dict[str, float] = field(default_factory=dict)
     away_proj: Dict[str, float] = field(default_factory=dict)
     adjustments: Dict[str, float] = field(default_factory=dict)
@@ -80,6 +82,10 @@ class PrecomputedGame:
     away_tuning_away_corr: float = 0.0
     home_fatigue_penalty: float = 0.0
     away_fatigue_penalty: float = 0.0
+    home_rest_days: int = 3
+    away_rest_days: int = 3
+    home_b2b: bool = False
+    away_b2b: bool = False
     home_off: float = 110.0
     away_off: float = 110.0
     home_def: float = 110.0
@@ -807,6 +813,19 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     spread += hustle_adj
     pred.hustle_adj = hustle_adj
 
+    # Net rest advantage — positive = home more rested
+    net_rest = home_fatigue["rest_days"] - away_fatigue["rest_days"]
+    rest_adj = net_rest * w.rest_advantage_mult
+    spread += rest_adj
+    pred.rest_advantage = rest_adj
+
+    # Altitude B2B — away team on B2B at DEN/UTA
+    altitude_penalty = 0.0
+    if away_fatigue["b2b"] and home_team_id in (1610612743, 1610612762):
+        altitude_penalty = w.altitude_b2b_penalty
+        spread -= altitude_penalty
+    pred.altitude_penalty = altitude_penalty
+
     # ── Step 7: Total Calculation ──
     total = home_base_pts + away_base_pts
 
@@ -1137,6 +1156,10 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 away_tuning_away_corr=0.0,   # tuning applied at eval time, not baked in
                 home_fatigue_penalty=hfat["penalty"],
                 away_fatigue_penalty=afat["penalty"],
+                home_rest_days=hfat["rest_days"],
+                away_rest_days=afat["rest_days"],
+                home_b2b=hfat["b2b"],
+                away_b2b=afat["b2b"],
                 home_off=home_off,
                 away_off=away_off,
                 home_def=home_def,
@@ -1295,6 +1318,12 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     else:
         sharp_money_edge = 0.0
     spread += sharp_money_edge * w.sharp_money_weight
+
+    # Net rest advantage — positive = home more rested
+    spread += (g.home_rest_days - g.away_rest_days) * w.rest_advantage_mult
+    # Altitude B2B — away team on B2B at DEN/UTA
+    if g.away_b2b and g.home_team_id in (1610612743, 1610612762):
+        spread -= w.altitude_b2b_penalty
 
     # Total
     total = home_base + away_base

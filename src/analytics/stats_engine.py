@@ -329,7 +329,16 @@ def aggregate_projection(team_id: int, opponent_team_id: int, is_home: int,
         splits = player_splits(pid, opponent_team_id, is_home, recent_games=10,
                                as_of_date=as_of_date)
         if splits["minutes"] < 1.0:
-            continue
+            if play_prob >= 0.3:
+                # Try full-season averages for returning players
+                splits = player_splits(pid, opponent_team_id, is_home,
+                                       recent_games=9999, as_of_date=as_of_date)
+                if splits["minutes"] < 1.0:
+                    continue
+                # Return-from-long-absence discount
+                play_prob *= 0.5
+            else:
+                continue
 
         weight = player_weights.get(pid, 1.0) * play_prob
 

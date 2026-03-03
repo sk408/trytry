@@ -49,11 +49,17 @@ class WeightConfig:
     hustle_defl_baseline: float = 30.0
     hustle_defl_penalty: float = 0.1
 
-    # Fatigue — sensitivity: all dead weight, zeroed
-    fatigue_total_mult: float = 0.0
-    fatigue_b2b: float = 0.0
-    fatigue_3in4: float = 0.0
-    fatigue_4in6: float = 0.0
+    # Fatigue — re-enabled with non-zero defaults for optimizer re-evaluation
+    fatigue_total_mult: float = 0.3
+    fatigue_b2b: float = 1.5
+    fatigue_3in4: float = 0.8
+    fatigue_4in6: float = 1.0
+
+    # Net rest advantage — continuous signal (pts per rest-day differential)
+    rest_advantage_mult: float = 0.3
+
+    # Altitude B2B penalty — extra pts penalty for away B2B in DEN/UTA
+    altitude_b2b_penalty: float = 1.5
 
     # ESPN blend — sensitivity: dead weight, zeroed
     espn_spread_scale: float = 0.3
@@ -233,6 +239,12 @@ OPTIMIZER_RANGES = {
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
     "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
     "ats_edge_threshold": (0.5, 6.0),        # sensitivity: optimal 0.5, lowered floor
+    "rest_advantage_mult": (0.0, 3.0),       # pts per rest-day differential
+    "altitude_b2b_penalty": (0.0, 5.0),      # extra penalty for away B2B at altitude
+    "fatigue_b2b": (0.0, 5.0),               # back-to-back penalty
+    "fatigue_3in4": (0.0, 3.0),              # 3-in-4 nights penalty
+    "fatigue_4in6": (0.0, 3.0),              # 4-in-6 nights penalty
+    "fatigue_total_mult": (0.0, 2.0),        # combined fatigue impact on total
 }
 
 
