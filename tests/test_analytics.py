@@ -425,9 +425,13 @@ class TestThreeCodePathSync:
         With a single game, spread_mae = |predicted_spread - actual_spread|.
         We can recover predicted_spread from this since we know actual_spread.
         Both paths must give the same predicted spread within tolerance.
+        Uses non-zero elo_edge_weight and opening_spread_weight to exercise
+        all code paths including the new Elo and opening spread features.
         """
         g = sample_game
         w = default_weights
+        w.elo_edge_weight = 0.04       # exercise Elo path
+        w.opening_spread_weight = 0.2  # exercise opening spread path
         actual_spread = g.actual_home_score - g.actual_away_score
 
         # VectorizedGames path — mock DB for tuning (returns zeros)
@@ -466,3 +470,155 @@ class TestFatigueInExtremeRanges:
         ]
         for param in expected:
             assert param in EXTREME_RANGES, f"{param} missing from EXTREME_RANGES"
+
+
+# ──────────────────────────────────────────────────────────────
+# Elo ratings tests
+# ──────────────────────────────────────────────────────────────
+
+class TestEloRatings:
+
+    def test_elo_changes_spread(self):
+        """Changing w.elo_edge_weight must change VectorizedGames spread."""
+        game = PrecomputedGame(
+            actual_home_score=112.0,
+            actual_away_score=108.0,
+            home_proj={"points": 110.0, "rebounds": 44.0, "turnovers": 14.0,
+                       "steals": 7.0, "blocks": 5.0, "oreb": 10.0},
+            away_proj={"points": 108.0, "rebounds": 42.0, "turnovers": 15.0,
+                       "steals": 8.0, "blocks": 4.0, "oreb": 9.0},
+            home_elo=1550.0,
+            away_elo=1450.0,
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        w1 = WeightConfig()
+        w1.elo_edge_weight = 0.0
+        r1 = vg.evaluate(w1)
+
+        w2 = WeightConfig()
+        w2.elo_edge_weight = 0.1
+        r2 = vg.evaluate(w2)
+
+        assert r1["spread_mae"] != r2["spread_mae"], \
+            "elo_edge_weight had no effect on spread!"
+
+    def test_elo_edge_array(self):
+        """VectorizedGames computes correct elo_edge array."""
+        game = PrecomputedGame(home_elo=1530.0, away_elo=1510.0)
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        np.testing.assert_almost_equal(vg.elo_edge[0], 20.0, decimal=1)
+
+    def test_compute_elo_ratings_basic(self):
+        """Elo function computes pregame ratings and updates after wins."""
+        from src.analytics.prediction import compute_elo_ratings, invalidate_elo_cache
+        invalidate_elo_cache()
+
+        games = [
+            {"game_date": "2024-11-01", "home_team_id": 1, "away_team_id": 2,
+             "home_score": 110, "away_score": 100},
+            {"game_date": "2024-11-03", "home_team_id": 2, "away_team_id": 1,
+             "home_score": 105, "away_score": 95},
+        ]
+        pregame = compute_elo_ratings(games)
+
+        # Game 1: both start at 1500
+        assert pregame[(1, "2024-11-01")] == 1500.0
+        assert pregame[(2, "2024-11-01")] == 1500.0
+
+        # Game 2: team 1 won game 1, so its Elo > 1500; team 2 lost, Elo < 1500
+        assert pregame[(1, "2024-11-03")] > 1500.0
+        assert pregame[(2, "2024-11-03")] < 1500.0
+
+        invalidate_elo_cache()
+
+    def test_elo_season_regression(self):
+        """Elo regresses toward 1500 at season boundaries."""
+        from src.analytics.prediction import compute_elo_ratings, invalidate_elo_cache, _ELO_BASE
+        invalidate_elo_cache()
+
+        games = [
+            # Season 2023-24 game
+            {"game_date": "2024-04-10", "home_team_id": 1, "away_team_id": 2,
+             "home_score": 130, "away_score": 90},
+            # Season 2024-25 game (new season)
+            {"game_date": "2024-10-22", "home_team_id": 1, "away_team_id": 2,
+             "home_score": 110, "away_score": 100},
+        ]
+        pregame = compute_elo_ratings(games)
+
+        # After game 1, team 1 gained Elo. But by game 2 (new season),
+        # it should have regressed 25% toward 1500.
+        elo_after_g1 = pregame[(1, "2024-04-10")] + 10  # K=20, won when 50% expected → +10
+        expected_g2 = elo_after_g1 * 0.75 + _ELO_BASE * 0.25
+        assert abs(pregame[(1, "2024-10-22")] - expected_g2) < 0.5
+
+        invalidate_elo_cache()
+
+
+# ──────────────────────────────────────────────────────────────
+# Opening spread tests
+# ──────────────────────────────────────────────────────────────
+
+class TestOpeningSpread:
+
+    def test_opening_spread_changes_spread(self):
+        """Changing w.opening_spread_weight must change VectorizedGames spread."""
+        game = PrecomputedGame(
+            actual_home_score=112.0,
+            actual_away_score=108.0,
+            home_proj={"points": 110.0, "rebounds": 44.0, "turnovers": 14.0,
+                       "steals": 7.0, "blocks": 5.0, "oreb": 10.0},
+            away_proj={"points": 108.0, "rebounds": 42.0, "turnovers": 15.0,
+                       "steals": 8.0, "blocks": 4.0, "oreb": 9.0},
+            opening_spread=-5.0,
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        w1 = WeightConfig()
+        w1.opening_spread_weight = 0.0
+        r1 = vg.evaluate(w1)
+
+        w2 = WeightConfig()
+        w2.opening_spread_weight = 0.3
+        r2 = vg.evaluate(w2)
+
+        assert r1["spread_mae"] != r2["spread_mae"], \
+            "opening_spread_weight had no effect on spread!"
+
+    def test_opening_spread_array(self):
+        """VectorizedGames stores correct opening_spread array."""
+        game = PrecomputedGame(opening_spread=-3.5)
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        np.testing.assert_almost_equal(vg.opening_spread[0], -3.5, decimal=1)
+
+
+class TestEloOpeningInRanges:
+
+    def test_elo_and_opening_in_extreme_ranges(self):
+        """Elo and opening spread params must be in EXTREME_RANGES."""
+        from src.analytics.sensitivity import EXTREME_RANGES
+        expected = ["elo_edge_weight", "opening_spread_weight"]
+        for param in expected:
+            assert param in EXTREME_RANGES, f"{param} missing from EXTREME_RANGES"
+
+    def test_elo_and_opening_in_optimizer_ranges(self):
+        """Elo and opening spread params must be in OPTIMIZER_RANGES."""
+        from src.analytics.weight_config import OPTIMIZER_RANGES
+        expected = ["elo_edge_weight", "opening_spread_weight"]
+        for param in expected:
+            assert param in OPTIMIZER_RANGES, f"{param} missing from OPTIMIZER_RANGES"

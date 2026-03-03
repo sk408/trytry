@@ -121,13 +121,18 @@ function showResults(r) {
     const dogHit = dog.dog_hit_rate || 0;
     const dogPicks = dog.dog_picks || 0;
     const dogTotal = dog.value_zone_games || 0;
+    const avgDogPay = dog.avg_dog_payout || 0;
+    const dogRate = dog.dog_pick_rate || 0;
     const roiClass = dogRoi > 0 ? 'val-good' : '';
+    const payClass = avgDogPay >= 1.8 ? 'val-good' : '';
     const cards = document.getElementById('summaryCards');
     cards.innerHTML = `
         <div class="accuracy-metric"><div class="value ${roiClass}">${dogRoi > 0 ? '+' : ''}${dogRoi}%</div><div class="label">Dog ROI</div></div>
         <div class="accuracy-metric"><div class="value">${dogHit}%</div><div class="label">Dog Hit Rate</div></div>
         <div class="accuracy-metric"><div class="value">${dogPicks}/${dogTotal}</div><div class="label">Dog Picks</div></div>
-        <div class="accuracy-metric"><div class="value val-good">${r.overall_spread_accuracy}%</div><div class="label">Winner Pick %</div></div>
+        <div class="accuracy-metric"><div class="value ${payClass}">${avgDogPay.toFixed(2)}x</div><div class="label">Avg Dog Payout</div></div>
+        <div class="accuracy-metric"><div class="value">${dogRate.toFixed(0)}%</div><div class="label">Dog Pick Rate</div></div>
+        <div class="accuracy-metric"><div class="value">${r.overall_spread_accuracy}%</div><div class="label">Winner Pick %</div></div>
         <div class="accuracy-metric"><div class="value">${r.total_games}</div><div class="label">Games</div></div>
         <div class="accuracy-metric"><div class="value">${r.avg_spread_error}</div><div class="label">Spread MAE</div></div>
     `;
@@ -147,6 +152,7 @@ function showResults(r) {
             document.getElementById('vegasCards').innerHTML = `
                 <div class="accuracy-metric"><div class="value ${roiClass}">${dogRoi > 0 ? '+' : ''}${dogRoi}%</div><div class="label">Dog ROI</div></div>
                 <div class="accuracy-metric"><div class="value">${dogHit}% (${dogPicks} picks)</div><div class="label">Dog Hit Rate</div></div>
+                <div class="accuracy-metric"><div class="value ${payClass}">${avgDogPay.toFixed(2)}x</div><div class="label">Avg Dog Payout</div></div>
                 <div class="accuracy-metric"><div class="value">${v.edge_hit_rate}%</div><div class="label">Edge Hit Rate</div></div>
                 <div class="accuracy-metric"><div class="value">${v.ats_rate}%</div><div class="label">ATS Hit Rate</div></div>
                 <div class="accuracy-metric"><div class="value">$${v.final_bankroll}</div><div class="label">Bankroll Sim</div></div>

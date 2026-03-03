@@ -66,6 +66,9 @@ def sample_game():
         vegas_spread=-3.5,
         vegas_home_ml=-160,
         vegas_away_ml=140,
+        opening_spread=-3.0,
+        home_elo=1530.0,
+        away_elo=1510.0,
     )
 
 
@@ -115,6 +118,9 @@ def denver_home_game():
         home_hustle={"deflections": 16.0, "contested": 58.0},
         away_hustle={"deflections": 13.0, "contested": 50.0},
         vegas_spread=-7.0,
+        opening_spread=-6.5,
+        home_elo=1550.0,
+        away_elo=1490.0,
     )
 
 

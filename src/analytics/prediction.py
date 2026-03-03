@@ -156,6 +156,9 @@ class PrecomputedGame:
     vegas_away_ml: int = 0
     spread_home_public: int = 0
     spread_home_money: int = 0
+    opening_spread: float = 0.0
+    home_elo: float = 1500.0
+    away_elo: float = 1500.0
 
 
 # ──────────────────────────────────────────────────────────────
@@ -244,6 +247,125 @@ def invalidate_precompute_cache():
 
 
 from src.analytics.cache import team_cache
+
+
+# ──────────────────────────────────────────────────────────────
+# Elo Ratings — team strength signal with momentum
+# ──────────────────────────────────────────────────────────────
+
+_ELO_K = 20          # update speed — standard for established teams
+_ELO_BASE = 1500.0   # starting rating
+_ELO_REGRESS = 0.25  # regress 25% toward base at season boundaries
+
+# Module-level caches
+_elo_pregame_cache: Optional[Dict[tuple, float]] = None   # (team_id, game_date) → pre-game Elo
+_elo_current_cache: Optional[Dict[int, float]] = None     # team_id → current Elo (after all games)
+_elo_game_count: Optional[int] = None
+
+
+def compute_elo_ratings(games: List[Dict]) -> Dict[tuple, float]:
+    """Compute Elo ratings for all teams across all games.
+
+    Processes games in chronological order.  Stores the PRE-GAME Elo for
+    each (team_id, game_date) so optimizers see the Elo the team had
+    before the result was known.
+
+    Also caches team_id → current Elo (after all games) for live predictions.
+
+    Args:
+        games: list of game dicts with keys: game_date, home_team_id,
+               away_team_id, home_score, away_score
+
+    Returns:
+        dict mapping (team_id, game_date) → pre-game Elo
+    """
+    global _elo_pregame_cache, _elo_current_cache, _elo_game_count
+
+    # Cache check — reuse if game count hasn't changed
+    if _elo_pregame_cache is not None and _elo_game_count == len(games):
+        return _elo_pregame_cache
+
+    # Sort chronologically
+    sorted_games = sorted(games, key=lambda g: g.get("game_date", ""))
+
+    elo: Dict[int, float] = {}        # team_id → current Elo
+    pregame: Dict[tuple, float] = {}   # (team_id, game_date) → pre-game Elo
+    prev_season: Optional[str] = None
+
+    for g in sorted_games:
+        gdate = g.get("game_date", "")
+        htid = g.get("home_team_id")
+        atid = g.get("away_team_id")
+        h_score = g.get("home_score", 0) or 0
+        a_score = g.get("away_score", 0) or 0
+
+        if not htid or not atid or h_score == 0 or a_score == 0:
+            continue
+
+        # Season boundary regression
+        season = _game_date_to_season(gdate)
+        if prev_season is not None and season != prev_season:
+            for tid in list(elo.keys()):
+                elo[tid] = elo[tid] * (1 - _ELO_REGRESS) + _ELO_BASE * _ELO_REGRESS
+        prev_season = season
+
+        # Initialize new teams
+        if htid not in elo:
+            elo[htid] = _ELO_BASE
+        if atid not in elo:
+            elo[atid] = _ELO_BASE
+
+        # Record pre-game Elo
+        pregame[(htid, gdate)] = elo[htid]
+        pregame[(atid, gdate)] = elo[atid]
+
+        # Expected scores (no home advantage in Elo — handled separately)
+        exp_home = 1.0 / (1.0 + 10.0 ** ((elo[atid] - elo[htid]) / 400.0))
+        exp_away = 1.0 - exp_home
+
+        # Actual outcome (1=win, 0=loss, 0.5=push)
+        if h_score > a_score:
+            act_home, act_away = 1.0, 0.0
+        elif a_score > h_score:
+            act_home, act_away = 0.0, 1.0
+        else:
+            act_home, act_away = 0.5, 0.5
+
+        # Elo update
+        elo[htid] += _ELO_K * (act_home - exp_home)
+        elo[atid] += _ELO_K * (act_away - exp_away)
+
+    # Cache results
+    _elo_pregame_cache = pregame
+    _elo_current_cache = dict(elo)
+    _elo_game_count = len(games)
+
+    logger.info("Computed Elo ratings: %d teams, %d game entries", len(elo), len(pregame))
+    return pregame
+
+
+def get_current_elo(team_id: int) -> float:
+    """Return the current Elo for a team (after all historical games).
+
+    If Elo hasn't been computed yet, triggers a full computation from the DB.
+    """
+    global _elo_current_cache
+    if _elo_current_cache is not None:
+        return _elo_current_cache.get(team_id, _ELO_BASE)
+
+    # Trigger computation from DB
+    from src.analytics.backtester import get_actual_game_results
+    games = get_actual_game_results()
+    compute_elo_ratings(games)
+    return _elo_current_cache.get(team_id, _ELO_BASE) if _elo_current_cache else _ELO_BASE
+
+
+def invalidate_elo_cache():
+    """Clear Elo caches (call when new games are added)."""
+    global _elo_pregame_cache, _elo_current_cache, _elo_game_count
+    _elo_pregame_cache = None
+    _elo_current_cache = None
+    _elo_game_count = None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -903,6 +1025,26 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         spread -= altitude_penalty
     pred.altitude_penalty = altitude_penalty
 
+    # Elo edge — team strength from historical win/loss record
+    home_elo = get_current_elo(home_team_id)
+    away_elo = get_current_elo(away_team_id)
+    elo_edge = (home_elo - away_elo) * w.elo_edge_weight
+    spread += elo_edge
+    pred.adjustments["elo_edge"] = elo_edge
+
+    # Opening spread — Vegas opening line as independent market signal
+    if w.opening_spread_weight > 0:
+        opening_sp = 0.0
+        odds_row = db.fetch_one(
+            "SELECT opening_spread FROM game_odds "
+            "WHERE game_date = ? AND home_team_id = ? AND away_team_id = ?",
+            (game_date, home_team_id, away_team_id))
+        if odds_row and odds_row["opening_spread"] is not None:
+            opening_sp = odds_row["opening_spread"]
+        if opening_sp != 0.0:
+            spread += opening_sp * w.opening_spread_weight
+            pred.adjustments["opening_spread"] = opening_sp * w.opening_spread_weight
+
     # ── Step 7: Total Calculation ──
     total = home_base_pts + away_base_pts
 
@@ -1068,6 +1210,9 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
     games = [g for g in all_games
              if g.get("home_team_id") in valid_teams and g.get("away_team_id") in valid_teams]
 
+    # ── Compute Elo ratings (all games, chronological) ──
+    elo_map = compute_elo_ratings(all_games)
+
     # ── Determine which games still need computing ──
     valid_keys = set()
     new_games = []
@@ -1225,6 +1370,9 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 vegas_away_ml=g.get("vegas_away_ml") or 0,
                 spread_home_public=g.get("spread_home_public") or 0,
                 spread_home_money=g.get("spread_home_money") or 0,
+                opening_spread=g.get("opening_spread") or 0.0,
+                home_elo=elo_map.get((htid, gdate), _ELO_BASE),
+                away_elo=elo_map.get((atid, gdate), _ELO_BASE),
                 home_proj={k: v for k, v in home_proj.items() if not k.startswith("_")},
                 away_proj={k: v for k, v in away_proj.items() if not k.startswith("_")},
                 home_court=home_court,
@@ -1428,6 +1576,13 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     # Altitude B2B — away team on B2B at DEN/UTA
     if g.away_b2b and g.home_team_id in (1610612743, 1610612762):
         spread -= w.altitude_b2b_penalty
+
+    # Elo edge
+    spread += (g.home_elo - g.away_elo) * w.elo_edge_weight
+
+    # Opening spread
+    if w.opening_spread_weight > 0 and g.opening_spread != 0.0:
+        spread += g.opening_spread * w.opening_spread_weight
 
     # Total
     total = home_base + away_base

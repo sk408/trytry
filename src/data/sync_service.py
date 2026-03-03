@@ -62,11 +62,12 @@ def clear_sync_cache():
     db.execute("DELETE FROM sync_meta")
     db.execute("DELETE FROM player_sync_cache")
     # Invalidate ALL caches so everything is rebuilt from fresh data
-    from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache
+    from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache, invalidate_elo_cache
     from src.analytics.stats_engine import invalidate_stats_caches
     from src.analytics.prediction_quality import invalidate_odds_cache
     invalidate_precompute_cache()
     invalidate_residual_cache()
+    invalidate_elo_cache()
     invalidate_stats_caches()
     invalidate_odds_cache()
     logger.info("Cleared all sync freshness caches (including all compute caches)")
@@ -134,7 +135,7 @@ def nuke_synced_data(callback: Optional[Callable] = None):
 
     # 3. Invalidate all in-memory caches
     try:
-        from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache, invalidate_tuning_cache
+        from src.analytics.prediction import invalidate_precompute_cache, invalidate_residual_cache, invalidate_tuning_cache, invalidate_elo_cache
         from src.analytics.stats_engine import invalidate_stats_caches
         from src.analytics.prediction_quality import invalidate_odds_cache
         from src.analytics.weight_config import invalidate_weight_cache
@@ -142,6 +143,7 @@ def nuke_synced_data(callback: Optional[Callable] = None):
         invalidate_precompute_cache()
         invalidate_residual_cache()
         invalidate_tuning_cache()
+        invalidate_elo_cache()
         invalidate_stats_caches()
         invalidate_odds_cache()
         invalidate_weight_cache()

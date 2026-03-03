@@ -106,6 +106,8 @@ class AccuracyView(QWidget):
         self.dog_roi_card = self._make_card("Dog ROI", "—")
         self.dog_hit_card = self._make_card("Dog Hit Rate", "—")
         self.dog_picks_card = self._make_card("Dog Picks", "—")
+        self.avg_dog_pay_card = self._make_card("Avg Dog Payout", "—")
+        self.dog_rate_card = self._make_card("Dog Pick Rate", "—")
         self.winner_card = self._make_card("Winner Accuracy", "—")
         self.games_card = self._make_card("Games Tested", "—")
         self.mae_card = self._make_card("Spread MAE", "—")
@@ -113,9 +115,11 @@ class AccuracyView(QWidget):
         cards_layout.addWidget(self.dog_roi_card, 0, 0)
         cards_layout.addWidget(self.dog_hit_card, 0, 1)
         cards_layout.addWidget(self.dog_picks_card, 0, 2)
-        cards_layout.addWidget(self.winner_card, 0, 3)
-        cards_layout.addWidget(self.games_card, 0, 4)
-        cards_layout.addWidget(self.mae_card, 0, 5)
+        cards_layout.addWidget(self.avg_dog_pay_card, 0, 3)
+        cards_layout.addWidget(self.dog_rate_card, 0, 4)
+        cards_layout.addWidget(self.winner_card, 1, 0)
+        cards_layout.addWidget(self.games_card, 1, 1)
+        cards_layout.addWidget(self.mae_card, 1, 2)
         layout.addLayout(cards_layout)
 
         # Bias / Home-Away cards (row 2)
@@ -249,9 +253,13 @@ class AccuracyView(QWidget):
         dog_hit = dog.get("dog_hit_rate", 0)
         dog_picks = dog.get("dog_picks", 0)
         dog_total = dog.get("value_zone_games", 0)
+        avg_dog_pay = dog.get("avg_dog_payout", 0)
+        dog_rate = dog.get("dog_pick_rate", 0)
         self._update_card(self.dog_roi_card, f"{dog_roi:+.0f}%")
         self._update_card(self.dog_hit_card, f"{dog_hit:.0f}%")
         self._update_card(self.dog_picks_card, f"{dog_picks}/{dog_total}")
+        self._update_card(self.avg_dog_pay_card, f"{avg_dog_pay:.2f}x")
+        self._update_card(self.dog_rate_card, f"{dog_rate:.0f}%")
         self._update_card(
             self.winner_card,
             f"{results.get('overall_spread_accuracy', 0):.1f}%"

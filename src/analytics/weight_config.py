@@ -80,6 +80,12 @@ class WeightConfig:
     ml_disagree_damp: float = 0.0
     ml_disagree_threshold: float = 6.0
 
+    # Elo — team strength from win/loss record; avg diff ~75, weight 0.04 → ~3pts
+    elo_edge_weight: float = 0.04
+
+    # Opening spread — Vegas opening line as independent market signal
+    opening_spread_weight: float = 0.0   # start at 0, let optimizer discover value
+
     # Sharp Money — edge = (money% - public%) / 100; typically ±0.05 to ±0.15
     sharp_money_weight: float = 1.5
 
@@ -250,12 +256,14 @@ OPTIMIZER_RANGES = {
     "opp_ff_fta_weight": (0.0, 8.0),
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
+    "elo_edge_weight": (0.0, 0.1),            # avg diff ~75; 0.1*75=7.5pts max avg
+    "opening_spread_weight": (0.0, 0.5),      # opening line * weight; 7*0.5=3.5pts max avg
     "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
     "ats_edge_threshold": (0.5, 6.0),        # sensitivity: optimal 0.5, lowered floor
     "rest_advantage_mult": (0.0, 3.0),       # pts per rest-day differential
     "altitude_b2b_penalty": (0.0, 5.0),      # extra penalty for away B2B at altitude
     "fatigue_b2b": (0.0, 8.0),               # sweep: ML ROI/Win% best at ~7.5-8.0, was capped at 5.0
-    "fatigue_3in4": (0.0, 3.0),              # 3-in-4 nights penalty
+    "fatigue_3in4": (0.0, 5.0),              # 3-in-4 nights penalty; CD finds ~5.0
     "fatigue_4in6": (0.0, 5.0),              # sensitivity: optimal ~3.5-4.0, was capped at 3.0
     "fatigue_same_day": (0.0, 6.0),          # same-day (0 rest) penalty
     "fatigue_rest_bonus": (0.0, 3.0),        # bonus per rest tier (3+ days, 4+ days)

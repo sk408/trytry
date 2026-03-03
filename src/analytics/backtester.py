@@ -118,7 +118,7 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
 
     # Fetch and attach vegas odds
     try:
-        odds_rows = db.fetch_all("SELECT game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, spread_home_public, spread_home_money FROM game_odds")
+        odds_rows = db.fetch_all("SELECT game_date, home_team_id, away_team_id, spread, over_under, home_moneyline, away_moneyline, spread_home_public, spread_home_money, opening_spread FROM game_odds")
         odds_map = {(r["game_date"], r["home_team_id"], r["away_team_id"]): r for r in odds_rows}
         for g in results:
             key = (g["game_date"], g.get("home_team_id"), g.get("away_team_id"))
@@ -129,6 +129,7 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
                 g["vegas_away_ml"] = odds_map[key]["away_moneyline"]
                 g["spread_home_public"] = odds_map[key]["spread_home_public"]
                 g["spread_home_money"] = odds_map[key]["spread_home_money"]
+                g["opening_spread"] = odds_map[key]["opening_spread"]
             else:
                 g["vegas_spread"] = None
                 g["vegas_total"] = None
@@ -136,6 +137,7 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
                 g["vegas_away_ml"] = None
                 g["spread_home_public"] = None
                 g["spread_home_money"] = None
+                g["opening_spread"] = None
     except Exception as e:
         logger.warning(f"Could not load game_odds for backtest: {e}")
         for g in results:
@@ -145,6 +147,7 @@ def get_actual_game_results(team_id: Optional[int] = None) -> List[Dict[str, Any
             g["vegas_away_ml"] = None
             g["spread_home_public"] = None
             g["spread_home_money"] = None
+            g["opening_spread"] = None
 
     results.sort(key=lambda x: x["game_date"])
 
@@ -644,6 +647,7 @@ def _aggregate_backtest(per_game: List[Dict], callback=None,
     dog_hit_rate = round(dog_correct_count / len(dog_picks) * 100, 1) if dog_picks else 0.0
     if dog_picks:
         total_profit = 0.0
+        dog_payouts = []
         for g in dog_picks:
             gvs = g.get("vegas_spread")
             h_ml = g.get("vegas_home_ml")
@@ -651,6 +655,7 @@ def _aggregate_backtest(per_game: List[Dict], callback=None,
             if gvs and h_ml and a_ml:
                 dog_ml = a_ml if gvs < 0 else h_ml
                 mult = (1.0 + 100.0 / abs(dog_ml)) if dog_ml < 0 else (1.0 + dog_ml / 100.0)
+                dog_payouts.append(mult)
                 total_profit += (mult - 1.0) if g.get("dog_correct") else -1.0
             else:
                 logger.warning(
@@ -659,10 +664,13 @@ def _aggregate_backtest(per_game: List[Dict], callback=None,
                     g.get("home_team", "?"),
                     g.get("away_team", "?"),
                 )
+                dog_payouts.append(1.5)
                 total_profit += 1.5 if g.get("dog_correct") else -1.0
         dog_roi = round(total_profit / len(dog_picks) * 100, 1)
+        avg_dog_payout = round(sum(dog_payouts) / len(dog_payouts), 2) if dog_payouts else 0.0
     else:
         dog_roi = 0.0
+        avg_dog_payout = 0.0
 
     dog_metrics = {
         "value_zone_games": len(value_zone_games),
@@ -671,6 +679,7 @@ def _aggregate_backtest(per_game: List[Dict], callback=None,
         "dog_pick_rate": dog_pick_rate,
         "dog_hit_rate": dog_hit_rate,
         "dog_roi": dog_roi,
+        "avg_dog_payout": avg_dog_payout,
     }
 
     summary = {

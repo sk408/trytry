@@ -152,6 +152,12 @@ class VectorizedGames:
             0.0
         )
 
+        # Elo edge — positive = home is stronger
+        self.elo_edge = np.array([g.home_elo - g.away_elo for g in games], dtype=float)
+
+        # Opening spread — Vegas opening line
+        self.opening_spread = np.array([g.opening_spread for g in games], dtype=float)
+
     @staticmethod
     def _load_tuning(games: List[PrecomputedGame]):
         """Load per-team tuning corrections from DB, keyed by team_id."""
@@ -231,6 +237,12 @@ class VectorizedGames:
         # Altitude B2B — away team on B2B at DEN/UTA
         spread -= self.away_b2b_at_altitude * w.altitude_b2b_penalty
 
+        # Elo edge
+        spread += self.elo_edge * w.elo_edge_weight
+
+        # Opening spread — no guard needed: 0 * weight = 0, and weight=0 at lower bound
+        spread += self.opening_spread * w.opening_spread_weight
+
         # Total
         total = home_base + away_base
         pace_factor = (self.avg_pace - w.pace_baseline) / w.pace_baseline
@@ -246,7 +258,7 @@ class VectorizedGames:
         spread = np.clip(spread, -w.spread_clamp, w.spread_clamp)
         total = np.clip(total, w.total_min, w.total_max)
 
-        # Metrics
+        # Metrics (all games)
         spread_errors = np.abs(spread - self.actual_spread)
         total_errors = np.abs(total - self.actual_total)
         spread_mae = float(np.mean(spread_errors))
@@ -264,7 +276,33 @@ class VectorizedGames:
                     (actual_push & (np.abs(spread) <= 3.0)))
         winner_pct = float(np.mean(correct)) * 100.0
 
-        # Composite loss
+        # ── Bettable-only metrics for ml/value targets ──
+        # Heavy-favorite picks are COMPLETELY INVISIBLE to the optimizer.
+        # If the model picks a side paying < MIN_ML_PAYOUT (1.35x), that game
+        # does not contribute to spread_mae or winner_pct in the loss.
+        # This prevents the optimizer from farming free accuracy on chalk.
+        _ml_mask = (self.vegas_home_ml != 0) & (self.vegas_away_ml != 0)
+        if np.any(_ml_mask) and target in ("ml", "value"):
+            _h_ml = self.vegas_home_ml
+            _a_ml = self.vegas_away_ml
+            _h_mult_all = np.where(_h_ml < 0, 1.0 + 100.0 / np.maximum(np.abs(_h_ml), 1), 1.0 + _h_ml / 100.0)
+            _a_mult_all = np.where(_a_ml < 0, 1.0 + 100.0 / np.maximum(np.abs(_a_ml), 1), 1.0 + _a_ml / 100.0)
+            _pick_home_all = spread > 0
+            _picked_mult_all = np.where(_pick_home_all, _h_mult_all, _a_mult_all)
+            # Bettable = picked side pays >= MIN_ML_PAYOUT OR no ML data (conservative: include)
+            bettable = (_picked_mult_all >= MIN_ML_PAYOUT) | ~_ml_mask
+            n_bettable = int(np.sum(bettable))
+            if n_bettable >= 20:
+                bettable_spread_mae = float(np.mean(spread_errors[bettable]))
+                bettable_winner_pct = float(np.mean(correct[bettable])) * 100.0
+            else:
+                bettable_spread_mae = spread_mae
+                bettable_winner_pct = winner_pct
+        else:
+            bettable_spread_mae = spread_mae
+            bettable_winner_pct = winner_pct
+
+        # Composite loss (default/ats targets use all-game metrics)
         loss = spread_mae * 1.0 + total_mae * 0.3 + (100.0 - winner_pct) * 0.1
 
         # ── Spread compression penalty ──
@@ -388,19 +426,24 @@ class VectorizedGames:
                         dog_mult = np.where(dog_ml < 0,
                                             1.0 + 100.0 / np.abs(dog_ml),
                                             1.0 + dog_ml / 100.0)
+                        # Average payout for picked dogs (diagnostic: are these real dogs?)
+                        avg_dog_payout = float(np.mean(dog_mult[model_picks_dog & ml_avail]))
                         dog_profit = np.where(model_picks_dog & dog_won, dog_mult - 1.0,
                                      np.where(model_picks_dog & ~dog_won, -1.0, 0.0))
                         dog_roi = float(np.sum(dog_profit[model_picks_dog])) / float(n_dog_picks) * 100.0
                     else:
                         dog_roi = -100.0
+                        avg_dog_payout = 0.0
                 else:
                     dog_hit_rate = 0.0
                     dog_roi = -100.0
+                    avg_dog_payout = 0.0
             else:
                 dog_pick_rate = 0.0
                 dog_hit_rate = 0.0
                 dog_roi = -100.0
                 n_dog_picks = 0
+                avg_dog_payout = 0.0
 
             if target == "ats":
                 # Strongly penalize losing to Vegas and reward beating it
@@ -426,50 +469,44 @@ class VectorizedGames:
                 loss += max(0, 52.5 - ats_rate) * 0.2
 
             elif target == "ml":
-                # The edge is in underdogs. Every bettor picks favorites and
-                # the lines are priced to eat that alive.  We want to gamble
-                # smart: find dogs that actually hit.
-                loss = spread_mae * 0.15 + total_mae * 0.10
+                # Dog-focused: find underdogs worth betting.
+                # We do NOT care about spread accuracy — only about finding
+                # dogs that hit and making sure they're REAL underdogs.
+                #
+                # dog_hit_rate: how often our dog picks win outright
+                # avg_dog_payout: are we picking REAL dogs (2.0x+) or barely-dogs (1.3x)
+                # dog_roi: captures the hit_rate × payout interaction
 
-                # PRIMARY: dog ROI — the whole reason we're here
-                loss -= max(0, dog_roi) * 0.7
+                if dog_pick_rate < 12.0:
+                    # HARD WALL: not enough dog picks. Return a terrible loss
+                    # immediately so Optuna's TPE sampler learns to avoid this
+                    # region fast instead of wasting thousands of trials here.
+                    loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
+                else:
+                    loss = total_mae * 0.05  # tiny anchor so totals don't go haywire
 
-                # Dog hit rate bonus above 40% (break-even at +150 avg line)
-                loss -= max(0, dog_hit_rate - 40.0) * 0.3
+                    # PRIMARY: dog hit rate — every % point matters
+                    loss -= dog_hit_rate * 0.5
 
-                # Secondary: overall ML ROI still matters
-                loss -= ml_roi * 0.2
+                    # PRIMARY: avg dog payout — reward picking real underdogs
+                    # +150 dog (1.50x) needs 67% to break even — bad bet
+                    # +250 dog (2.50x) needs 40% to break even — that's where edge lives
+                    loss -= avg_dog_payout * 5.0
 
-                # Floor: need some accuracy or the model is random noise
-                loss += max(0, 52.0 - ml_win_rate) * 0.5
-
-                # PENALTY: as ML win rate climbs toward 67% (NBA fav win%)
-                # the model is just picking favorites — punish that
-                if ml_win_rate > 60.0:
-                    loss += (ml_win_rate - 60.0) * 0.4  # ramps: 62%->+0.8, 67%->+2.8
-
-                # Must actually pick dogs to get dog rewards
-                if dog_pick_rate < 5.0:
-                    loss += 3.0  # hard penalty for never picking dogs
+                    # SECONDARY: dog ROI captures the interaction
+                    loss -= max(0, dog_roi) * 0.3
 
             elif target == "value":
-                # Even more dog-aggressive than "ml" — sacrifices overall accuracy
-                # to maximize underdog value in the configured spread zone.
-                loss = spread_mae * 0.10 + total_mae * 0.05
+                # Even more aggressive dog-seeking than "ml"
 
-                # PRIMARY: dog ROI is everything
-                loss -= max(0, dog_roi) * 1.0
-                loss -= max(0, dog_hit_rate - 35.0) * 0.4
+                if dog_pick_rate < 12.0:
+                    loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
+                else:
+                    loss = total_mae * 0.03  # minimal total anchor
 
-                # Floor: prevent total garbage
-                loss += max(0, 48.0 - ml_win_rate) * 0.5
-
-                # Same anti-favorite ramp
-                if ml_win_rate > 58.0:
-                    loss += (ml_win_rate - 58.0) * 0.5
-
-                if dog_pick_rate < 5.0:
-                    loss += 5.0
+                    loss -= dog_hit_rate * 0.6
+                    loss -= avg_dog_payout * 7.0
+                    loss -= max(0, dog_roi) * 0.5
 
         else:
             ats_rate = 50.0
@@ -482,6 +519,7 @@ class VectorizedGames:
             dog_hit_rate = 0.0
             dog_roi = -100.0
             n_dog_picks = 0
+            avg_dog_payout = 0.0
 
         return {
             "spread_mae": spread_mae,
@@ -497,6 +535,9 @@ class VectorizedGames:
             "dog_hit_rate": dog_hit_rate,
             "dog_roi": dog_roi,
             "dog_picks": n_dog_picks,
+            "avg_dog_payout": avg_dog_payout,
+            "bettable_spread_mae": bettable_spread_mae,
+            "bettable_winner_pct": bettable_winner_pct,
             "loss": loss,
         }
 
@@ -533,14 +574,16 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
 
     if callback:
         callback(f"Baseline (train): MAE={baseline_train['spread_mae']:.2f}, "
-                 f"ML Win={baseline_train.get('ml_win_rate', 0):.1f}%, "
                  f"DogHit={baseline_train['dog_hit_rate']:.1f}%, "
                  f"DogROI={baseline_train['dog_roi']:+.1f}%, "
+                 f"AvgDogPay={baseline_train.get('avg_dog_payout', 0):.2f}x, "
+                 f"BettableWin={baseline_train.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={baseline_train['loss']:.3f}")
         callback(f"Baseline (valid): MAE={baseline_val['spread_mae']:.2f}, "
-                 f"ML Win={baseline_val.get('ml_win_rate', 0):.1f}%, "
                  f"DogHit={baseline_val['dog_hit_rate']:.1f}%, "
                  f"DogROI={baseline_val['dog_roi']:+.1f}%, "
+                 f"AvgDogPay={baseline_val.get('avg_dog_payout', 0):.2f}x, "
+                 f"BettableWin={baseline_val.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={baseline_val['loss']:.3f}")
 
     best_w = baseline_w
@@ -589,18 +632,20 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
                         dh = res.get('dog_hit_rate', 0)
                         dr = res.get('dog_roi', -100)
                         dp = res.get('dog_pick_rate', 0)
-                        win = res.get('ml_win_rate', 0)
+                        adp = res.get('avg_dog_payout', 0)
+                        bw = res.get('bettable_winner_pct', 0)
                         callback(f"Trial {trial.number}/{n_trials}: loss={trial.value:.3f} "
                                  f"(DogHit={dh:.1f}%, DogROI={dr:+.1f}%, "
-                                 f"Rate={dp:.0f}%, ML Win={win:.1f}%)")
+                                 f"Rate={dp:.0f}%, AvgDogPay={adp:.2f}x, BetWin={bw:.1f}%)")
                     elif target == "ml":
-                        win = res.get('ml_win_rate', 0)
                         roi = res.get('ml_roi', -4.54)
                         dh = res.get('dog_hit_rate', 0)
                         dr = res.get('dog_roi', -100)
+                        adp = res.get('avg_dog_payout', 0)
+                        bw = res.get('bettable_winner_pct', 0)
                         callback(f"Trial {trial.number}/{n_trials}: loss={trial.value:.3f} "
-                                 f"(ML Win={win:.1f}%, ML ROI={roi:+.1f}%, "
-                                 f"DogHit={dh:.1f}%, DogROI={dr:+.1f}%)")
+                                 f"(ML ROI={roi:+.1f}%, DogHit={dh:.1f}%, "
+                                 f"DogROI={dr:+.1f}%, AvgDogPay={adp:.2f}x, BetWin={bw:.1f}%)")
                     else:
                         win = res.get('winner_pct', 0)
                         roi = res.get('ml_roi', -4.54)
@@ -650,46 +695,50 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
         callback(f"-- Walk-forward results --")
         callback(f"  Train:  DogHit={best_train_result['dog_hit_rate']:.1f}%, "
                  f"DogROI={best_train_result['dog_roi']:+.1f}%, "
-                 f"ML Win={best_train_result['ml_win_rate']:.1f}%, "
+                 f"AvgDogPay={best_train_result.get('avg_dog_payout', 0):.2f}x, "
+                 f"BettableWin={best_train_result.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={best_train_loss:.3f}")
         callback(f"  Valid:  DogHit={best_val['dog_hit_rate']:.1f}%, "
                  f"DogROI={best_val['dog_roi']:+.1f}%, "
-                 f"ML Win={best_val['ml_win_rate']:.1f}%, "
+                 f"AvgDogPay={best_val.get('avg_dog_payout', 0):.2f}x, "
+                 f"BettableWin={best_val.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={best_val['loss']:.3f}")
 
-    # ── Save decision: must improve on VALIDATION set ──
-    save_ok = best_val["loss"] < baseline_val["loss"]
-
-    if save_ok and target in ("ml", "value"):
-        win_floor = 50.0 if target == "value" else 52.0
-        val_win = best_val.get("ml_win_rate", 0)
-        if val_win < win_floor:
-            save_ok = False
-            if callback:
-                callback(f"Weights rejected: validation ML win rate "
-                         f"{val_win:.1f}% < {win_floor}% floor")
+    # ── Save decision: DogROI on VALIDATION set + volume floor ──
+    # DogROI captures both hit rate AND payout quality. A model that
+    # earns money on dogs is better than one that just picks correct
+    # dogs at low payouts. Volume floor prevents cherry-picking.
+    baseline_dog_roi = baseline_val.get("dog_roi", -100)
+    best_dog_roi = best_val.get("dog_roi", -100)
+    best_dog_rate = best_val.get("dog_pick_rate", 0)
+    save_ok = best_dog_roi > baseline_dog_roi and best_dog_rate >= 12.0
 
     if save_ok:
         save_weight_config(best_w)
         invalidate_weight_cache()
         if callback:
-            msg = (f"Saved optimized weights "
-                   f"(val loss {baseline_val['loss']:.3f} -> {best_val['loss']:.3f}")
-            msg += (f", val DogHit: {baseline_val['dog_hit_rate']:.1f}% "
-                    f"-> {best_val['dog_hit_rate']:.1f}%")
-            msg += (f", val DogROI: {baseline_val['dog_roi']:+.1f}% "
-                    f"-> {best_val['dog_roi']:+.1f}%")
-            msg += ")"
-            callback(msg)
+            callback(f"Saved optimized weights "
+                     f"(val DogROI: {baseline_dog_roi:+.1f}% -> {best_dog_roi:+.1f}%, "
+                     f"DogHit: {baseline_val['dog_hit_rate']:.1f}% -> {best_val['dog_hit_rate']:.1f}%, "
+                     f"AvgDogPay: {baseline_val.get('avg_dog_payout', 0):.2f}x -> {best_val.get('avg_dog_payout', 0):.2f}x, "
+                     f"DogRate: {best_dog_rate:.1f}%)")
     else:
+        reason = ""
+        if best_dog_rate < 12.0:
+            reason = f" (dog pick rate {best_dog_rate:.1f}% < 12% floor)"
+        elif best_dog_roi <= baseline_dog_roi:
+            reason = f" (DogROI {baseline_dog_roi:+.1f}% -> {best_dog_roi:+.1f}%)"
         if callback:
-            callback("Validation did not improve - keeping current weights")
+            callback(f"Validation DogROI did not improve{reason} "
+                     f"- keeping current weights")
 
     # Return validation metrics (most honest assessment)
     return {
         "baseline_loss": baseline_val["loss"],
         "best_loss": best_val["loss"],
-        "improved": best_val["loss"] < baseline_val["loss"],
+        "baseline_dog_roi": baseline_dog_roi,
+        "best_dog_roi": best_dog_roi,
+        "improved": save_ok,
         "train_loss": best_train_loss,
         **best_val,
     }
@@ -907,6 +956,8 @@ def compute_feature_importance(games: List[PrecomputedGame],
         ("oreb_mult", "oreb_mult", 0.0),
         ("sharp_money_weight", "sharp_money_weight", 0.0),
         ("ats_edge_threshold", "ats_edge_threshold", 3.0),
+        ("elo_edge_weight", "elo_edge_weight", 0.0),
+        ("opening_spread_weight", "opening_spread_weight", 0.0),
     ]
 
     results = []
