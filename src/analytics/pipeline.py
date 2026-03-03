@@ -294,20 +294,12 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 11: Per-team refinement
-        emit("[Step 11/13] Per-team weight refinement...")
-        if _needs_11:
-            from src.analytics.weight_optimizer import per_team_refinement
-            if _precomputed_cache and len(_precomputed_cache) >= 20:
-                refine_result = per_team_refinement(
-                    _precomputed_cache, n_trials=500,
-                    callback=lambda msg: emit(f"  {msg}"),
-                    is_cancelled=is_cancelled
-                )
-                results["refinement"] = refine_result
-            _mark_step_done("team_refine")
-        else:
-            emit("  Team refinement is fresh, skipping")
+        # Step 11: Per-team refinement — DISABLED
+        # Per-team refinement overfits on small samples (15-40 games per team)
+        # and uses a loss-based gate that conflicts with the DogROI validation.
+        # Global weights + CD are sufficient until sample sizes grow.
+        emit("[Step 11/13] Per-team refinement — DISABLED (overfitting risk)")
+        _mark_step_done("team_refine")
 
         if is_cancelled():
             return {"cancelled": True, **results}
@@ -471,15 +463,8 @@ def run_retune(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Per-team refinement (always run)
-        emit("[Retune 6/8] Per-team weight refinement...")
-        from src.analytics.weight_optimizer import per_team_refinement
-        refine_result = per_team_refinement(
-            precomputed, n_trials=500,
-            callback=lambda msg: emit(f"  {msg}"),
-            is_cancelled=is_cancelled
-        )
-        results["refinement"] = refine_result
+        # Per-team refinement — DISABLED (overfitting risk with small samples)
+        emit("[Retune 6/8] Per-team refinement — DISABLED")
         _mark_step_done("team_refine")
 
         if is_cancelled():
@@ -615,14 +600,8 @@ def run_overnight(max_hours: float = 8.0,
             improved_str = "IMPROVED" if opt_result.get("improved") else "no change"
             emit(f"  Global: {improved_str} (loss {opt_result.get('baseline_loss', 0):.3f} -> {opt_result.get('best_loss', 0):.3f})")
 
-            # Step B: Per-team refinement
-            emit(f"[Loop {pass_num}] Per-team refinement (500 trials)...")
-            from src.analytics.weight_optimizer import per_team_refinement
-            refine_result = per_team_refinement(
-                precomputed, n_trials=500,
-                callback=lambda msg: emit(f"  {msg}"),
-                is_cancelled=is_cancelled
-            )
+            # Step B: Per-team refinement — DISABLED (overfitting risk)
+            emit(f"[Loop {pass_num}] Per-team refinement — DISABLED")
             if is_cancelled():
                 break
 
