@@ -263,7 +263,7 @@ OPTIMIZER_RANGES = {
     "rest_advantage_mult": (0.0, 3.0),       # pts per rest-day differential
     "altitude_b2b_penalty": (0.0, 5.0),      # extra penalty for away B2B at altitude
     "fatigue_b2b": (0.0, 8.0),               # sweep: ML ROI/Win% best at ~7.5-8.0, was capped at 5.0
-    "fatigue_3in4": (0.0, 5.0),              # 3-in-4 nights penalty; CD finds ~5.0
+    "fatigue_3in4": (0.0, 8.0),              # 3-in-4 nights penalty; CD finds ~5.0, binary flag so max=8pts
     "fatigue_4in6": (0.0, 5.0),              # sensitivity: optimal ~3.5-4.0, was capped at 3.0
     "fatigue_same_day": (0.0, 6.0),          # same-day (0 rest) penalty
     "fatigue_rest_bonus": (0.0, 3.0),        # bonus per rest tier (3+ days, 4+ days)
