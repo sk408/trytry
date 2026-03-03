@@ -97,6 +97,12 @@ class MatchupPrediction:
     sharp_home_public: int = 0    # % of public bets on home spread
     sharp_home_money: int = 0     # % of money wagered on home spread
     injury_impact: Dict[str, Any] = field(default_factory=dict)
+    vegas_spread: float = 0.0     # Current Vegas spread (neg = home fav)
+    vegas_home_ml: int = 0        # Home moneyline (e.g. -150)
+    vegas_away_ml: int = 0        # Away moneyline (e.g. +130)
+    is_dog_pick: bool = False     # Model disagrees with Vegas on winner
+    is_value_zone: bool = False   # Vegas spread in VALUE_ZONE (4-12 pts)
+    dog_payout: float = 0.0       # ML payout multiplier for the dog side
 
 
 @dataclass
@@ -1172,6 +1178,38 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     pred.predicted_away_score = round((total - spread) / 2, 1)
     pred.winner = pred.home_team if spread > 0 else pred.away_team
     pred.confidence = min(1.0, abs(spread) / 15.0)
+
+    # ── Dog Pick Detection ──
+    # Fetch current Vegas spread + moneylines to determine if model picks the dog
+    try:
+        odds = db.fetch_one(
+            "SELECT spread, home_moneyline, away_moneyline FROM game_odds "
+            "WHERE game_date = ? AND home_team_id = ? AND away_team_id = ?",
+            (game_date, home_team_id, away_team_id))
+        if odds and odds["spread"] is not None:
+            vs = odds["spread"]  # negative = home favored
+            pred.vegas_spread = vs
+            pred.vegas_home_ml = odds.get("home_moneyline") or 0
+            pred.vegas_away_ml = odds.get("away_moneyline") or 0
+
+            # Value zone: spread magnitude 4-12 points
+            pred.is_value_zone = 4.0 <= abs(vs) <= 12.0
+
+            # Dog pick: model disagrees with Vegas on the winner
+            # vegas * spread > 0 means same sign = model picks the dog
+            if abs(spread) > 0.5 and vs != 0:
+                pred.is_dog_pick = (vs * spread > 0)
+
+            # Dog payout: ML multiplier for the underdog side
+            if pred.is_dog_pick and pred.vegas_home_ml != 0 and pred.vegas_away_ml != 0:
+                # Dog is away when home favored (vs < 0), home when away favored (vs > 0)
+                dog_ml = pred.vegas_away_ml if vs < 0 else pred.vegas_home_ml
+                if dog_ml < 0:
+                    pred.dog_payout = 1.0 + 100.0 / abs(dog_ml)
+                else:
+                    pred.dog_payout = 1.0 + dog_ml / 100.0
+    except Exception as e:
+        logger.debug(f"Dog pick detection skipped: {e}")
 
     return pred
 

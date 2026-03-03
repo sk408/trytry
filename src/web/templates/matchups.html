@@ -90,6 +90,26 @@
         </div>
     </div>
 
+    <!-- Dog pick badge -->
+    {% if prediction.get('is_dog_pick') %}
+    {% set dog_payout = prediction.get('dog_payout', 0) %}
+    {% set vegas_sp = prediction.get('vegas_spread', 0) %}
+    {% set model_sp = prediction.get('predicted_spread', prediction.get('spread', 0)) %}
+    {% if prediction.get('is_value_zone') and dog_payout > 0 %}
+    <div class="text-center mb-3">
+        <span style="background-color: #f59e0b; color: #000; font-weight: bold; font-size: 14px; border-radius: 6px; padding: 6px 16px; display: inline-block;">
+            DOG PICK: {{ prediction.get('winner', 'DOG') }} ({{ '%.2f'|format(dog_payout) }}x) | Vegas: {{ '%+.1f'|format(vegas_sp) }} | Model: {{ '%+.1f'|format(model_sp) }}
+        </span>
+    </div>
+    {% else %}
+    <div class="text-center mb-3">
+        <span style="background-color: #64748b; color: #fff; font-weight: bold; font-size: 14px; border-radius: 6px; padding: 6px 16px; display: inline-block;">
+            DOG PICK: {{ prediction.get('winner', 'DOG') }} | Vegas: {{ '%+.1f'|format(vegas_sp) }} | Model: {{ '%+.1f'|format(model_sp) }} (outside value zone)
+        </span>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <!-- Breakdown -->
     {% if prediction.get('breakdown') %}
     <div class="card mb-4">

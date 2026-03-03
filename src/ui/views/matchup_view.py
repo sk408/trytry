@@ -219,6 +219,13 @@ class MatchupView(QWidget):
         self._confidence_bar.setFixedHeight(22)
         layout.addWidget(self._confidence_bar)
 
+        # Dog pick badge — hidden by default, shown when model picks the underdog
+        self._dog_badge = QLabel()
+        self._dog_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._dog_badge.setFixedHeight(32)
+        self._dog_badge.setVisible(False)
+        layout.addWidget(self._dog_badge)
+
         # Breakdown table
         self.breakdown_table = QTableWidget()
         self.breakdown_table.setColumnCount(3)
@@ -468,6 +475,33 @@ class MatchupView(QWidget):
         ]):
             card.animate_in(delay_ms=i * 80)
 
+        # Dog pick badge
+        is_dog = result.get("is_dog_pick", False)
+        is_vz = result.get("is_value_zone", False)
+        dog_payout = result.get("dog_payout", 0)
+        vegas_sp = result.get("vegas_spread", 0)
+
+        if is_dog and is_vz and dog_payout > 0:
+            dog_team = result.get("winner", "DOG")
+            self._dog_badge.setText(
+                f"  DOG PICK: {dog_team} ({dog_payout:.2f}x)  |  "
+                f"Vegas: {vegas_sp:+.1f}  |  Model: {spread:+.1f}  ")
+            self._dog_badge.setStyleSheet(
+                "background-color: #f59e0b; color: #000; font-weight: bold; "
+                "font-size: 13px; border-radius: 6px; padding: 4px 12px;")
+            self._dog_badge.setVisible(True)
+        elif is_dog:
+            dog_team = result.get("winner", "DOG")
+            self._dog_badge.setText(
+                f"  DOG PICK: {dog_team}  |  Vegas: {vegas_sp:+.1f}  |  Model: {spread:+.1f}  "
+                f"(outside value zone)")
+            self._dog_badge.setStyleSheet(
+                "background-color: #64748b; color: #fff; font-weight: bold; "
+                "font-size: 13px; border-radius: 6px; padding: 4px 12px;")
+            self._dog_badge.setVisible(True)
+        else:
+            self._dog_badge.setVisible(False)
+
         # Breakdown — show all non-zero parameters
         all_adjustments = [
             ("Home Court", result.get("home_court_advantage", 0)),
@@ -486,6 +520,8 @@ class MatchupView(QWidget):
             ("OREB Boost (Total)", result.get("oreb_boost", 0)),
             ("Hustle (Total)", result.get("hustle_total_adj", 0)),
             ("Sharp Money", result.get("adjustments", {}).get("sharp_money", 0)),
+            ("Elo Edge", result.get("adjustments", {}).get("elo_edge", 0)),
+            ("Opening Spread", result.get("adjustments", {}).get("opening_spread", 0)),
             ("ESPN Blend", result.get("espn_blend_adj", 0)),
             ("ML Blend", result.get("ml_blend_adj", 0)),
         ]
