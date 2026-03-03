@@ -939,8 +939,10 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     # Fatigue total impact (decomposed — synced with VectorizedGames)
     total -= (home_fat + away_fat) * w.fatigue_total_mult
 
-    # ── Step 8: ESPN Predictor Blend (80/20) ──
-    if not skip_espn:
+    # ── Step 8: ESPN Predictor Blend ──
+    # Skip entirely when espn_model_weight is 0 — otherwise the blend formula
+    # (spread * 0 + espn * 0) zeroes out the entire spread.
+    if not skip_espn and (w.espn_model_weight > 0 or w.espn_weight > 0):
         try:
             espn = _get_espn_predictor(pred.home_team, pred.away_team)
             espn_pct = espn.get("home_win_pct", 50.0)
