@@ -17,16 +17,22 @@ class WeightConfig:
     def_factor_dampening: float = 1.70   # sensitivity: optimal ~1.7
 
     # Spread factors
-    turnover_margin_mult: float = 6.00   # sensitivity: optimal ~6.4
+    turnover_margin_mult: float = 2.00   # avg raw edge ~1.0; 2*1=2pts
     rebound_diff_mult: float = 0.50      # sensitivity: optimal ~0.5
     rating_matchup_mult: float = 0.42    # sensitivity: already near optimal
 
     # Four Factors
-    four_factors_scale: float = 1350.0   # sensitivity: optimal ~1378
+    four_factors_scale: float = 25.0     # avg weighted edge ~0.19; 25*0.19≈5pts
     ff_efg_weight: float = 3.55          # sensitivity: optimal ~3.56
     ff_tov_weight: float = 3.40          # sensitivity: optimal ~3.38
     ff_oreb_weight: float = 2.80         # sensitivity: optimal ~2.81
     ff_fta_weight: float = 0.05          # sensitivity: optimal ~0.05
+
+    # Opponent Four Factors (defensive matchup)
+    opp_ff_efg_weight: float = 1.0
+    opp_ff_tov_weight: float = 1.0
+    opp_ff_oreb_weight: float = 1.0
+    opp_ff_fta_weight: float = 0.05
 
     # Clutch
     clutch_scale: float = 0.13           # sensitivity: optimal ~0.13
@@ -34,7 +40,7 @@ class WeightConfig:
     clutch_threshold: float = 6.0
 
     # Hustle
-    hustle_effort_mult: float = 3.90     # sensitivity: optimal ~3.9
+    hustle_effort_mult: float = 0.70     # avg raw edge ~3.0; 0.7*3=2pts
     hustle_contested_wt: float = 0.3
 
     # Pace / Total
@@ -224,26 +230,30 @@ OPTIMIZER_RANGES = {
     # Signs are locked to match basketball logic — no sign flips allowed.
     # spread_clamp is NOT tunable; it's fixed at 30 to prevent compression cheating.
     # Ranges widened per sensitivity analysis 2025-02-28.
-    "def_factor_dampening": (0.1, 6.0),      # sensitivity: optimal ~3.7, was capped at 3.0
-    "turnover_margin_mult": (0.0, 10.0),     # sensitivity2: optimal ~6.4-6.6, was capped at 5.0
-    "rebound_diff_mult": (0.0, 3.0),         # sensitivity: optimal ~0.54, small headroom
-    "rating_matchup_mult": (0.0, 2.0),       # matchup edge (stable)
-    "four_factors_scale": (50.0, 2000.0),    # sensitivity: optimal 1100-1500, widened ceiling
+    "def_factor_dampening": (0.1, 8.0),      # sweep: best loss/ROI/DogROI at ~6.4-6.5, was capped at 6.0
+    "turnover_margin_mult": (0.0, 5.0),      # avg raw edge ~1.0; 5*1=5pts max avg
+    "rebound_diff_mult": (0.0, 4.0),         # sweep: best at ~3.1 (all metrics), was capped at 3.0
+    "rating_matchup_mult": (0.0, 5.0),       # sensitivity: Win% peaks at 3.13, was capped at 2.0
+    "four_factors_scale": (1.0, 75.0),        # avg weighted edge ~0.19; 75*0.19≈14pts max avg
     "clutch_scale": (0.01, 2.0),             # sensitivity: optimal ~0.13 (in range)
-    "hustle_effort_mult": (0.0, 8.0),        # sensitivity: optimal ~4.8, was capped at 5.0, widened
+    "hustle_effort_mult": (0.0, 2.0),        # avg raw edge ~3.0; 2*3=6pts max avg
     "ff_efg_weight": (0.0, 25.0),            # widened for 3-season optimizer
     "ff_tov_weight": (0.0, 15.0),            # widened for 3-season optimizer
     "ff_oreb_weight": (0.0, 15.0),           # widened for 3-season optimizer
     "ff_fta_weight": (0.0, 15.0),            # widened for 3-season optimizer
+    "opp_ff_efg_weight": (0.0, 15.0),
+    "opp_ff_tov_weight": (0.0, 15.0),
+    "opp_ff_oreb_weight": (0.0, 15.0),
+    "opp_ff_fta_weight": (0.0, 15.0),
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
     "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
     "ats_edge_threshold": (0.5, 6.0),        # sensitivity: optimal 0.5, lowered floor
     "rest_advantage_mult": (0.0, 3.0),       # pts per rest-day differential
     "altitude_b2b_penalty": (0.0, 5.0),      # extra penalty for away B2B at altitude
-    "fatigue_b2b": (0.0, 5.0),               # back-to-back penalty
+    "fatigue_b2b": (0.0, 8.0),               # sweep: ML ROI/Win% best at ~7.5-8.0, was capped at 5.0
     "fatigue_3in4": (0.0, 3.0),              # 3-in-4 nights penalty
-    "fatigue_4in6": (0.0, 3.0),              # 4-in-6 nights penalty
+    "fatigue_4in6": (0.0, 5.0),              # sensitivity: optimal ~3.5-4.0, was capped at 3.0
     "fatigue_total_mult": (0.0, 2.0),        # combined fatigue impact on total
 }
 

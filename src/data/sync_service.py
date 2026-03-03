@@ -395,7 +395,7 @@ def _update_team_dash_stats(season, measure, location, now, callback):
                 (row.get("EFG_PCT", 0), row.get("FTA_RATE", 0),
                  row.get("TM_TOV_PCT", 0), row.get("OREB_PCT", 0),
                  row.get("OPP_EFG_PCT", 0), row.get("OPP_FTA_RATE", 0),
-                 row.get("OPP_TM_TOV_PCT", 0), row.get("OPP_OREB_PCT", 0),
+                 row.get("OPP_TOV_PCT", 0), row.get("OPP_OREB_PCT", 0),
                  now, tid, season)
             )
 
@@ -420,6 +420,11 @@ def _update_home_road_stats(season, location, now, callback):
     data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Base", location=location, season=season)
     prefix = "home" if location == "Home" else "road"
     assert prefix in ("home", "road"), f"unexpected location: {location}"
+
+    # Base measure_type doesn't include OPP_PTS — fetch Opponent with location filter
+    opp_data = nba_fetcher.fetch_league_dash_team_stats(measure_type="Opponent", location=location, season=season)
+    opp_pts_map = {row.get("TEAM_ID", 0): row.get("OPP_PTS", 0) or 0 for row in opp_data}
+
     for row in data:
         tid = row.get("TEAM_ID", 0)
         if not tid:
@@ -428,8 +433,7 @@ def _update_home_road_stats(season, location, now, callback):
         w = row.get("W", 0)
         l_val = row.get("L", 0)
         pts = row.get("PTS", 0)
-        # Estimate opp_pts from available data
-        opp_pts = row.get("OPP_PTS", 0) or 0
+        opp_pts = opp_pts_map.get(tid, 0)
         db.execute(
             f"""UPDATE team_metrics SET
                  {prefix}_gp=?, {prefix}_w=?, {prefix}_l=?,

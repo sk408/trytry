@@ -476,6 +476,7 @@ class MatchupView(QWidget):
             ("Rebound", result.get("rebound_adj", 0)),
             ("Rating Matchup", result.get("rating_matchup_adj", 0)),
             ("Four Factors", result.get("four_factors_adj", 0)),
+            ("Opp Four Factors", result.get("opp_four_factors_adj", 0)),
             ("Clutch", result.get("clutch_adj", 0)),
             ("Hustle (Spread)", result.get("hustle_adj", 0)),
             ("Rest Advantage", result.get("rest_advantage", 0)),

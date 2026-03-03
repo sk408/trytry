@@ -239,3 +239,193 @@ class TestZeroMinuteFallback:
                mock_splits.call_args_list[1][0][3] == 9999  # positional arg
         # Result should include the player's contribution (discounted by 0.5 * 0.5)
         assert result["points"] > 0
+
+
+# ──────────────────────────────────────────────────────────────
+# Decomposed fatigue tests
+# ──────────────────────────────────────────────────────────────
+
+class TestFatigueDecomposed:
+
+    def test_fatigue_b2b_changes_spread(self):
+        """Changing w.fatigue_b2b must change VectorizedGames spread (was dead before)."""
+        game = PrecomputedGame(
+            home_b2b=True,
+            away_b2b=False,
+            home_3in4=False,
+            away_3in4=False,
+            home_4in6=False,
+            away_4in6=False,
+            home_proj={"points": 110.0, "rebounds": 44.0, "turnovers": 14.0,
+                       "steals": 7.0, "blocks": 5.0, "oreb": 10.0},
+            away_proj={"points": 108.0, "rebounds": 42.0, "turnovers": 15.0,
+                       "steals": 8.0, "blocks": 4.0, "oreb": 9.0},
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        w1 = WeightConfig()
+        w1.fatigue_b2b = 1.0
+        r1 = vg.evaluate(w1)
+
+        w2 = WeightConfig()
+        w2.fatigue_b2b = 5.0
+        r2 = vg.evaluate(w2)
+
+        # Different fatigue_b2b must produce different spread MAE
+        assert r1["spread_mae"] != r2["spread_mae"], \
+            "fatigue_b2b had no effect on spread — still dead!"
+
+    def test_fatigue_3in4_changes_spread(self):
+        """Changing w.fatigue_3in4 affects spread when 3in4 flag is set."""
+        game = PrecomputedGame(
+            home_b2b=False,
+            away_b2b=False,
+            home_3in4=True,
+            away_3in4=False,
+            home_4in6=False,
+            away_4in6=False,
+            home_proj={"points": 110.0, "rebounds": 44.0, "turnovers": 14.0,
+                       "steals": 7.0, "blocks": 5.0, "oreb": 10.0},
+            away_proj={"points": 108.0, "rebounds": 42.0, "turnovers": 15.0,
+                       "steals": 8.0, "blocks": 4.0, "oreb": 9.0},
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        w1 = WeightConfig()
+        w1.fatigue_3in4 = 0.5
+        r1 = vg.evaluate(w1)
+
+        w2 = WeightConfig()
+        w2.fatigue_3in4 = 4.0
+        r2 = vg.evaluate(w2)
+
+        assert r1["spread_mae"] != r2["spread_mae"], \
+            "fatigue_3in4 had no effect on spread!"
+
+    def test_decomposed_flag_arrays(self):
+        """VectorizedGames stores correct decomposed flag arrays."""
+        game = PrecomputedGame(
+            home_b2b=True,
+            away_b2b=False,
+            home_3in4=False,
+            away_3in4=True,
+            home_4in6=True,
+            away_4in6=False,
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        np.testing.assert_array_equal(vg.home_b2b_flag, [1.0])
+        np.testing.assert_array_equal(vg.away_b2b_flag, [0.0])
+        np.testing.assert_array_equal(vg.home_3in4, [0.0])
+        np.testing.assert_array_equal(vg.away_3in4, [1.0])
+        np.testing.assert_array_equal(vg.home_4in6, [1.0])
+        np.testing.assert_array_equal(vg.away_4in6, [0.0])
+
+
+# ──────────────────────────────────────────────────────────────
+# Opponent Four Factors (defensive matchup) tests
+# ──────────────────────────────────────────────────────────────
+
+class TestOppFourFactors:
+
+    def test_opp_ff_changes_spread(self):
+        """Changing w.opp_ff_efg_weight must change VectorizedGames spread."""
+        game = PrecomputedGame(
+            actual_home_score=112.0,
+            actual_away_score=108.0,
+            home_proj={"points": 110.0, "rebounds": 44.0, "turnovers": 14.0,
+                       "steals": 7.0, "blocks": 5.0, "oreb": 10.0},
+            away_proj={"points": 108.0, "rebounds": 42.0, "turnovers": 15.0,
+                       "steals": 8.0, "blocks": 4.0, "oreb": 9.0},
+            home_ff={"efg": 0.54, "tov": 0.13, "oreb": 0.28, "fta": 0.25,
+                     "opp_efg": 0.51, "opp_tov": 0.14, "opp_oreb": 0.27, "opp_fta": 0.23},
+            away_ff={"efg": 0.52, "tov": 0.14, "oreb": 0.26, "fta": 0.24,
+                     "opp_efg": 0.53, "opp_tov": 0.12, "opp_oreb": 0.29, "opp_fta": 0.25},
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        # Zero out other spread-inflating weights to isolate opp_ff effect
+        w1 = WeightConfig()
+        w1.opp_ff_efg_weight = 0.0
+        w1.four_factors_scale = 10.0   # small scale to avoid clamp
+        w1.turnover_margin_mult = 0.0
+        w1.rebound_diff_mult = 0.0
+        w1.hustle_effort_mult = 0.0
+        r1 = vg.evaluate(w1)
+
+        w2 = WeightConfig()
+        w2.opp_ff_efg_weight = 10.0
+        w2.four_factors_scale = 10.0
+        w2.turnover_margin_mult = 0.0
+        w2.rebound_diff_mult = 0.0
+        w2.hustle_effort_mult = 0.0
+        r2 = vg.evaluate(w2)
+
+        assert r1["spread_mae"] != r2["spread_mae"], \
+            "opp_ff_efg_weight had no effect on spread — still dead!"
+
+    def test_opp_ff_edge_arrays(self):
+        """VectorizedGames computes correct opp FF edge arrays."""
+        game = PrecomputedGame(
+            home_ff={"efg": 0.54, "tov": 0.13, "oreb": 0.28, "fta": 0.25,
+                     "opp_efg": 0.51, "opp_tov": 0.14, "opp_oreb": 0.27, "opp_fta": 0.23},
+            away_ff={"efg": 0.52, "tov": 0.14, "oreb": 0.26, "fta": 0.24,
+                     "opp_efg": 0.53, "opp_tov": 0.12, "opp_oreb": 0.29, "opp_fta": 0.25},
+        )
+
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([game])
+
+        # opp_efg_edge = away_opp_efg - home_opp_efg = 0.53 - 0.51 = 0.02
+        np.testing.assert_almost_equal(vg.opp_ff_efg_edge[0], 0.02, decimal=4)
+        # opp_tov_edge = home_opp_tov - away_opp_tov = 0.14 - 0.12 = 0.02
+        np.testing.assert_almost_equal(vg.opp_ff_tov_edge[0], 0.02, decimal=4)
+        # opp_oreb_edge = away_opp_oreb - home_opp_oreb = 0.29 - 0.27 = 0.02
+        np.testing.assert_almost_equal(vg.opp_ff_oreb_edge[0], 0.02, decimal=4)
+        # opp_fta_edge = away_opp_fta - home_opp_fta = 0.25 - 0.23 = 0.02
+        np.testing.assert_almost_equal(vg.opp_ff_fta_edge[0], 0.02, decimal=4)
+
+
+class TestOppFFInExtremeRanges:
+
+    def test_opp_ff_in_extreme_ranges(self):
+        """All 4 opp_ff params must be in EXTREME_RANGES."""
+        from src.analytics.sensitivity import EXTREME_RANGES
+        expected = [
+            "opp_ff_efg_weight",
+            "opp_ff_tov_weight",
+            "opp_ff_oreb_weight",
+            "opp_ff_fta_weight",
+        ]
+        for param in expected:
+            assert param in EXTREME_RANGES, f"{param} missing from EXTREME_RANGES"
+
+
+class TestFatigueInExtremeRanges:
+
+    def test_all_fatigue_params_in_extreme_ranges(self):
+        """All 6 fatigue/rest/altitude params must be in EXTREME_RANGES."""
+        from src.analytics.sensitivity import EXTREME_RANGES
+        expected = [
+            "rest_advantage_mult",
+            "altitude_b2b_penalty",
+            "fatigue_b2b",
+            "fatigue_3in4",
+            "fatigue_4in6",
+            "fatigue_total_mult",
+        ]
+        for param in expected:
+            assert param in EXTREME_RANGES, f"{param} missing from EXTREME_RANGES"

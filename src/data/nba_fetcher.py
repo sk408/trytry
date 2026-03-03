@@ -352,8 +352,11 @@ def fetch_player_on_off(team_id: int) -> Dict[str, List[Dict]]:
         if result is None:
             return {"on": [], "off": []}
         dfs = result.get_data_frames()
-        on_court = dfs[0].to_dict("records") if len(dfs) > 0 else []
-        off_court = dfs[1].to_dict("records") if len(dfs) > 1 else []
+        # dfs[0] = team aggregate (no per-player ratings), skip it
+        # dfs[1] = per-player ON court (COURT_STATUS='On')
+        # dfs[2] = per-player OFF court (COURT_STATUS='Off')
+        on_court = dfs[1].to_dict("records") if len(dfs) > 1 else []
+        off_court = dfs[2].to_dict("records") if len(dfs) > 2 else []
         return {"on": on_court, "off": off_court}
     except Exception as e:
         logger.error(f"Error fetching player on/off for team {team_id}: {e}")

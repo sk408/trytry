@@ -34,23 +34,32 @@ _OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sensi
 # These intentionally go WAY beyond optimizer bounds to find hidden value
 EXTREME_RANGES = {
     # Aligned with OPTIMIZER_RANGES but wider for exploration.
-    # Dead weight params removed (ESPN, ML ensemble, fatigue subs, pace_mult, oreb_mult).
-    "def_factor_dampening":  (0.1,    8.0),
-    "turnover_margin_mult":  (0.0,   12.0),
-    "rebound_diff_mult":     (0.0,    5.0),
+    # Dead weight params removed (ESPN, ML ensemble, pace_mult, oreb_mult).
+    "def_factor_dampening":  (0.1,   10.0),
+    "turnover_margin_mult":  (0.0,    8.0),
+    "rebound_diff_mult":     (0.0,    6.0),
     "rating_matchup_mult":   (0.0,    5.0),
-    "four_factors_scale":    (10.0, 2500.0),
+    "four_factors_scale":    (1.0, 100.0),
     "clutch_scale":          (0.0,    3.0),
-    "hustle_effort_mult":    (0.0,   10.0),
-    "ff_efg_weight":         (0.0,   20.0),
+    "hustle_effort_mult":    (0.0,    3.0),
+    "ff_efg_weight":         (0.0,   25.0),
     "ff_tov_weight":         (0.0,   20.0),
     "ff_oreb_weight":        (0.0,   20.0),
     "ff_fta_weight":         (0.0,   20.0),
+    "opp_ff_efg_weight":     (0.0,   20.0),
+    "opp_ff_tov_weight":     (0.0,   20.0),
+    "opp_ff_oreb_weight":    (0.0,   20.0),
+    "opp_ff_fta_weight":     (0.0,   20.0),
     "steals_penalty":        (0.0,    5.0),
     "blocks_penalty":        (0.0,    5.0),
-    "sharp_money_weight":    (0.0,   12.0),
+    "sharp_money_weight":    (0.0,   15.0),
     "ats_edge_threshold":    (0.5,    8.0),
     "fatigue_total_mult":    (0.0,    3.0),
+    "rest_advantage_mult":   (0.0,    5.0),
+    "altitude_b2b_penalty":  (0.0,    8.0),
+    "fatigue_b2b":           (0.0,   10.0),
+    "fatigue_3in4":          (0.0,    5.0),
+    "fatigue_4in6":          (0.0,    5.0),
 }
 
 # Parameters NOT used by VectorizedGames.evaluate()

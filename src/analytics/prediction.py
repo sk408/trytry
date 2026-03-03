@@ -41,6 +41,7 @@ class MatchupPrediction:
     rebound_adj: float = 0.0
     rating_matchup_adj: float = 0.0
     four_factors_adj: float = 0.0
+    opp_four_factors_adj: float = 0.0
     clutch_adj: float = 0.0
     hustle_adj: float = 0.0
     espn_blend_adj: float = 0.0
@@ -86,6 +87,10 @@ class PrecomputedGame:
     away_rest_days: int = 3
     home_b2b: bool = False
     away_b2b: bool = False
+    home_3in4: bool = False
+    away_3in4: bool = False
+    home_4in6: bool = False
+    away_4in6: bool = False
     home_off: float = 110.0
     away_off: float = 110.0
     home_def: float = 110.0
@@ -738,6 +743,25 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     spread += ff_adj
     pred.four_factors_adj = ff_adj
 
+    # Opponent Four Factors (defensive matchup)
+    home_opp_efg = home_metrics.get("opp_efg_pct", 0) or 0
+    away_opp_efg = away_metrics.get("opp_efg_pct", 0) or 0
+    home_opp_tov = home_metrics.get("opp_tm_tov_pct", 0) or 0
+    away_opp_tov = away_metrics.get("opp_tm_tov_pct", 0) or 0
+    home_opp_oreb = home_metrics.get("opp_oreb_pct", 0) or 0
+    away_opp_oreb = away_metrics.get("opp_oreb_pct", 0) or 0
+    home_opp_fta = home_metrics.get("opp_fta_rate", 0) or 0
+    away_opp_fta = away_metrics.get("opp_fta_rate", 0) or 0
+
+    opp_efg_edge = away_opp_efg - home_opp_efg
+    opp_tov_edge = home_opp_tov - away_opp_tov
+    opp_oreb_edge = away_opp_oreb - home_opp_oreb
+    opp_fta_edge = away_opp_fta - home_opp_fta
+    opp_ff_adj = (opp_efg_edge * w.opp_ff_efg_weight + opp_tov_edge * w.opp_ff_tov_weight +
+                  opp_oreb_edge * w.opp_ff_oreb_weight + opp_fta_edge * w.opp_ff_fta_weight) * w.four_factors_scale
+    spread += opp_ff_adj
+    pred.opp_four_factors_adj = opp_ff_adj
+
     # Sharp Money — try live data first, fallback to DB
     sharp_money_adj = 0.0
     sh_pub = None
@@ -1160,6 +1184,10 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 away_rest_days=afat["rest_days"],
                 home_b2b=hfat["b2b"],
                 away_b2b=afat["b2b"],
+                home_3in4=hfat["three_in_four"],
+                away_3in4=afat["three_in_four"],
+                home_4in6=hfat["four_in_six"],
+                away_4in6=afat["four_in_six"],
                 home_off=home_off,
                 away_off=away_off,
                 home_def=home_def,
@@ -1167,9 +1195,13 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 home_pace=home_pace,
                 away_pace=away_pace,
                 home_ff={"efg": h_efg, "tov": h_tov,
-                         "oreb": h_oreb, "fta": h_fta},
+                         "oreb": h_oreb, "fta": h_fta,
+                         "opp_efg": h_opp_efg, "opp_tov": h_opp_tov,
+                         "opp_oreb": h_opp_oreb, "opp_fta": h_opp_fta},
                 away_ff={"efg": a_efg, "tov": a_tov,
-                         "oreb": a_oreb, "fta": a_fta},
+                         "oreb": a_oreb, "fta": a_fta,
+                         "opp_efg": a_opp_efg, "opp_tov": a_opp_tov,
+                         "opp_oreb": a_opp_oreb, "opp_fta": a_opp_fta},
                 home_clutch=h_clutch,
                 away_clutch=a_clutch,
                 home_hustle=h_hustle,
@@ -1271,7 +1303,9 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
 
     # Spread
     spread = (home_base - away_base) + g.home_court
-    spread -= (g.home_fatigue_penalty - g.away_fatigue_penalty)
+    home_fat = (g.home_b2b * w.fatigue_b2b + g.home_3in4 * w.fatigue_3in4 + g.home_4in6 * w.fatigue_4in6)
+    away_fat = (g.away_b2b * w.fatigue_b2b + g.away_3in4 * w.fatigue_3in4 + g.away_4in6 * w.fatigue_4in6)
+    spread -= (home_fat - away_fat)
 
     # Turnover differential
     home_to = g.home_proj.get("turnovers", 0)
@@ -1298,6 +1332,15 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     ff_adj = (efg_e * w.ff_efg_weight + tov_e * w.ff_tov_weight +
               oreb_e * w.ff_oreb_weight + fta_e * w.ff_fta_weight) * w.four_factors_scale
     spread += ff_adj
+
+    # Opponent Four Factors (defensive matchup)
+    opp_efg_e = aff.get("opp_efg", 0) - hff.get("opp_efg", 0)
+    opp_tov_e = hff.get("opp_tov", 0) - aff.get("opp_tov", 0)
+    opp_oreb_e = aff.get("opp_oreb", 0) - hff.get("opp_oreb", 0)
+    opp_fta_e = aff.get("opp_fta", 0) - hff.get("opp_fta", 0)
+    opp_ff_adj = (opp_efg_e * w.opp_ff_efg_weight + opp_tov_e * w.opp_ff_tov_weight +
+                  opp_oreb_e * w.opp_ff_oreb_weight + opp_fta_e * w.opp_ff_fta_weight) * w.four_factors_scale
+    spread += opp_ff_adj
 
     # Clutch
     if abs(spread) < w.clutch_threshold:
@@ -1347,9 +1390,8 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     if comb_defl > w.hustle_defl_baseline:
         total -= (comb_defl - w.hustle_defl_baseline) * w.hustle_defl_penalty
 
-    # Fatigue total
-    comb_fatigue = g.home_fatigue_penalty + g.away_fatigue_penalty
-    total -= comb_fatigue * w.fatigue_total_mult
+    # Fatigue total (decomposed)
+    total -= (home_fat + away_fat) * w.fatigue_total_mult
 
     # Clamps
     spread = _clamp(-w.spread_clamp, spread, w.spread_clamp)

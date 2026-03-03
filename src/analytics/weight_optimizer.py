@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 VALUE_ZONE_MIN = 4.0
 VALUE_ZONE_MAX = 12.0
 
+# Minimum payout multiplier for ML bets.  Games where the model's
+# picked side pays less than this are excluded from ml_roi/ml_win_rate
+# so the optimizer can't farm free wins from heavy favorites.
+MIN_ML_PAYOUT = 1.35
+
 # Walk-forward: train on first N% of games, validate on last (1-N)%.
 WALK_FORWARD_SPLIT = 0.80
 
@@ -45,6 +50,13 @@ class VectorizedGames:
         self.home_tuning_corr, self.away_tuning_corr = self._load_tuning(games)
         self.home_fatigue = np.array([g.home_fatigue_penalty for g in games])
         self.away_fatigue = np.array([g.away_fatigue_penalty for g in games])
+        # Decomposed fatigue flags — optimizer can tune each independently
+        self.home_b2b_flag = np.array([1.0 if g.home_b2b else 0.0 for g in games])
+        self.away_b2b_flag = np.array([1.0 if g.away_b2b else 0.0 for g in games])
+        self.home_3in4 = np.array([1.0 if g.home_3in4 else 0.0 for g in games])
+        self.away_3in4 = np.array([1.0 if g.away_3in4 else 0.0 for g in games])
+        self.home_4in6 = np.array([1.0 if g.home_4in6 else 0.0 for g in games])
+        self.away_4in6 = np.array([1.0 if g.away_4in6 else 0.0 for g in games])
         self.home_court = np.array([g.home_court for g in games])
 
         # TO/reb diffs
@@ -72,6 +84,12 @@ class VectorizedGames:
             g.home_ff.get("oreb", 0) - g.away_ff.get("oreb", 0) for g in games])
         self.ff_fta_edge = np.array([
             g.home_ff.get("fta", 0) - g.away_ff.get("fta", 0) for g in games])
+
+        # Opponent Four Factors (defensive matchup) edges
+        self.opp_ff_efg_edge = np.array([g.away_ff.get("opp_efg", 0) - g.home_ff.get("opp_efg", 0) for g in games])
+        self.opp_ff_tov_edge = np.array([g.home_ff.get("opp_tov", 0) - g.away_ff.get("opp_tov", 0) for g in games])
+        self.opp_ff_oreb_edge = np.array([g.away_ff.get("opp_oreb", 0) - g.home_ff.get("opp_oreb", 0) for g in games])
+        self.opp_ff_fta_edge = np.array([g.away_ff.get("opp_fta", 0) - g.home_ff.get("opp_fta", 0) for g in games])
 
         # Clutch
         self.clutch_diff = np.array([
@@ -169,7 +187,9 @@ class VectorizedGames:
 
         # Spread
         spread = (home_base - away_base) + self.home_court
-        spread -= (self.home_fatigue - self.away_fatigue)
+        home_fat = self.home_b2b_flag * w.fatigue_b2b + self.home_3in4 * w.fatigue_3in4 + self.home_4in6 * w.fatigue_4in6
+        away_fat = self.away_b2b_flag * w.fatigue_b2b + self.away_3in4 * w.fatigue_3in4 + self.away_4in6 * w.fatigue_4in6
+        spread -= (home_fat - away_fat)
         spread += self.to_diff * w.turnover_margin_mult
         spread += self.reb_diff * w.rebound_diff_mult
 
@@ -182,6 +202,11 @@ class VectorizedGames:
         ff = (self.ff_efg_edge * w.ff_efg_weight + self.ff_tov_edge * w.ff_tov_weight +
               self.ff_oreb_edge * w.ff_oreb_weight + self.ff_fta_edge * w.ff_fta_weight) * w.four_factors_scale
         spread += ff
+
+        # Opponent Four Factors (defensive matchup)
+        opp_ff = (self.opp_ff_efg_edge * w.opp_ff_efg_weight + self.opp_ff_tov_edge * w.opp_ff_tov_weight +
+                  self.opp_ff_oreb_edge * w.opp_ff_oreb_weight + self.opp_ff_fta_edge * w.opp_ff_fta_weight) * w.four_factors_scale
+        spread += opp_ff
 
         # Clutch (vectorized: apply only when |spread| < threshold)
         clutch_mask = np.abs(spread) < w.clutch_threshold
@@ -212,7 +237,7 @@ class VectorizedGames:
         total += (self.combined_oreb - w.oreb_baseline) * w.oreb_mult
         defl_excess = np.maximum(0, self.combined_deflections - w.hustle_defl_baseline)
         total -= defl_excess * w.hustle_defl_penalty
-        total -= self.combined_fatigue * w.fatigue_total_mult
+        total -= (home_fat + away_fat) * w.fatigue_total_mult
 
         # Clamps
         spread = np.clip(spread, -w.spread_clamp, w.spread_clamp)
@@ -284,27 +309,41 @@ class VectorizedGames:
                 a_ml = self.vegas_away_ml[ml_mask]
                 p_spread_ml = spread[ml_mask]
                 a_spread_ml = self.actual_spread[ml_mask]
-                
+
                 # Model's pick based on spread (who does it think wins straight up?)
                 pick_home_ml = p_spread_ml > 0
                 actual_home_win_ml = a_spread_ml > 0
-                
+
                 # Calculate ML payout multipliers
                 # If ML is negative (e.g. -150), multiplier is 1 + 100/abs(ML)
                 # If ML is positive (e.g. +130), multiplier is 1 + ML/100
                 h_mult = np.where(h_ml < 0, 1.0 + 100.0 / np.abs(h_ml), 1.0 + h_ml / 100.0)
                 a_mult = np.where(a_ml < 0, 1.0 + 100.0 / np.abs(a_ml), 1.0 + a_ml / 100.0)
-                
+
+                # Payout for the model's picked side
+                picked_mult = np.where(pick_home_ml, h_mult, a_mult)
+
+                # Filter: only count games where the picked side pays >= MIN_ML_PAYOUT
+                # This excludes heavy favorites (e.g. -300 = 1.33x) that the user
+                # would never actually bet on.
+                payout_ok = picked_mult >= MIN_ML_PAYOUT
+
                 # Winnings: if pick wins, profit = mult - 1. If pick loses, profit = -1.
-                h_profit = np.where(pick_home_ml & actual_home_win_ml, h_mult - 1.0, 
+                h_profit = np.where(pick_home_ml & actual_home_win_ml, h_mult - 1.0,
                            np.where(pick_home_ml & ~actual_home_win_ml, -1.0, 0.0))
-                a_profit = np.where(~pick_home_ml & ~actual_home_win_ml, a_mult - 1.0, 
+                a_profit = np.where(~pick_home_ml & ~actual_home_win_ml, a_mult - 1.0,
                            np.where(~pick_home_ml & actual_home_win_ml, -1.0, 0.0))
-                
+
                 total_profit = h_profit + a_profit
-                
-                ml_win_rate = np.mean((pick_home_ml & actual_home_win_ml) | (~pick_home_ml & ~actual_home_win_ml)) * 100.0
-                ml_roi = np.mean(total_profit) * 100.0
+
+                # Apply payout filter — only bettable games count
+                if np.any(payout_ok):
+                    bettable_correct = ((pick_home_ml & actual_home_win_ml) | (~pick_home_ml & ~actual_home_win_ml)) & payout_ok
+                    ml_win_rate = np.sum(bettable_correct) / np.sum(payout_ok) * 100.0
+                    ml_roi = np.mean(total_profit[payout_ok]) * 100.0
+                else:
+                    ml_win_rate = winner_pct
+                    ml_roi = -4.54
             else:
                 ml_win_rate = winner_pct
                 ml_roi = -4.54 # Default negative
