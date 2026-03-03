@@ -21,6 +21,40 @@ from src.analytics.stats_engine import (
 logger = logging.getLogger(__name__)
 
 
+def _load_current_injuries(*team_ids: int) -> Dict[int, float]:
+    """Load current injuries from DB and compute play probabilities.
+
+    Returns dict mapping player_id -> play_probability (0.0 to 1.0).
+    Players with status 'Out' get 0.0, 'Questionable' ~0.5, etc.
+    """
+    if not team_ids:
+        return {}
+    try:
+        from src.analytics.injury_intelligence import compute_play_probability
+    except ImportError:
+        return {}
+
+    placeholders = ",".join("?" for _ in team_ids)
+    rows = db.fetch_all(
+        f"SELECT player_id, status, reason FROM injuries WHERE team_id IN ({placeholders})",
+        tuple(team_ids),
+    )
+    injured = {}
+    for r in rows:
+        pid = r.get("player_id")
+        if pid is None:
+            continue
+        status = r.get("status", "Out")
+        reason = r.get("reason", "")
+        try:
+            prob = compute_play_probability(pid, status, reason)
+            injured[pid] = prob["play_probability"]
+        except Exception:
+            # Fallback: Out=0.0, anything else=0.5
+            injured[pid] = 0.0 if status.lower() == "out" else 0.5
+    return injured
+
+
 @dataclass
 class MatchupPrediction:
     """Full prediction result."""
@@ -620,7 +654,15 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     away_name = name_map.get(away_team_id, "")
 
     if injured_players is None:
-        injured_players = {}
+        # Auto-load current injuries from DB for both teams
+        injured_players = _load_current_injuries(home_team_id, away_team_id)
+
+    # Store injury info on prediction for UI display
+    if injured_players:
+        pred.injury_impact = {
+            "players_affected": len(injured_players),
+            "players": {pid: prob for pid, prob in injured_players.items()},
+        }
 
     # ── Step 0: Weight Resolution ──
     # Per-team weights blended proportional to each team's games_analyzed
