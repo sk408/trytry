@@ -91,6 +91,8 @@ class PrecomputedGame:
     away_3in4: bool = False
     home_4in6: bool = False
     away_4in6: bool = False
+    home_same_day: bool = False
+    away_same_day: bool = False
     home_off: float = 110.0
     away_off: float = 110.0
     home_def: float = 110.0
@@ -684,12 +686,21 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     home_base_pts += ht_corr
     away_base_pts += at_corr
 
-    # ── Step 5: Fatigue Detection ──
+    # ── Step 5: Fatigue Detection (decomposed — synced with VectorizedGames) ──
     home_fatigue = compute_fatigue(home_team_id, game_date, w=w)
     away_fatigue = compute_fatigue(away_team_id, game_date, w=w)
-    pred.home_fatigue = home_fatigue["penalty"]
-    pred.away_fatigue = away_fatigue["penalty"]
-    fatigue_adj = home_fatigue["penalty"] - away_fatigue["penalty"]
+    # Decomposed fatigue — same formula as VectorizedGames.evaluate() and predict_from_precomputed
+    home_rest_bonus = (1.5 if home_fatigue["rest_days"] >= 4 else 1.0 if home_fatigue["rest_days"] >= 3 else 0.0) * w.fatigue_rest_bonus
+    away_rest_bonus = (1.5 if away_fatigue["rest_days"] >= 4 else 1.0 if away_fatigue["rest_days"] >= 3 else 0.0) * w.fatigue_rest_bonus
+    home_fat = (home_fatigue["b2b"] * w.fatigue_b2b + home_fatigue["three_in_four"] * w.fatigue_3in4
+                + home_fatigue["four_in_six"] * w.fatigue_4in6
+                + (home_fatigue["rest_days"] == 0) * w.fatigue_same_day - home_rest_bonus)
+    away_fat = (away_fatigue["b2b"] * w.fatigue_b2b + away_fatigue["three_in_four"] * w.fatigue_3in4
+                + away_fatigue["four_in_six"] * w.fatigue_4in6
+                + (away_fatigue["rest_days"] == 0) * w.fatigue_same_day - away_rest_bonus)
+    pred.home_fatigue = home_fat
+    pred.away_fatigue = away_fat
+    fatigue_adj = home_fat - away_fat
     pred.fatigue_adj = fatigue_adj
 
     # ── Step 6: Spread Calculation ──
@@ -883,9 +894,8 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         total -= hustle_total
     pred.hustle_total_adj = hustle_total
 
-    # Fatigue total impact
-    combined_fatigue = home_fatigue["penalty"] + away_fatigue["penalty"]
-    total -= combined_fatigue * w.fatigue_total_mult
+    # Fatigue total impact (decomposed — synced with VectorizedGames)
+    total -= (home_fat + away_fat) * w.fatigue_total_mult
 
     # ── Step 8: ESPN Predictor Blend (80/20) ──
     if not skip_espn:
@@ -1188,6 +1198,8 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
                 away_3in4=afat["three_in_four"],
                 home_4in6=hfat["four_in_six"],
                 away_4in6=afat["four_in_six"],
+                home_same_day=hfat["rest_days"] == 0,
+                away_same_day=afat["rest_days"] == 0,
                 home_off=home_off,
                 away_off=away_off,
                 home_def=home_def,
@@ -1303,8 +1315,13 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
 
     # Spread
     spread = (home_base - away_base) + g.home_court
-    home_fat = (g.home_b2b * w.fatigue_b2b + g.home_3in4 * w.fatigue_3in4 + g.home_4in6 * w.fatigue_4in6)
-    away_fat = (g.away_b2b * w.fatigue_b2b + g.away_3in4 * w.fatigue_3in4 + g.away_4in6 * w.fatigue_4in6)
+    # Rest bonus: rest_days >= 4 → -1.5x weight, >= 3 → -1.0x weight
+    home_rest_bonus = (1.5 if g.home_rest_days >= 4 else 1.0 if g.home_rest_days >= 3 else 0.0) * w.fatigue_rest_bonus
+    away_rest_bonus = (1.5 if g.away_rest_days >= 4 else 1.0 if g.away_rest_days >= 3 else 0.0) * w.fatigue_rest_bonus
+    home_fat = (g.home_b2b * w.fatigue_b2b + g.home_3in4 * w.fatigue_3in4 + g.home_4in6 * w.fatigue_4in6
+                + g.home_same_day * w.fatigue_same_day - home_rest_bonus)
+    away_fat = (g.away_b2b * w.fatigue_b2b + g.away_3in4 * w.fatigue_3in4 + g.away_4in6 * w.fatigue_4in6
+                + g.away_same_day * w.fatigue_same_day - away_rest_bonus)
     spread -= (home_fat - away_fat)
 
     # Turnover differential

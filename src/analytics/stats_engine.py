@@ -326,7 +326,7 @@ def aggregate_projection(team_id: int, opponent_team_id: int, is_home: int,
         if play_prob < 0.3:
             continue
 
-        splits = player_splits(pid, opponent_team_id, is_home, recent_games=10,
+        splits = player_splits(pid, opponent_team_id, is_home, recent_games=20,
                                as_of_date=as_of_date)
         if splits["minutes"] < 1.0:
             if play_prob >= 0.3:
@@ -600,7 +600,7 @@ def get_team_matchup_stats(team_id: int, opponent_team_id: int,
     result = []
     for p in rows:
         pid = p["player_id"]
-        splits = player_splits(pid, opponent_team_id, is_home, recent_games=10,
+        splits = player_splits(pid, opponent_team_id, is_home, recent_games=20,
                                as_of_date=as_of_date)
         if splits["minutes"] < 1.0:
             continue

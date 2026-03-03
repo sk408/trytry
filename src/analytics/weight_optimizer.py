@@ -48,8 +48,6 @@ class VectorizedGames:
         # Load tuning corrections fresh from DB (not baked into precomputed games)
         # so precomputed games never need rebuilding when autotune runs.
         self.home_tuning_corr, self.away_tuning_corr = self._load_tuning(games)
-        self.home_fatigue = np.array([g.home_fatigue_penalty for g in games])
-        self.away_fatigue = np.array([g.away_fatigue_penalty for g in games])
         # Decomposed fatigue flags — optimizer can tune each independently
         self.home_b2b_flag = np.array([1.0 if g.home_b2b else 0.0 for g in games])
         self.away_b2b_flag = np.array([1.0 if g.away_b2b else 0.0 for g in games])
@@ -57,6 +55,11 @@ class VectorizedGames:
         self.away_3in4 = np.array([1.0 if g.away_3in4 else 0.0 for g in games])
         self.home_4in6 = np.array([1.0 if g.home_4in6 else 0.0 for g in games])
         self.away_4in6 = np.array([1.0 if g.away_4in6 else 0.0 for g in games])
+        self.home_same_day = np.array([1.0 if getattr(g, 'home_same_day', False) else 0.0 for g in games])
+        self.away_same_day = np.array([1.0 if getattr(g, 'away_same_day', False) else 0.0 for g in games])
+        # Rest bonus tiers: rest_days >= 4 → 1.5, >= 3 → 1.0, else 0
+        self.home_rest_tier = np.array([1.5 if g.home_rest_days >= 4 else 1.0 if g.home_rest_days >= 3 else 0.0 for g in games])
+        self.away_rest_tier = np.array([1.5 if g.away_rest_days >= 4 else 1.0 if g.away_rest_days >= 3 else 0.0 for g in games])
         self.home_court = np.array([g.home_court for g in games])
 
         # TO/reb diffs
@@ -121,8 +124,6 @@ class VectorizedGames:
             g.home_proj.get("oreb", 0) + g.away_proj.get("oreb", 0)
             for g in games
         ])
-        self.combined_fatigue = self.home_fatigue + self.away_fatigue
-
         # Rest / altitude
         self.net_rest = np.array([g.home_rest_days - g.away_rest_days for g in games], dtype=float)
         self.away_b2b_at_altitude = np.array([
@@ -187,8 +188,10 @@ class VectorizedGames:
 
         # Spread
         spread = (home_base - away_base) + self.home_court
-        home_fat = self.home_b2b_flag * w.fatigue_b2b + self.home_3in4 * w.fatigue_3in4 + self.home_4in6 * w.fatigue_4in6
-        away_fat = self.away_b2b_flag * w.fatigue_b2b + self.away_3in4 * w.fatigue_3in4 + self.away_4in6 * w.fatigue_4in6
+        home_fat = (self.home_b2b_flag * w.fatigue_b2b + self.home_3in4 * w.fatigue_3in4 + self.home_4in6 * w.fatigue_4in6
+                    + self.home_same_day * w.fatigue_same_day - self.home_rest_tier * w.fatigue_rest_bonus)
+        away_fat = (self.away_b2b_flag * w.fatigue_b2b + self.away_3in4 * w.fatigue_3in4 + self.away_4in6 * w.fatigue_4in6
+                    + self.away_same_day * w.fatigue_same_day - self.away_rest_tier * w.fatigue_rest_bonus)
         spread -= (home_fat - away_fat)
         spread += self.to_diff * w.turnover_margin_mult
         spread += self.reb_diff * w.rebound_diff_mult
@@ -273,10 +276,10 @@ class VectorizedGames:
         if actual_spread_std > 0:
             compression_ratio = pred_spread_std / actual_spread_std
             # Penalize when predicted spreads are artificially narrow.
-            # Default weights produce ~0.60 ratio (natural); anything below 0.45
+            # Default weights produce ~0.60 ratio (natural); anything below 0.55
             # means the optimizer is compressing spreads to game winner%.
-            if compression_ratio < 0.45:
-                loss += (0.45 - compression_ratio) * 80.0  # harsh: 0.20 ratio -> +20 loss
+            if compression_ratio < 0.55:
+                loss += (0.55 - compression_ratio) * 80.0  # harsh: 0.20 ratio -> +28 loss
 
         # Vegas Betting objectives (ATS, Edge Hit Rate)
         if np.any(self.vegas_spread != 0.0):
@@ -741,11 +744,13 @@ def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
         if len(holdout_games) < 7:
             continue
 
+        vg_train = VectorizedGames(train_games)
         vg_holdout = VectorizedGames(holdout_games)
         global_holdout_loss = vg_holdout.evaluate(global_w, target=target)["loss"]
 
         best_team_w = global_w
-        best_team_loss = global_holdout_loss
+        best_train_loss = vg_train.evaluate(global_w, target=target)["loss"]
+        best_holdout_loss = global_holdout_loss
 
         tunable_keys = [
             "def_factor_dampening", "turnover_margin_mult",
@@ -765,17 +770,21 @@ def per_team_refinement(games: List[PrecomputedGame], n_trials: int = 100,
                 params[key] = max(lo, min(hi, val))
 
             w = WeightConfig.from_dict(params)
-            result = vg_holdout.evaluate(w, target=target)
+            # Fit on train, validate on holdout
+            train_result = vg_train.evaluate(w, target=target)
+            if train_result["loss"] < best_train_loss:
+                # Candidate is better on train — check holdout to prevent overfitting
+                holdout_result = vg_holdout.evaluate(w, target=target)
+                if holdout_result["loss"] < best_holdout_loss:
+                    best_team_w = w
+                    best_train_loss = train_result["loss"]
+                    best_holdout_loss = holdout_result["loss"]
 
-            if result["loss"] < best_team_loss:
-                best_team_w = w
-                best_team_loss = result["loss"]
-
-        # Keep only if better and not >30% worse than global
-        if best_team_loss < global_holdout_loss and best_team_loss < global_loss * 1.3:
+        # Keep only if holdout improved and not >30% worse than global
+        if best_holdout_loss < global_holdout_loss and best_holdout_loss < global_loss * 1.3:
             save_team_weights(team_id, best_team_w)
             refined += 1
-            results[team_id] = {"loss_before": global_holdout_loss, "loss_after": best_team_loss}
+            results[team_id] = {"loss_before": global_holdout_loss, "loss_after": best_holdout_loss}
 
         if callback:
             callback(f"Team {team_id}: {'refined' if team_id in results else 'kept global'}")

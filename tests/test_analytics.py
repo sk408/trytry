@@ -414,10 +414,45 @@ class TestOppFFInExtremeRanges:
             assert param in EXTREME_RANGES, f"{param} missing from EXTREME_RANGES"
 
 
+class TestThreeCodePathSync:
+    """Verify VectorizedGames.evaluate() and predict_from_precomputed() produce
+    the same predicted spread for identical inputs.  This is the single most
+    important invariant in the prediction system (see optimizer-lessons.md #7)."""
+
+    def test_spread_matches(self, sample_game, default_weights):
+        """evaluate() spread must equal predict_from_precomputed() spread.
+
+        With a single game, spread_mae = |predicted_spread - actual_spread|.
+        We can recover predicted_spread from this since we know actual_spread.
+        Both paths must give the same predicted spread within tolerance.
+        """
+        g = sample_game
+        w = default_weights
+        actual_spread = g.actual_home_score - g.actual_away_score
+
+        # VectorizedGames path — mock DB for tuning (returns zeros)
+        with patch("src.analytics.weight_optimizer.db") as mock_db:
+            mock_db.fetch_all.return_value = []
+            vg = VectorizedGames([g])
+        vg_result = vg.evaluate(w)
+        vg_mae = vg_result["spread_mae"]
+
+        # predict_from_precomputed path — mock tuning to return zeros (match VG)
+        with patch("src.analytics.prediction._get_tuning_map", return_value={}):
+            pfp_result = predict_from_precomputed(g, w, skip_residual=True)
+
+        pfp_spread = pfp_result["spread"]
+        pfp_mae = abs(pfp_spread - actual_spread)
+
+        # Both paths must produce the same MAE (same predicted spread)
+        assert abs(vg_mae - pfp_mae) < 0.01, \
+            f"Spread MAE mismatch: VG={vg_mae:.4f} vs PFP={pfp_mae:.4f} (PFP spread={pfp_spread:.4f})"
+
+
 class TestFatigueInExtremeRanges:
 
     def test_all_fatigue_params_in_extreme_ranges(self):
-        """All 6 fatigue/rest/altitude params must be in EXTREME_RANGES."""
+        """All 8 fatigue/rest/altitude params must be in EXTREME_RANGES."""
         from src.analytics.sensitivity import EXTREME_RANGES
         expected = [
             "rest_advantage_mult",
@@ -425,6 +460,8 @@ class TestFatigueInExtremeRanges:
             "fatigue_b2b",
             "fatigue_3in4",
             "fatigue_4in6",
+            "fatigue_same_day",
+            "fatigue_rest_bonus",
             "fatigue_total_mult",
         ]
         for param in expected:

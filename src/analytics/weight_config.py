@@ -60,6 +60,8 @@ class WeightConfig:
     fatigue_b2b: float = 1.5
     fatigue_3in4: float = 0.8
     fatigue_4in6: float = 1.0
+    fatigue_same_day: float = 3.0    # same-day (0 rest days) penalty
+    fatigue_rest_bonus: float = 1.0  # bonus subtracted when rest_days >= 3 (scaled by days)
 
     # Net rest advantage — continuous signal (pts per rest-day differential)
     rest_advantage_mult: float = 0.3
@@ -237,14 +239,15 @@ OPTIMIZER_RANGES = {
     "four_factors_scale": (1.0, 75.0),        # avg weighted edge ~0.19; 75*0.19≈14pts max avg
     "clutch_scale": (0.01, 2.0),             # sensitivity: optimal ~0.13 (in range)
     "hustle_effort_mult": (0.0, 2.0),        # avg raw edge ~3.0; 2*3=6pts max avg
-    "ff_efg_weight": (0.0, 25.0),            # widened for 3-season optimizer
-    "ff_tov_weight": (0.0, 15.0),            # widened for 3-season optimizer
-    "ff_oreb_weight": (0.0, 15.0),           # widened for 3-season optimizer
-    "ff_fta_weight": (0.0, 15.0),            # widened for 3-season optimizer
-    "opp_ff_efg_weight": (0.0, 15.0),
-    "opp_ff_tov_weight": (0.0, 15.0),
-    "opp_ff_oreb_weight": (0.0, 15.0),
-    "opp_ff_fta_weight": (0.0, 15.0),
+    "hustle_contested_wt": (0.0, 1.5),       # weight for contested shots in hustle calc
+    "ff_efg_weight": (0.0, 8.0),             # avg edge ~0.02; 0.02*8*75=12pts max
+    "ff_tov_weight": (0.0, 8.0),             # tightened: 8 sub-weights share ff_scale
+    "ff_oreb_weight": (0.0, 8.0),            # max single-component ~12pts
+    "ff_fta_weight": (0.0, 8.0),             # prevents compound blowup with opp_ff
+    "opp_ff_efg_weight": (0.0, 8.0),         # same range as offensive FF
+    "opp_ff_tov_weight": (0.0, 8.0),
+    "opp_ff_oreb_weight": (0.0, 8.0),
+    "opp_ff_fta_weight": (0.0, 8.0),
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
     "sharp_money_weight": (0.0, 15.0),       # CD/sensitivity keep finding 12+, was capped at 10
@@ -254,6 +257,8 @@ OPTIMIZER_RANGES = {
     "fatigue_b2b": (0.0, 8.0),               # sweep: ML ROI/Win% best at ~7.5-8.0, was capped at 5.0
     "fatigue_3in4": (0.0, 3.0),              # 3-in-4 nights penalty
     "fatigue_4in6": (0.0, 5.0),              # sensitivity: optimal ~3.5-4.0, was capped at 3.0
+    "fatigue_same_day": (0.0, 6.0),          # same-day (0 rest) penalty
+    "fatigue_rest_bonus": (0.0, 3.0),        # bonus per rest tier (3+ days, 4+ days)
     "fatigue_total_mult": (0.0, 2.0),        # combined fatigue impact on total
 }
 
