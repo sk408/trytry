@@ -154,6 +154,10 @@ QHeaderView::section {
     text-transform: uppercase;
 }
 
+QTableWidget::item:hover {
+    background-color: rgba(0, 229, 255, 0.06);
+}
+
 /* ---- Scroll Bars ---- */
 QScrollBar:vertical {
     background: transparent;
@@ -420,7 +424,228 @@ QLabel[class="edge-negative"] {
     color: #ef4444;
     font-weight: 700;
 }
+
+/* ---- Semantic Card Panels ---- */
+QFrame[class="card-panel"] {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 16px;
+}
+
+QFrame[class="card-panel-danger"] {
+    background: #1e293b;
+    border: 2px solid #ef4444;
+    border-radius: 8px;
+    padding: 16px;
+}
+
+/* ---- Semantic Text Classes ---- */
+QLabel[class="text-primary"] {
+    color: #e2e8f0;
+    font-size: 13px;
+}
+
+QLabel[class="text-secondary"] {
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+QLabel[class="text-hint"] {
+    color: #64748b;
+    font-size: 11px;
+}
+
+QLabel[class="section-title"] {
+    color: #e2e8f0;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QLabel[class="section-title-danger"] {
+    color: #ef4444;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+/* ---- Stat Value (large accent numbers) ---- */
+QLabel[class="stat-value"] {
+    font-size: 26px;
+    font-weight: 700;
+    color: #00e5ff;
+}
+
+QLabel[class="stat-label"] {
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+}
+
+/* ---- Button Variants ---- */
+QPushButton[class="primary"] {
+    background-color: #2563eb;
+    color: white;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-weight: 600;
+}
+
+QPushButton[class="primary"]:hover {
+    background-color: #1d4ed8;
+}
+
+QPushButton[class="warn"] {
+    background-color: #d97706;
+    color: white;
+    font-weight: 700;
+}
+
+QPushButton[class="warn"]:hover {
+    background-color: #b45309;
+}
+
+/* ---- Toggle Link Button ---- */
+QPushButton[class="link"] {
+    text-align: left;
+    background: transparent;
+    color: #00e5ff;
+    font-weight: bold;
+    border: none;
+    padding: 0px;
+}
+
+QPushButton[class="link"]:hover {
+    color: #00b8cc;
+}
+
+/* ---- Terminal / Log Output ---- */
+QTextEdit[class="terminal"] {
+    background-color: #000000;
+    color: #4ade80;
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+}
+
+/* ---- Dog Pick Badges ---- */
+QLabel[class="badge-dog"] {
+    background: #f59e0b;
+    color: #000000;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QLabel[class="badge-dog-outside"] {
+    background: #475569;
+    color: #e2e8f0;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QLabel[class="badge-status"] {
+    background: rgba(100, 116, 139, 0.15);
+    color: #94a3b8;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+/* ---- VS Separator ---- */
+QLabel[class="vs-label"] {
+    color: #64748b;
+    font-family: 'Oswald', 'Segoe UI', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+/* ---- Step Indicator States (QLabel + QFrame) ---- */
+QLabel[class="step-pending"], QFrame[class="step-pending"] {
+    background: #1e293b;
+    border: 2px solid #475569;
+    border-radius: 16px;
+    color: #94a3b8;
+}
+
+QLabel[class="step-active"], QFrame[class="step-active"] {
+    background: rgba(0, 229, 255, 0.15);
+    border: 2px solid #00e5ff;
+    border-radius: 16px;
+    color: #00e5ff;
+}
+
+QLabel[class="step-done"], QFrame[class="step-done"] {
+    background: rgba(34, 197, 94, 0.15);
+    border: 2px solid #22c55e;
+    border-radius: 16px;
+    color: #22c55e;
+}
+
+QLabel[class="step-skipped"], QFrame[class="step-skipped"] {
+    background: rgba(100, 116, 139, 0.15);
+    border: 2px solid #64748b;
+    border-radius: 16px;
+    color: #64748b;
+}
+
+QLabel[class="step-error"], QFrame[class="step-error"] {
+    background: rgba(239, 68, 68, 0.15);
+    border: 2px solid #ef4444;
+    border-radius: 16px;
+    color: #ef4444;
+}
+
+/* Child labels inside step indicators inherit step state colors */
+QFrame[class="step-pending"] QLabel { color: #94a3b8; }
+QFrame[class="step-active"] QLabel { color: #ffffff; font-weight: bold; }
+QFrame[class="step-done"] QLabel { color: #d1fae5; font-weight: bold; }
+QFrame[class="step-skipped"] QLabel { color: #94a3b8; font-style: italic; }
+QFrame[class="step-error"] QLabel { color: #fee2e2; font-weight: bold; }
+
+/* ---- Overnight / Indigo Button ---- */
+QPushButton[class="indigo"] {
+    background-color: #4f46e5;
+    color: white;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-weight: 600;
+}
+
+QPushButton[class="indigo"]:hover {
+    background-color: #4338ca;
+}
+
+QPushButton[class="indigo"]:disabled {
+    background-color: rgba(79, 70, 229, 0.3);
+    color: #64748b;
+}
 """
+
+def apply_card_shadow(widget, level="md"):
+    """Apply a drop shadow to a widget. Levels: sm, md, lg."""
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+    from PySide6.QtGui import QColor
+    effect = QGraphicsDropShadowEffect(widget)
+    if level == "sm":
+        effect.setBlurRadius(4)
+        effect.setOffset(0, 1)
+        effect.setColor(QColor(0, 0, 0, 77))
+    elif level == "lg":
+        effect.setBlurRadius(32)
+        effect.setOffset(0, 8)
+        effect.setColor(QColor(0, 0, 0, 128))
+    else:  # md
+        effect.setBlurRadius(12)
+        effect.setOffset(0, 4)
+        effect.setColor(QColor(0, 0, 0, 102))
+    widget.setGraphicsEffect(effect)
+
 
 def setup_theme(widget):
     """Apply the theme to a given widget or QApplication, adjusting for OLED mode."""

@@ -79,10 +79,7 @@ class PredictionCard(QFrame):
         layout.setSpacing(4)
 
         self.title_label = QLabel(title.upper())
-        self.title_label.setStyleSheet(
-            "color: #64748b; font-size: 10px; font-weight: 700; "
-            "letter-spacing: 2px; background: transparent;"
-        )
+        self.title_label.setProperty("class", "stat-label")
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.value_label = QLabel(value)
@@ -171,10 +168,7 @@ class MatchupView(QWidget):
 
         # VS separator
         vs_label = QLabel("VS")
-        vs_label.setStyleSheet(
-            "color: #64748b; font-size: 18px; font-weight: 700; "
-            "font-family: 'Oswald'; padding: 0 16px; background: transparent;"
-        )
+        vs_label.setProperty("class", "vs-label")
         vs_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sel_inner.addWidget(vs_label)
 
@@ -276,7 +270,7 @@ class MatchupView(QWidget):
         # Injury impact summary
         self.injury_label = QLabel("")
         self.injury_label.setWordWrap(True)
-        self.injury_label.setStyleSheet("color: #94a3b8; padding: 8px;")
+        self.injury_label.setProperty("class", "text-secondary")
         layout.addWidget(self.injury_label)
 
         # ── Player rosters with injury status ──
@@ -574,18 +568,18 @@ class MatchupView(QWidget):
             self._dog_badge.setText(
                 f"  DOG PICK: {dog_team} ({dog_payout:.2f}x)  |  "
                 f"Vegas: {vegas_sp:+.1f}  |  Model: {spread:+.1f}  ")
-            self._dog_badge.setStyleSheet(
-                "background-color: #f59e0b; color: #000; font-weight: bold; "
-                "font-size: 13px; border-radius: 6px; padding: 4px 12px;")
+            self._dog_badge.setProperty("class", "badge-dog")
+            self._dog_badge.style().unpolish(self._dog_badge)
+            self._dog_badge.style().polish(self._dog_badge)
             self._dog_badge.setVisible(True)
         elif is_dog:
             dog_team = result.get("winner", "DOG")
             self._dog_badge.setText(
                 f"  DOG PICK: {dog_team}  |  Vegas: {vegas_sp:+.1f}  |  Model: {spread:+.1f}  "
                 f"(outside value zone)")
-            self._dog_badge.setStyleSheet(
-                "background-color: #64748b; color: #fff; font-weight: bold; "
-                "font-size: 13px; border-radius: 6px; padding: 4px 12px;")
+            self._dog_badge.setProperty("class", "badge-dog-outside")
+            self._dog_badge.style().unpolish(self._dog_badge)
+            self._dog_badge.style().polish(self._dog_badge)
             self._dog_badge.setVisible(True)
         else:
             self._dog_badge.setVisible(False)

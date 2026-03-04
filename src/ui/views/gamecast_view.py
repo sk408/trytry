@@ -307,9 +307,7 @@ class GamecastView(QWidget):
         sel.setSpacing(8)
 
         lbl = QLabel("GAME")
-        lbl.setStyleSheet(
-            "color: #94a3b8; font-size: 10px; font-weight: 700; letter-spacing: 1px;"
-        )
+        lbl.setProperty("class", "subheader")
         sel.addWidget(lbl)
 
         self.game_combo = QComboBox()
@@ -328,7 +326,7 @@ class GamecastView(QWidget):
         sel.addWidget(self._live_dot)
 
         self._status_hint = QLabel("")
-        self._status_hint.setStyleSheet("color: #64748b; font-size: 10px;")
+        self._status_hint.setProperty("class", "text-hint")
         sel.addWidget(self._status_hint)
 
         sel.addStretch()

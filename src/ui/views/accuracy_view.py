@@ -201,10 +201,7 @@ class AccuracyView(QWidget):
         """Create a summary card."""
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
-        frame.setStyleSheet(
-            "QFrame { background: #1e293b; border: 1px solid #334155; "
-            "border-radius: 8px; padding: 10px; }"
-        )
+        frame.setProperty("class", "card-panel")
         fl = QVBoxLayout(frame)
         fl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -214,7 +211,7 @@ class AccuracyView(QWidget):
         val_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 10px; color: #64748b;")
+        title_label.setProperty("class", "stat-label")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         fl.addWidget(val_label)

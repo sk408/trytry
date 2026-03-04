@@ -1,4 +1,4 @@
-"""PySide6 Desktop GUI — Main window with 12 tabs."""
+"""PySide6 Desktop GUI — Main window with 10 tabs."""
 
 import logging
 import os
@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFontDatabase, QFont
-
 from src.ui.theme import GLOBAL_STYLESHEET
 
 logger = logging.getLogger(__name__)
@@ -19,8 +18,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        
-        # Load custom fonts
+
+        # Load bundled Oswald font
         font_dir = os.path.join(os.path.dirname(__file__), "fonts")
         oswald_path = os.path.join(font_dir, "Oswald.ttf")
         if os.path.exists(oswald_path):
@@ -66,11 +65,9 @@ class MainWindow(QMainWindow):
         from src.ui.views.schedule_view import ScheduleView
         from src.ui.views.accuracy_view import AccuracyView
         from src.ui.views.automatic_view import AutomaticView
-        from src.ui.views.snapshots_view import SnapshotsView
-        from src.ui.views.autotune_view import AutotuneView
         from src.ui.views.sensitivity_view import SensitivityView
-        from src.ui.views.admin_view import AdminView
         from src.ui.views.overview_view import OverviewView
+        from src.ui.views.tools_view import ToolsView
 
         self.dashboard = DashboardView(self)
         self.overview = OverviewView(self)
@@ -80,10 +77,8 @@ class MainWindow(QMainWindow):
         self.schedule = ScheduleView(self)
         self.accuracy = AccuracyView(self)
         self.automatic = AutomaticView(self)
-        self.snapshots = SnapshotsView(self)
-        self.autotune = AutotuneView(self)
         self.sensitivity = SensitivityView(self)
-        self.admin = AdminView(self)
+        self.tools = ToolsView(self)
 
         self.tabs.addTab(self.dashboard, "Dashboard")
         self.tabs.addTab(self.overview, "Today's Overview")
@@ -93,10 +88,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.schedule, "Schedule")
         self.tabs.addTab(self.accuracy, "Accuracy")
         self.tabs.addTab(self.automatic, "Automatic")
-        self.tabs.addTab(self.snapshots, "Snapshots")
-        self.tabs.addTab(self.autotune, "Autotune (Disabled)")
         self.tabs.addTab(self.sensitivity, "Sensitivity")
-        self.tabs.addTab(self.admin, "Admin")
+        self.tabs.addTab(self.tools, "Tools")
 
         # Connect schedule game selection to matchup tab
         self.schedule.game_selected.connect(self._on_schedule_game_selected)
@@ -149,8 +142,23 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(msg)
 
     def closeEvent(self, event):
-        """Clean up on close."""
+        """Clean up on close — signal optimizer to save results before exiting."""
         logger.info("Application closing")
         if hasattr(self, 'gamecast'):
             self.gamecast._stop_websocket()
+
+        # If an optimization/pipeline worker is running, signal cancellation
+        # so Optuna finishes its current trial and the save gate runs.
+        if hasattr(self, 'automatic') and self.automatic._current_worker:
+            worker = self.automatic._current_worker
+            if worker.isRunning():
+                from src.analytics.pipeline import request_cancel
+                logger.info("Optimization running — requesting graceful stop…")
+                self.status_bar.showMessage("Saving optimization results…")
+                request_cancel()
+                worker.stop()
+                # Wait up to 10s for the save gate to finish
+                if worker._thread_ref is not None:
+                    worker._thread_ref.wait(10000)
+
         event.accept()

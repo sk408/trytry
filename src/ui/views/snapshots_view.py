@@ -35,7 +35,7 @@ class SnapshotsView(QWidget):
         header_layout.addWidget(self.btn_refresh)
         
         self.btn_manual = QPushButton("➕ Create Manual Backup")
-        self.btn_manual.setStyleSheet("background-color: #2563eb; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px;")
+        self.btn_manual.setProperty("class", "primary")
         self.btn_manual.clicked.connect(self._on_create_manual)
         header_layout.addWidget(self.btn_manual)
         
@@ -47,7 +47,7 @@ class SnapshotsView(QWidget):
             "The Automatic pipeline creates an 'auto' snapshot before running. "
             "Restore a previous snapshot if a new update performs worse."
         )
-        info.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        info.setProperty("class", "text-secondary")
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -64,43 +64,19 @@ class SnapshotsView(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #0f172a;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                gridline-color: #334155;
-            }
-            QHeaderView::section {
-                background-color: #1e293b;
-                color: #94a3b8;
-                padding: 6px;
-                border: none;
-                border-right: 1px solid #334155;
-                border-bottom: 1px solid #334155;
-                font-weight: bold;
-            }
-            QTableWidget::item {
-                padding: 6px;
-            }
-            QTableWidget::item:selected {
-                background-color: #3b82f6;
-                color: white;
-            }
-        """)
         layout.addWidget(self.table)
 
         # Action Buttons
         actions_layout = QHBoxLayout()
         
         self.btn_restore = QPushButton("↺ Restore Selected")
-        self.btn_restore.setStyleSheet("background-color: #d97706; color: white; font-weight: bold; padding: 8px 16px; border-radius: 4px;")
+        self.btn_restore.setProperty("class", "warn")
         self.btn_restore.clicked.connect(self._on_restore)
         self.btn_restore.setEnabled(False)
         actions_layout.addWidget(self.btn_restore)
         
         self.btn_delete = QPushButton("🗑 Delete Selected")
-        self.btn_delete.setStyleSheet("background-color: #ef4444; color: white; font-weight: bold; padding: 8px 16px; border-radius: 4px;")
+        self.btn_delete.setProperty("class", "danger")
         self.btn_delete.clicked.connect(self._on_delete)
         self.btn_delete.setEnabled(False)
         actions_layout.addWidget(self.btn_delete)

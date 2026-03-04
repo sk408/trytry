@@ -1,5 +1,6 @@
 """FastAPI web application — 30+ routes, 18+ SSE endpoints."""
 
+import atexit
 import asyncio
 import json
 import logging
@@ -48,6 +49,18 @@ _pipeline_cancel = threading.Event()
 _sync_lock = threading.Lock()
 _optimize_lock = threading.Lock()
 _pipeline_lock = threading.Lock()
+
+
+def _shutdown_cancel():
+    """Signal all running operations to stop so Optuna save gates run."""
+    logger.info("Server shutting down — requesting graceful cancellation")
+    _sync_cancel.set()
+    _optimize_cancel.set()
+    _pipeline_cancel.set()
+    from src.analytics.pipeline import request_cancel
+    request_cancel()
+
+atexit.register(_shutdown_cancel)
 
 
 # ---- Helper: SSE generator ----
@@ -496,32 +509,21 @@ def accuracy_page(request: Request):
     })
 
 
-@app.get("/autotune", response_class=HTMLResponse)
-def autotune_page(request: Request):
-    tuning = db.fetch_all("""
-        SELECT tt.*, t.abbreviation
-        FROM team_tuning tt
-        JOIN teams t ON tt.team_id = t.team_id
-        ORDER BY t.abbreviation
-    """)
-    return templates.TemplateResponse("autotune.html", {
-        "request": request,
-        "tuning": [dict(t) for t in tuning],
-    })
+@app.get("/autotune")
+def autotune_redirect():
+    return RedirectResponse(url="/tools", status_code=301)
 
 
-@app.post("/autotune/clear")
-async def clear_autotune():
-    from src.analytics.autotune import clear_all_tuning
-    clear_all_tuning()
-    return RedirectResponse(url="/autotune", status_code=303)
+@app.get("/admin")
+def admin_redirect():
+    return RedirectResponse(url="/tools", status_code=301)
 
 
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
+@app.get("/tools", response_class=HTMLResponse)
+def tools_page(request: Request):
     from src.database.db import get_db_size
     config = get_config()
-    return templates.TemplateResponse("admin.html", {
+    return templates.TemplateResponse("tools.html", {
         "request": request,
         "db_path": config.get("db_path", "data/nba.db"),
         "db_size": get_db_size(),
@@ -530,8 +532,8 @@ def admin_page(request: Request):
     })
 
 
-@app.post("/admin/settings")
-async def admin_save_settings(request: Request):
+@app.post("/tools/settings")
+async def tools_save_settings(request: Request):
     from src.config import set_value
     data = await request.json()
     if "sync_freshness_hours" in data:
@@ -541,12 +543,41 @@ async def admin_save_settings(request: Request):
     return {"status": "ok"}
 
 
-@app.post("/admin/reset")
-async def admin_reset():
+@app.post("/tools/reset")
+async def tools_reset():
     from src.database.db import delete_database
     delete_database()
     init_db()
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/tools", status_code=303)
+
+
+@app.get("/api/snapshots")
+def api_list_snapshots():
+    from src.analytics.snapshots import list_snapshots
+    return list_snapshots()
+
+
+@app.post("/api/snapshots")
+def api_create_snapshot():
+    from src.analytics.snapshots import create_snapshot
+    create_snapshot("manual")
+    return {"status": "ok"}
+
+
+@app.post("/api/snapshots/{filename}/restore")
+def api_restore_snapshot(filename: str):
+    from src.analytics.snapshots import restore_snapshot
+    success = restore_snapshot(filename)
+    if success:
+        return {"status": "ok"}
+    return JSONResponse({"status": "error", "message": "Restore failed"}, status_code=500)
+
+
+@app.delete("/api/snapshots/{filename}")
+def api_delete_snapshot(filename: str):
+    from src.analytics.snapshots import delete_snapshot
+    delete_snapshot(filename)
+    return {"status": "ok"}
 
 
 @app.get("/gamecast", response_class=HTMLResponse)

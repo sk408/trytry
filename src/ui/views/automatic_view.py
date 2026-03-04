@@ -17,66 +17,48 @@ logger = logging.getLogger(__name__)
 
 class StepIndicator(QFrame):
     """A visual indicator for a single pipeline step."""
-    
+
+    # Status icon glyphs per state
+    _ICONS = {"pending": "○", "active": "↻", "done": "✓", "skipped": "⏭", "error": "✕"}
+
     def __init__(self, step_num: int, title: str):
         super().__init__()
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet("""
-            StepIndicator {
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
+        self._state = "pending"
+        self.setProperty("class", "step-pending")
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        
+
         self.header_layout = QHBoxLayout()
-        
+
         self.num_label = QLabel(f"{step_num}.")
-        self.num_label.setStyleSheet("color: #64748b; font-weight: bold; font-size: 14px;")
-        
+        self.num_label.setProperty("class", "text-hint")
+
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #94a3b8; font-weight: 500; font-size: 13px;")
-        
+        self.title_label.setProperty("class", "text-secondary")
+
         self.status_icon = QLabel("○")
-        self.status_icon.setStyleSheet("color: #64748b; font-size: 14px;")
-        
+        self.status_icon.setProperty("class", "text-hint")
+
         self.header_layout.addWidget(self.num_label)
         self.header_layout.addWidget(self.title_label)
         self.header_layout.addStretch()
         self.header_layout.addWidget(self.status_icon)
-        
+
         layout.addLayout(self.header_layout)
-        
+
     def set_state(self, state: str):
         """state can be: 'pending', 'active', 'done', 'error', 'skipped'"""
-        if state == "active":
-            self.setStyleSheet("StepIndicator { background-color: #1e3a8a; border: 1px solid #3b82f6; border-radius: 6px; }")
-            self.title_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-            self.status_icon.setText("↻")
-            self.status_icon.setStyleSheet("color: #60a5fa; font-size: 16px;")
-        elif state == "done":
-            self.setStyleSheet("StepIndicator { background-color: #064e3b; border: 1px solid #10b981; border-radius: 6px; }")
-            self.title_label.setStyleSheet("color: #d1fae5; font-weight: bold; font-size: 13px;")
-            self.status_icon.setText("✓")
-            self.status_icon.setStyleSheet("color: #34d399; font-size: 16px; font-weight: bold;")
-        elif state == "skipped":
-            self.setStyleSheet("StepIndicator { background-color: #1e293b; border: 1px solid #475569; border-radius: 6px; }")
-            self.title_label.setStyleSheet("color: #94a3b8; font-style: italic; font-size: 13px;")
-            self.status_icon.setText("⏭")
-            self.status_icon.setStyleSheet("color: #94a3b8; font-size: 16px;")
-        elif state == "error":
-            self.setStyleSheet("StepIndicator { background-color: #450a0a; border: 1px solid #ef4444; border-radius: 6px; }")
-            self.title_label.setStyleSheet("color: #fee2e2; font-weight: bold; font-size: 13px;")
-            self.status_icon.setText("✕")
-            self.status_icon.setStyleSheet("color: #f87171; font-size: 16px; font-weight: bold;")
-        else: # pending
-            self.setStyleSheet("StepIndicator { background-color: #1e293b; border: 1px solid #334155; border-radius: 6px; }")
-            self.title_label.setStyleSheet("color: #94a3b8; font-weight: 500; font-size: 13px;")
-            self.status_icon.setText("○")
-            self.status_icon.setStyleSheet("color: #64748b; font-size: 14px;")
+        self._state = state
+        self.status_icon.setText(self._ICONS.get(state, "○"))
+        self.setProperty("class", f"step-{state}")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        # Re-polish child labels so they pick up the parent-state-dependent rules
+        for child in (self.num_label, self.title_label, self.status_icon):
+            child.style().unpolish(child)
+            child.style().polish(child)
 
 
 class AutomaticView(QWidget):
@@ -106,7 +88,6 @@ class AutomaticView(QWidget):
         header_layout.addWidget(header)
         
         self.force_cb = QCheckBox("Force Full Update (Bypass all caches and re-fetch everything)")
-        self.force_cb.setStyleSheet("color: #cbd5e1; font-size: 13px;")
         header_layout.addStretch()
         header_layout.addWidget(self.force_cb)
         layout.addLayout(header_layout)
@@ -114,7 +95,6 @@ class AutomaticView(QWidget):
         # Weight reset option
         reset_layout = QHBoxLayout()
         self.reset_weights_cb = QCheckBox("Reset Weights to Defaults (clears saved global + per-team weights before optimizer runs)")
-        self.reset_weights_cb.setStyleSheet("color: #fbbf24; font-size: 13px;")
         self.reset_weights_cb.setToolTip("Use this if the optimizer says 'no improvement' — existing weights may be a local minimum from old narrow ranges")
         reset_layout.addWidget(self.reset_weights_cb)
         reset_layout.addStretch()
@@ -124,57 +104,24 @@ class AutomaticView(QWidget):
         controls_layout = QHBoxLayout()
         
         self.run_btn = QPushButton("▶ Run Full Pipeline")
-        self.run_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #22c55e;
-                color: white;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 12px 24px;
-                border-radius: 6px;
-            }
-            QPushButton:hover { background-color: #16a34a; }
-            QPushButton:disabled { background-color: #064e3b; color: #94a3b8; }
-        """)
+        self.run_btn.setProperty("class", "primary")
         self.run_btn.clicked.connect(self._start_pipeline)
         controls_layout.addWidget(self.run_btn)
         
         self.cancel_btn = QPushButton("⏹ Stop Pipeline")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ef4444;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 12px 24px;
-                border-radius: 6px;
-            }
-            QPushButton:hover { background-color: #dc2626; }
-            QPushButton:disabled { background-color: #450a0a; color: #94a3b8; }
-        """)
+        self.cancel_btn.setProperty("class", "danger")
         self.cancel_btn.clicked.connect(self._stop_pipeline)
         self.cancel_btn.setEnabled(False)
         controls_layout.addWidget(self.cancel_btn)
 
         # Separator
         sep = QLabel("│")
-        sep.setStyleSheet("color: #475569; font-size: 20px; padding: 0 8px;")
+        sep.setProperty("class", "text-hint")
         controls_layout.addWidget(sep)
 
         # Overnight optimization
         self.overnight_btn = QPushButton("🌙 Run Overnight")
-        self.overnight_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #6366f1;
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 12px 24px;
-                border-radius: 6px;
-            }
-            QPushButton:hover { background-color: #4f46e5; }
-            QPushButton:disabled { background-color: #312e81; color: #94a3b8; }
-        """)
+        self.overnight_btn.setProperty("class", "indigo")
         self.overnight_btn.setToolTip("Run full pipeline once, then loop optimization steps until time runs out")
         self.overnight_btn.clicked.connect(self._start_overnight)
         controls_layout.addWidget(self.overnight_btn)
@@ -184,7 +131,6 @@ class AutomaticView(QWidget):
         self.hours_spin.setValue(8.0)
         self.hours_spin.setSingleStep(0.5)
         self.hours_spin.setSuffix(" hrs")
-        self.hours_spin.setStyleSheet("color: #e2e8f0; font-size: 13px; padding: 4px;")
         controls_layout.addWidget(self.hours_spin)
 
         controls_layout.addStretch()
@@ -193,7 +139,7 @@ class AutomaticView(QWidget):
 
         # Visual Steps Grid
         steps_container = QFrame()
-        steps_container.setStyleSheet("background-color: #0f172a; border-radius: 8px; padding: 10px;")
+        steps_container.setProperty("class", "card-panel")
         grid = QGridLayout(steps_container)
         
         step_titles = [
@@ -214,7 +160,7 @@ class AutomaticView(QWidget):
 
         # Terminal Log Output
         log_label = QLabel("Terminal Output")
-        log_label.setStyleSheet("color: #94a3b8; font-size: 12px; text-transform: uppercase;")
+        log_label.setProperty("class", "text-secondary")
         layout.addWidget(log_label)
 
         self.terminal = QTextEdit()
@@ -223,15 +169,7 @@ class AutomaticView(QWidget):
         font = QFont("Consolas", 11)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.terminal.setFont(font)
-        self.terminal.setStyleSheet("""
-            QTextEdit {
-                background-color: #000000;
-                color: #22c55e;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 8px;
-            }
-        """)
+        self.terminal.setProperty("class", "terminal")
         layout.addWidget(self.terminal, stretch=1)
         
         self._reset_steps()
@@ -257,10 +195,9 @@ class AutomaticView(QWidget):
                 if marker in msg:
                     # Mark previous as done if active
                     if self.current_step_idx >= 0 and self.current_step_idx != idx:
-                        prev_state = self.step_widgets[self.current_step_idx].styleSheet()
-                        if "#1e3a8a" in prev_state: # If it was active, mark done
+                        if self.step_widgets[self.current_step_idx]._state == "active":
                             self.step_widgets[self.current_step_idx].set_state("done")
-                            
+
                     self.current_step_idx = idx
                     self.step_widgets[idx].set_state("active")
                     break

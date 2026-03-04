@@ -26,21 +26,21 @@
 
 <div class="card">
     <div class="card-header">Settings</div>
-    <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0;">
+    <div class="settings-row">
         <div>
-            <div style="font-weight: 600; font-size: 1rem;">OLED Dark Mode</div>
-            <div style="font-size: 0.8rem; color: var(--text-muted);">Uses pure black backgrounds to save battery on OLED screens</div>
+            <div class="settings-label-title">OLED Dark Mode</div>
+            <div class="settings-label-desc">Uses pure black backgrounds to save battery on OLED screens</div>
         </div>
-        <label style="position: relative; display: inline-block; width: 50px; height: 26px;">
-            <input type="checkbox" id="oledToggle" style="opacity: 0; width: 0; height: 0;" onchange="toggleOledMode(this)">
-            <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--bg-input); border: 1px solid var(--border); transition: .3s; border-radius: 26px;">
-                <span id="oledSlider" style="position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: var(--text-muted); transition: .3s; border-radius: 50%;"></span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="oledToggle" onchange="toggleOledMode(this)">
+            <span class="toggle-switch-track">
+                <span id="oledSlider" class="toggle-switch-knob"></span>
             </span>
         </label>
     </div>
 </div>
 
-<div class="card">
+<div class="card" data-reveal>
     <div class="card-header">Data Sync</div>
     <div class="btn-group mb-3">
         <button class="btn btn-primary" onclick="runSync('/api/sync/data')">Full Sync</button>
@@ -56,7 +56,7 @@
     <div class="log-output" id="syncLog"></div>
 </div>
 
-<div class="card">
+<div class="card" data-reveal>
     <div class="card-header">Pipeline</div>
     <div class="btn-group mb-3">
         <button class="btn btn-success" onclick="runPipeline()">Run Full Pipeline</button>

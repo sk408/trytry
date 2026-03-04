@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% set active = "tools" %}
+{% block title %}Tools — NBA Predictor{% endblock %}
+
+{% block content %}
+<h1 class="section-header">Tools</h1>
+
+<div class="tools-tabs">
+    <button class="tools-tab active" data-tab="admin" onclick="switchToolsTab('admin')">Admin</button>
+    <button class="tools-tab" data-tab="snapshots" onclick="switchToolsTab('snapshots')">Snapshots</button>
+</div>
+
+<!-- ===== ADMIN TAB ===== -->
+<div id="tab-admin" class="tools-panel">
+    <div class="card mb-4">
+        <div class="card-header">Database</div>
+        <div class="grid-2">
+            <div>
+                <p class="text-sm text-secondary">Path</p>
+                <p class="font-mono text-sm">{{ db_path }}</p>
+            </div>
+            <div>
+                <p class="text-sm text-secondary">Size</p>
+                <p class="font-bold">{{ '%.2f'|format(db_size / 1024 / 1024) }} MB</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">Pipeline Settings</div>
+        <div class="grid-2" style="gap: 1rem;">
+            <div>
+                <label class="text-sm text-secondary" for="syncFreshness">Sync Freshness (hours)</label>
+                <input type="number" id="syncFreshness" min="1" max="168" value="{{ sync_freshness_hours }}"
+                       class="form-input" style="width: 80px; margin-left: 8px;">
+                <p class="text-sm text-secondary" style="margin-top: 4px;">Hours before game logs re-fetch</p>
+            </div>
+            <div>
+                <label class="text-sm text-secondary" for="optLogInterval">Optimizer Log Interval</label>
+                <input type="number" id="optLogInterval" min="1" max="3000" value="{{ optimizer_log_interval }}"
+                       class="form-input" style="width: 80px; margin-left: 8px;">
+                <p class="text-sm text-secondary" style="margin-top: 4px;">Log every N trials (new bests always logged)</p>
+            </div>
+        </div>
+        <button class="btn btn-primary mt-3" onclick="saveSettings()">Save Settings</button>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">Weights</div>
+        <div class="btn-group">
+            <button class="btn btn-outline" onclick="viewWeights()">View Current Weights</button>
+            <button class="btn btn-danger" onclick="clearWeights()">Clear All Weights</button>
+        </div>
+        <pre id="weightsOutput" class="log-output mt-3 hidden" style="white-space: pre-wrap;"></pre>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Danger Zone</div>
+        <form action="/tools/reset" method="post"
+              onsubmit="return confirm('This will DELETE all data. Are you sure?')">
+            <button type="submit" class="btn btn-danger">Delete & Reinitialize Database</button>
+        </form>
+    </div>
+</div>
+
+<!-- ===== SNAPSHOTS TAB ===== -->
+<div id="tab-snapshots" class="tools-panel" style="display: none;">
+    <div class="card mb-4">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>Snapshots & Backups</span>
+            <div class="btn-group">
+                <button class="btn btn-outline btn-sm" onclick="loadSnapshots()">Refresh</button>
+                <button class="btn btn-primary btn-sm" onclick="createSnapshot()">Create Backup</button>
+            </div>
+        </div>
+        <p class="text-sm text-secondary mb-3">
+            Snapshots backup your tuning weights and database. The pipeline creates auto snapshots before running.
+            Restore a previous snapshot if a new update performs worse.
+        </p>
+        <div class="table-wrap">
+            <table id="snapshotsTable">
+                <thead>
+                    <tr>
+                        <th>Date / Time</th>
+                        <th>Type</th>
+                        <th>Accuracy %</th>
+                        <th>Skill Score</th>
+                        <th>ATS Record</th>
+                        <th>Size (MB)</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="snapshotsBody">
+                    <tr><td colspan="7" class="text-muted text-center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ---- Tools Tab Switching ----
+function switchToolsTab(tab) {
+    document.querySelectorAll('.tools-panel').forEach(function(p) { p.style.display = 'none'; });
+    document.querySelectorAll('.tools-tab').forEach(function(t) { t.classList.remove('active'); });
+    document.getElementById('tab-' + tab).style.display = 'block';
+    document.querySelector('.tools-tab[data-tab="' + tab + '"]').classList.add('active');
+    if (tab === 'snapshots') loadSnapshots();
+}
+
+// ---- Admin Functions ----
+async function viewWeights() {
+    const el = document.getElementById('weightsOutput');
+    el.classList.remove('hidden');
+    try {
+        const r = await fetch('/api/weights');
+        const data = await r.json();
+        el.textContent = JSON.stringify(data, null, 2);
+    } catch(e) {
+        el.textContent = 'Error loading weights';
+    }
+}
+
+async function clearWeights() {
+    if (!confirm('Clear all global and per-team weights?')) return;
+    await fetch('/api/weights/clear', {method: 'POST'});
+    showToast('Weights cleared', 'success');
+}
+
+async function saveSettings() {
+    const data = {
+        sync_freshness_hours: parseInt(document.getElementById('syncFreshness').value),
+        optimizer_log_interval: parseInt(document.getElementById('optLogInterval').value),
+    };
+    try {
+        const r = await fetch('/tools/settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        });
+        if (r.ok) showToast('Settings saved', 'success');
+        else showToast('Error saving settings', 'error');
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+// ---- Snapshots Functions ----
+async function loadSnapshots() {
+    try {
+        const r = await fetch('/api/snapshots');
+        const snaps = await r.json();
+        const body = document.getElementById('snapshotsBody');
+        if (!snaps || snaps.length === 0) {
+            body.innerHTML = '<tr><td colspan="7" class="text-muted text-center">No snapshots yet</td></tr>';
+            return;
+        }
+        body.innerHTML = snaps.map(function(s) {
+            var dt = (s.timestamp || '').replace('T', ' ').substring(0, 19);
+            var typeClass = s.type === 'manual' ? 'text-info' : 'text-success';
+            var m = s.metrics || {};
+            var acc = m.accuracy != null ? m.accuracy.toFixed(1) + '%' : '-';
+            var skill = m.skill_score != null ? m.skill_score.toFixed(1) : '-';
+            var ats = m.ats_record || '-';
+            var size = (s.size_mb || 0).toFixed(1);
+            return '<tr>' +
+                '<td>' + escapeHtml(dt) + '</td>' +
+                '<td class="' + typeClass + ' font-bold">' + (s.type || '').toUpperCase() + '</td>' +
+                '<td class="font-mono">' + acc + '</td>' +
+                '<td class="font-mono">' + skill + '</td>' +
+                '<td class="font-mono">' + escapeHtml(ats) + '</td>' +
+                '<td>' + size + ' MB</td>' +
+                '<td class="btn-group">' +
+                    '<button class="btn btn-outline btn-sm" onclick="restoreSnapshot(\'' + escapeHtml(s.filename) + '\')">Restore</button>' +
+                    '<button class="btn btn-danger btn-sm" onclick="deleteSnapshot(\'' + escapeHtml(s.filename) + '\')">Delete</button>' +
+                '</td></tr>';
+        }).join('');
+    } catch(e) {
+        document.getElementById('snapshotsBody').innerHTML =
+            '<tr><td colspan="7" class="text-danger text-center">Error loading snapshots</td></tr>';
+    }
+}
+
+async function createSnapshot() {
+    try {
+        const r = await fetch('/api/snapshots', {method: 'POST'});
+        if (r.ok) {
+            showToast('Snapshot created', 'success');
+            loadSnapshots();
+        }
+    } catch(e) {
+        showToast('Error creating snapshot', 'error');
+    }
+}
+
+async function restoreSnapshot(filename) {
+    if (!confirm('Restore snapshot "' + filename + '"? This will overwrite current data.')) return;
+    try {
+        const r = await fetch('/api/snapshots/' + encodeURIComponent(filename) + '/restore', {method: 'POST'});
+        if (r.ok) showToast('Snapshot restored', 'success');
+        else showToast('Restore failed', 'error');
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+
+async function deleteSnapshot(filename) {
+    if (!confirm('Delete snapshot "' + filename + '"?')) return;
+    try {
+        await fetch('/api/snapshots/' + encodeURIComponent(filename), {method: 'DELETE'});
+        showToast('Snapshot deleted', 'success');
+        loadSnapshots();
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    }
+}
+</script>
+{% endblock %}

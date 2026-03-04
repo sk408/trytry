@@ -154,7 +154,7 @@ class PlayersView(QWidget):
         ctrl.addWidget(refresh_btn)
 
         self._sync_status = QLabel("")
-        self._sync_status.setStyleSheet("color: #64748b; font-size: 10px;")
+        self._sync_status.setProperty("class", "text-hint")
         ctrl.addWidget(self._sync_status)
         ctrl.addStretch()
         layout.addLayout(ctrl)

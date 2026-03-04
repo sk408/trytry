@@ -27,22 +27,19 @@ class AdminView(QWidget):
         # DB info card
         info_frame = QFrame()
         info_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        info_frame.setStyleSheet(
-            "QFrame { background: #1e293b; border: 1px solid #334155; "
-            "border-radius: 8px; padding: 16px; }"
-        )
+        info_frame.setProperty("class", "card-panel")
         info_layout = QVBoxLayout(info_frame)
 
         self.db_path_label = QLabel("Database: —")
-        self.db_path_label.setStyleSheet("color: #e2e8f0; font-size: 13px;")
+        self.db_path_label.setProperty("class", "text-primary")
         info_layout.addWidget(self.db_path_label)
 
         self.db_size_label = QLabel("Size: —")
-        self.db_size_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        self.db_size_label.setProperty("class", "text-secondary")
         info_layout.addWidget(self.db_size_label)
 
         self.table_counts_label = QLabel("")
-        self.table_counts_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        self.table_counts_label.setProperty("class", "text-secondary")
         self.table_counts_label.setWordWrap(True)
         info_layout.addWidget(self.table_counts_label)
 
@@ -51,16 +48,11 @@ class AdminView(QWidget):
         # Weights info
         weights_frame = QFrame()
         weights_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        weights_frame.setStyleSheet(
-            "QFrame { background: #1e293b; border: 1px solid #334155; "
-            "border-radius: 8px; padding: 16px; }"
-        )
+        weights_frame.setProperty("class", "card-panel")
         w_layout = QVBoxLayout(weights_frame)
         
         self.weights_toggle_btn = QPushButton("Current Weights (Click to expand)")
-        self.weights_toggle_btn.setStyleSheet(
-            "text-align: left; background: transparent; color: #00e5ff; font-weight: bold; border: none; padding: 0px;"
-        )
+        self.weights_toggle_btn.setProperty("class", "link")
         self.weights_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.weights_toggle_btn.clicked.connect(self._toggle_weights)
         w_layout.addWidget(self.weights_toggle_btn)
@@ -78,48 +70,37 @@ class AdminView(QWidget):
         perf_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
         perf_frame.setMinimumHeight(160)
         perf_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        perf_frame.setStyleSheet(
-            "QFrame { background: #1e293b; border: 1px solid #334155; "
-            "border-radius: 8px; padding: 16px; }"
-        )
+        perf_frame.setProperty("class", "card-panel")
         perf_layout = QVBoxLayout(perf_frame)
         perf_label = QLabel("⚙️ Performance")
-        perf_label.setStyleSheet("color: #e2e8f0; font-size: 14px; font-weight: 700;")
+        perf_label.setProperty("class", "section-title")
         perf_layout.addWidget(perf_label)
 
         thread_row = QHBoxLayout()
         thread_label = QLabel("Worker Threads:")
-        thread_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        thread_label.setProperty("class", "text-secondary")
         thread_row.addWidget(thread_label)
 
         self.thread_spin = QSpinBox()
         self.thread_spin.setMinimum(1)
         self.thread_spin.setMaximum(32)
         self.thread_spin.setFixedWidth(70)
-        self.thread_spin.setStyleSheet(
-            "QSpinBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
-            "border-radius: 4px; padding: 4px; font-size: 13px; }"
-        )
         thread_row.addWidget(self.thread_spin)
 
         thread_desc = QLabel("Threads for backtest, optimization, and parallel workloads")
-        thread_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        thread_desc.setProperty("class", "text-hint")
         thread_row.addWidget(thread_desc)
         thread_row.addStretch()
         perf_layout.addLayout(thread_row)
 
         log_row = QHBoxLayout()
         log_label = QLabel("Log Level:")
-        log_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        log_label.setProperty("class", "text-secondary")
         log_row.addWidget(log_label)
 
         self.log_combo = QComboBox()
         self.log_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR"])
         self.log_combo.setFixedWidth(100)
-        self.log_combo.setStyleSheet(
-            "QComboBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
-            "border-radius: 4px; padding: 4px; font-size: 13px; }"
-        )
         log_row.addWidget(self.log_combo)
         log_row.addStretch()
         perf_layout.addLayout(log_row)
@@ -127,7 +108,7 @@ class AdminView(QWidget):
         # Sync freshness
         fresh_row = QHBoxLayout()
         fresh_label = QLabel("Sync Freshness:")
-        fresh_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        fresh_label.setProperty("class", "text-secondary")
         fresh_row.addWidget(fresh_label)
 
         self.freshness_spin = QSpinBox()
@@ -135,14 +116,10 @@ class AdminView(QWidget):
         self.freshness_spin.setMaximum(168)
         self.freshness_spin.setSuffix(" hrs")
         self.freshness_spin.setFixedWidth(90)
-        self.freshness_spin.setStyleSheet(
-            "QSpinBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
-            "border-radius: 4px; padding: 4px; font-size: 13px; }"
-        )
         fresh_row.addWidget(self.freshness_spin)
 
         fresh_desc = QLabel("Hours before game logs re-fetch (lower = fresher, more API calls)")
-        fresh_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        fresh_desc.setProperty("class", "text-hint")
         fresh_row.addWidget(fresh_desc)
         fresh_row.addStretch()
         perf_layout.addLayout(fresh_row)
@@ -150,39 +127,26 @@ class AdminView(QWidget):
         # Optimizer log interval
         optlog_row = QHBoxLayout()
         optlog_label = QLabel("Optimizer Log Interval:")
-        optlog_label.setStyleSheet("color: #94a3b8; font-size: 13px;")
+        optlog_label.setProperty("class", "text-secondary")
         optlog_row.addWidget(optlog_label)
 
         self.optlog_spin = QSpinBox()
         self.optlog_spin.setMinimum(1)
         self.optlog_spin.setMaximum(3000)
         self.optlog_spin.setFixedWidth(90)
-        self.optlog_spin.setStyleSheet(
-            "QSpinBox { background: #0f172a; color: #e2e8f0; border: 1px solid #475569; "
-            "border-radius: 4px; padding: 4px; font-size: 13px; }"
-        )
         optlog_row.addWidget(self.optlog_spin)
 
         optlog_desc = QLabel("Log every N trials during optimization (+ new bests always logged)")
-        optlog_desc.setStyleSheet("color: #64748b; font-size: 11px;")
+        optlog_desc.setProperty("class", "text-hint")
         optlog_row.addWidget(optlog_desc)
         optlog_row.addStretch()
         perf_layout.addLayout(optlog_row)
 
         self.oled_checkbox = QCheckBox("OLED Dark Mode (Pure Black Backgrounds)")
-        self.oled_checkbox.setStyleSheet(
-            "QCheckBox { color: #e2e8f0; font-size: 13px; spacing: 8px; }"
-            "QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #475569; border-radius: 3px; background: #0f172a; }"
-            "QCheckBox::indicator:checked { background: #2563eb; border-color: #2563eb; }"
-        )
         perf_layout.addWidget(self.oled_checkbox)
 
         save_perf_btn = QPushButton("Save Settings")
-        save_perf_btn.setStyleSheet(
-            "QPushButton { background: #2563eb; color: white; border-radius: 6px; "
-            "padding: 6px 16px; font-weight: 600; } "
-            "QPushButton:hover { background: #1d4ed8; }"
-        )
+        save_perf_btn.setProperty("class", "primary")
         save_perf_btn.clicked.connect(self._on_save_perf)
         perf_layout.addWidget(save_perf_btn)
 
@@ -191,13 +155,10 @@ class AdminView(QWidget):
         # Danger zone
         danger_frame = QFrame()
         danger_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        danger_frame.setStyleSheet(
-            "QFrame { background: #1e293b; border: 2px solid #ef4444; "
-            "border-radius: 8px; padding: 16px; }"
-        )
+        danger_frame.setProperty("class", "card-panel-danger")
         d_layout = QVBoxLayout(danger_frame)
         d_label = QLabel("⚠️ Danger Zone")
-        d_label.setStyleSheet("color: #ef4444; font-size: 14px; font-weight: 700;")
+        d_label.setProperty("class", "section-title-danger")
         d_layout.addWidget(d_label)
 
         btn_layout = QHBoxLayout()

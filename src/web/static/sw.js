@@ -1,5 +1,5 @@
 // NBA Predictor Service Worker — cache-first for static, network-first for API
-const CACHE_NAME = 'nba-predictor-v1';
+const CACHE_NAME = 'nba-predictor-v2';
 const STATIC_ASSETS = [
   '/static/style.css',
   '/static/manifest.json',
@@ -8,6 +8,8 @@ const STATIC_ASSETS = [
   '/players',
   '/schedule',
   '/matchups',
+  '/accuracy',
+  '/tools',
 ];
 
 // Install: pre-cache static assets

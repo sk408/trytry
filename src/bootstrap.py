@@ -55,23 +55,23 @@ def bootstrap(status_callback=None):
 
     threading.excepthook = _thread_excepthook
 
-    def _status(msg):
+    def _status(msg, progress=None):
         _logger.info(msg)
         if status_callback:
-            status_callback(msg)
+            status_callback(msg, progress)
 
     # 1. Header patching
-    _status("Patching NBA API headers...")
+    _status("Patching NBA API headers...", 0.1)
     import src  # noqa: F401
 
     # 2. Database
-    _status("Initializing database...")
+    _status("Initializing database...", 0.3)
     from src.database.migrations import init_db
 
     init_db()
 
     # 3. Clean old notifications
-    _status("Cleaning old notifications...")
+    _status("Cleaning old notifications...", 0.5)
     try:
         from src.notifications.service import delete_old
         delete_old(days=30)
@@ -79,7 +79,7 @@ def bootstrap(status_callback=None):
         _logger.warning("Failed to clean old notifications: %s", e)
 
     # 4. Injury monitor (use module singleton so all paths share one instance)
-    _status("Starting injury monitor...")
+    _status("Starting injury monitor...", 0.7)
     try:
         from src.notifications.injury_monitor import get_injury_monitor
 

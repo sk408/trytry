@@ -44,10 +44,10 @@ def main():
     app.processEvents()
 
     # Bootstrap with splash status updates
-    bootstrap(status_callback=lambda msg: (splash.set_status(msg), app.processEvents()))
+    bootstrap(status_callback=lambda msg, prog=None: (splash.set_status(msg, prog), app.processEvents()))
 
     # Build main window
-    splash.set_status("Loading interface...")
+    splash.set_status("Loading interface...", 0.9)
     app.processEvents()
 
     from src.ui.main_window import MainWindow
@@ -57,8 +57,10 @@ def main():
     # Graceful cleanup on quit
     app.aboutToQuit.connect(shutdown)
 
-    window.show()
-    splash.finish(window)
+    # Crossfade: splash fades out while main window fades in
+    splash.set_status("Ready", 1.0)
+    app.processEvents()
+    splash.crossfade_to(window)
 
     logger.info("Desktop GUI launched")
     sys.exit(app.exec())

@@ -9,8 +9,8 @@
     <div class="card-header">Backtest Controls</div>
     <div class="btn-group mb-3">
         <button class="btn btn-primary" onclick="runBacktest()">Run Backtest</button>
-        <div style="display:inline-block; margin-left: 10px; margin-right: 10px; vertical-align: middle;">
-            <select id="optTarget" style="font-size: 0.9em; padding: 2px;">
+        <div class="accuracy-inline-control accuracy-inline-control-ml">
+            <select id="optTarget">
                 <option value="ml">ML</option>
                 <option value="value">Value</option>
                 <option value="roi">ROI</option>
@@ -18,9 +18,9 @@
                 <option value="all">All (Cycle)</option>
             </select>
         </div>
-        <div style="display:inline-block; margin-right: 10px; vertical-align: middle;">
+        <div class="accuracy-inline-control accuracy-inline-control-cont">
             <input type="checkbox" id="continuousOpt" name="continuousOpt" value="true">
-            <label for="continuousOpt" style="margin:0; font-size: 0.9em; user-select: none;">Continuous</label>
+            <label for="continuousOpt">Continuous</label>
         </div>
         <button class="btn btn-outline" onclick="runOptimization()">Optimize Weights</button>
         <button class="btn btn-outline" onclick="runAction('/api/feature-importance', 'Analyzing...')">Feature Importance</button>
@@ -48,15 +48,15 @@
     <div class="card mb-4" id="vegasCard" style="display: none;">
         <div class="card-header">Vegas Betting Comparison</div>
         <div class="accuracy-grid" id="vegasCards"></div>
-        <div style="margin-top: 1rem; padding: 1rem; background: var(--bg-color); border-radius: 4px;">
+        <div class="accuracy-feature-attr">
             <h5>Edge Feature Attribution (Avg absolute points)</h5>
-            <div id="featureAttr" style="display:flex; gap: 2rem;"></div>
+            <div id="featureAttr" class="accuracy-feature-attr-list"></div>
         </div>
     </div>
 
     <div class="card mb-4" id="progressionCard" style="display: none;">
         <div class="card-header">Season Progression (Monthly Accuracy %)</div>
-        <div id="progressionChart" style="display:flex; gap:15px; align-items:flex-end; height:150px; margin-top:1rem; border-bottom:1px solid var(--border-color); padding-bottom: 25px;"></div>
+        <div id="progressionChart" class="accuracy-progression-chart"></div>
     </div>
 
     <div class="card mb-4">
