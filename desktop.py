@@ -46,7 +46,7 @@ def main():
     # Bootstrap with splash status updates
     bootstrap(status_callback=lambda msg, prog=None: (splash.set_status(msg, prog), app.processEvents()))
 
-    # Build main window
+    # Build main window (no animation running yet, so no stutter)
     splash.set_status("Loading interface...", 0.9)
     app.processEvents()
 
@@ -54,16 +54,29 @@ def main():
 
     window = MainWindow()
 
-    # Graceful cleanup on quit
-    app.aboutToQuit.connect(shutdown)
-
-    # Crossfade: splash fades out while main window fades in
+    # Now start the constellation animation + linger period
+    # All heavy work is done, so animation runs uninterrupted
     splash.set_status("Ready", 1.0)
     app.processEvents()
-    splash.crossfade_to(window)
+    splash.start_linger(window)
 
     logger.info("Desktop GUI launched")
-    sys.exit(app.exec())
+    ret = app.exec()
+
+    # ---- Shutdown: reuse the same splash as a closing screen ----
+    import time as _time
+
+    splash.show_shutdown()
+    app.processEvents()
+
+    t0 = _time.monotonic()
+    shutdown()
+    remaining = 2.0 - (_time.monotonic() - t0)
+    if remaining > 0:
+        _time.sleep(remaining)
+
+    splash.close()
+    sys.exit(ret)
 
 
 if __name__ == "__main__":

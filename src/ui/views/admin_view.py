@@ -142,6 +142,25 @@ class AdminView(QWidget):
         optlog_row.addStretch()
         perf_layout.addLayout(optlog_row)
 
+        # Splash duration
+        splash_row = QHBoxLayout()
+        splash_label = QLabel("Splash Duration:")
+        splash_label.setProperty("class", "text-secondary")
+        splash_row.addWidget(splash_label)
+
+        self.splash_spin = QSpinBox()
+        self.splash_spin.setMinimum(0)
+        self.splash_spin.setMaximum(30)
+        self.splash_spin.setSuffix(" sec")
+        self.splash_spin.setFixedWidth(90)
+        splash_row.addWidget(self.splash_spin)
+
+        splash_desc = QLabel("How long the splash screen lingers after loading (0 = skip)")
+        splash_desc.setProperty("class", "text-hint")
+        splash_row.addWidget(splash_desc)
+        splash_row.addStretch()
+        perf_layout.addLayout(splash_row)
+
         self.oled_checkbox = QCheckBox("OLED Dark Mode (Pure Black Backgrounds)")
         perf_layout.addWidget(self.oled_checkbox)
 
@@ -239,6 +258,8 @@ class AdminView(QWidget):
             self.freshness_spin.setValue(int(freshness))
             optlog = get_setting("optimizer_log_interval", 300)
             self.optlog_spin.setValue(int(optlog))
+            splash_sec = get_setting("splash_linger_seconds", 8)
+            self.splash_spin.setValue(int(splash_sec))
         except Exception:
             pass
 
@@ -257,6 +278,8 @@ class AdminView(QWidget):
             set_value("sync_freshness_hours", freshness)
             optlog = self.optlog_spin.value()
             set_value("optimizer_log_interval", optlog)
+            splash_sec = self.splash_spin.value()
+            set_value("splash_linger_seconds", splash_sec)
 
             # Apply log level immediately
             import logging as _logging

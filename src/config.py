@@ -24,6 +24,7 @@ _DEFAULTS: Dict[str, Any] = {
     "oled_mode": False,
     "sync_freshness_hours": 4,
     "optimizer_log_interval": 300,
+    "splash_linger_seconds": 8,
 }
 
 _cache: Dict[str, Any] | None = None

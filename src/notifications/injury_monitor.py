@@ -21,6 +21,7 @@ class InjuryMonitor:
 
     def __init__(self):
         self._running = False
+        self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._previous_state: Dict[int, Dict] = {}
         self._lock = threading.Lock()
@@ -38,8 +39,9 @@ class InjuryMonitor:
     def stop(self):
         """Stop the monitoring loop."""
         self._running = False
+        self._stop_event.set()  # wake from sleep immediately
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=5)
         logger.info("Injury monitor stopped")
 
     def _load_initial_state(self):
@@ -65,7 +67,9 @@ class InjuryMonitor:
         """Main monitoring loop."""
         while self._running:
             try:
-                time.sleep(POLL_INTERVAL)
+                # Interruptible sleep — wakes immediately when stop_event is set
+                if self._stop_event.wait(timeout=POLL_INTERVAL):
+                    break  # stop requested
                 if not self._running:
                     break
                 self._check_changes()
