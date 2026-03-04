@@ -5,7 +5,7 @@ from typing import Optional, Dict, List
 
 from PySide6.QtCore import Qt, QPointF, Property, QVariantAnimation, QObject, QEasingCurve, QRectF, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QLinearGradient, QPen, QPixmap, QPolygonF, QPainterPath
-from PySide6.QtWidgets import QWidget, QGraphicsScene, QGraphicsView, QGraphicsDropShadowEffect
+from PySide6.QtWidgets import QWidget
 
 from src.ui.widgets.nba_colors import get_team_colors
 from src.ui.widgets.image_utils import get_team_logo, make_placeholder_logo

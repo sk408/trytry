@@ -2,6 +2,7 @@
 
 import logging
 import json
+import threading
 from typing import Dict, Any, Optional, List
 
 import requests
@@ -94,7 +95,6 @@ def get_espn_predictor(game_id: str) -> Dict[str, float]:
     """Extract ESPN predictor win probabilities."""
     summary = fetch_espn_game_summary(game_id)
     predictor = summary.get("predictor", {})
-    game_proj = predictor.get("gameProjection", {}) if predictor else {}
     home_pct = float(predictor.get("homeTeam", {}).get("gameProjection", 50.0))
     away_pct = float(predictor.get("awayTeam", {}).get("gameProjection", 50.0))
     return {"home_win_pct": home_pct, "away_win_pct": away_pct}
@@ -289,32 +289,34 @@ class FastcastWebSocket:
 
 _an_odds_cache = {}
 _an_last_fetch = 0.0
+_an_odds_lock = threading.Lock()
 
 def get_actionnetwork_odds(home_abbr: str, away_abbr: str) -> Dict[str, Any]:
-    """Fetch live odds from Action Network API. 
+    """Fetch live odds from Action Network API.
     Matches based on team abbreviations.
     Caches the full scoreboard request for 15 seconds to prevent spam.
     """
     import time
     global _an_odds_cache, _an_last_fetch
-    
+
     home_query = normalize_action_abbr(home_abbr)
     away_query = normalize_action_abbr(away_abbr)
-    
+
     now = time.time()
-    if not _an_odds_cache or (now - _an_last_fetch) > 10.0:
-        try:
-            resp = requests.get(
-                "https://api.actionnetwork.com/web/v1/scoreboard/nba", 
-                headers=_HEADERS, 
-                timeout=10
-            )
-            if resp.status_code == 200:
-                _an_odds_cache = resp.json()
-                _an_last_fetch = now
-        except Exception as e:
-            logger.warning(f"ActionNetwork fetch failed: {e}")
-            
+    with _an_odds_lock:
+        if not _an_odds_cache or (now - _an_last_fetch) > 10.0:
+            try:
+                resp = requests.get(
+                    "https://api.actionnetwork.com/web/v1/scoreboard/nba",
+                    headers=_HEADERS,
+                    timeout=10
+                )
+                if resp.status_code == 200:
+                    _an_odds_cache = resp.json()
+                    _an_last_fetch = now
+            except Exception as e:
+                logger.warning(f"ActionNetwork fetch failed: {e}")
+
     if not _an_odds_cache:
         return {}
         

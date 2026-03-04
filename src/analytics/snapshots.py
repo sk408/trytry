@@ -8,9 +8,9 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-SNAPSHOTS_DIR = os.path.join("data", "snapshots")
-DB_PATH = os.path.join("data", "nba_analytics.db")
-TUNING_PATH = os.path.join("src", "analytics", "tuning.py")
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SNAPSHOTS_DIR = os.path.join(_BASE_DIR, "data", "snapshots")
+DB_PATH = os.path.join(_BASE_DIR, "data", "nba_analytics.db")
 
 def _ensure_dir():
     if not os.path.exists(SNAPSHOTS_DIR):
@@ -63,9 +63,7 @@ def create_snapshot(name_prefix: str = "auto") -> Optional[str]:
         with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zipf:
             if os.path.exists(DB_PATH):
                 zipf.write(DB_PATH, arcname="nba.db")
-            if os.path.exists(TUNING_PATH):
-                zipf.write(TUNING_PATH, arcname="tuning.py")
-            
+
             zipf.writestr("metadata.json", json.dumps(metadata, indent=2))
             
         logger.info(f"Created snapshot: {filepath}")

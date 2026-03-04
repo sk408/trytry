@@ -151,8 +151,6 @@ class PrecomputedGame:
     away_injury_ppg_lost: float = 0.0
     home_injury_minutes_lost: float = 0.0
     away_injury_minutes_lost: float = 0.0
-    home_return_discount: float = 1.0
-    away_return_discount: float = 1.0
     home_games_played: int = 0
     away_games_played: int = 0
     home_roster_changed: bool = False
@@ -180,6 +178,7 @@ _mem_pc_cache: Optional[Dict[str, "PrecomputedGame"]] = None
 _mem_pc_schema: Optional[str] = None
 _mem_ctx_cache: Optional[Dict[str, Any]] = None
 _mem_ctx_game_count: Optional[int] = None
+_mem_pc_lock = threading.Lock()
 
 
 def _precompute_schema_version() -> str:
@@ -198,24 +197,25 @@ def _load_pc_cache() -> Dict[str, "PrecomputedGame"]:
     global _mem_pc_cache, _mem_pc_schema
     schema = _precompute_schema_version()
 
-    # In-memory hit
-    if _mem_pc_cache is not None and _mem_pc_schema == schema:
-        return _mem_pc_cache
+    with _mem_pc_lock:
+        # In-memory hit
+        if _mem_pc_cache is not None and _mem_pc_schema == schema:
+            return _mem_pc_cache
 
-    # Disk hit
-    try:
-        if os.path.exists(_PRECOMPUTE_CACHE_FILE):
-            with open(_PRECOMPUTE_CACHE_FILE, "rb") as f:
-                data = pickle.load(f)
-            if data.get("schema") == schema:
-                _mem_pc_cache = data["games"]
-                _mem_pc_schema = schema
-                logger.info("Loaded precompute cache from disk (%d games)", len(_mem_pc_cache))
-                return _mem_pc_cache
-            else:
-                logger.info("Precompute cache schema mismatch — will rebuild")
-    except Exception as e:
-        logger.warning("Failed to load precompute cache: %s", e)
+        # Disk hit
+        try:
+            if os.path.exists(_PRECOMPUTE_CACHE_FILE):
+                with open(_PRECOMPUTE_CACHE_FILE, "rb") as f:
+                    data = pickle.load(f)
+                if data.get("schema") == schema:
+                    _mem_pc_cache = data["games"]
+                    _mem_pc_schema = schema
+                    logger.info("Loaded precompute cache from disk (%d games)", len(_mem_pc_cache))
+                    return _mem_pc_cache
+                else:
+                    logger.info("Precompute cache schema mismatch — will rebuild")
+        except Exception as e:
+            logger.warning("Failed to load precompute cache: %s", e)
 
     return {}
 
@@ -225,15 +225,16 @@ def _save_pc_cache(cache: Dict[str, "PrecomputedGame"]):
     global _mem_pc_cache, _mem_pc_schema
     schema = _precompute_schema_version()
     os.makedirs(_PRECOMPUTE_CACHE_DIR, exist_ok=True)
-    try:
-        with open(_PRECOMPUTE_CACHE_FILE, "wb") as f:
-            pickle.dump({"schema": schema, "games": cache}, f,
-                        protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info("Saved precompute cache to disk (%d games)", len(cache))
-    except Exception as e:
-        logger.warning("Failed to save precompute cache: %s", e)
-    _mem_pc_cache = cache
-    _mem_pc_schema = schema
+    with _mem_pc_lock:
+        try:
+            with open(_PRECOMPUTE_CACHE_FILE, "wb") as f:
+                pickle.dump({"schema": schema, "games": cache}, f,
+                            protocol=pickle.HIGHEST_PROTOCOL)
+            logger.info("Saved precompute cache to disk (%d games)", len(cache))
+        except Exception as e:
+            logger.warning("Failed to save precompute cache: %s", e)
+        _mem_pc_cache = cache
+        _mem_pc_schema = schema
 
 
 def invalidate_precompute_cache():
@@ -1459,21 +1460,6 @@ def precompute_game_data(callback=None, force=False) -> List[PrecomputedGame]:
 
 
 _tuning_cache: Optional[Dict[int, tuple]] = None
-
-def _get_tuning_map() -> Dict[int, tuple]:
-    """Load all team tuning corrections from DB (cached in-memory)."""
-    global _tuning_cache
-    if _tuning_cache is not None:
-        return _tuning_cache
-    from src.database import db
-    rows = db.fetch_all("SELECT team_id, home_pts_correction, away_pts_correction FROM team_tuning")
-    _tuning_cache = {}
-    for r in rows:
-        _tuning_cache[r["team_id"]] = (
-            float(r.get("home_pts_correction") or 0.0),
-            float(r.get("away_pts_correction") or 0.0),
-        )
-    return _tuning_cache
 
 def invalidate_tuning_cache():
     """Call after autotune to force reload of tuning corrections."""

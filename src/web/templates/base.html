@@ -93,6 +93,14 @@
             btn.setAttribute('aria-expanded', links.classList.contains('show'));
         }
 
+        // ---- HTML Escape ----
+        function escapeHtml(str) {
+            if (!str) return '';
+            var d = document.createElement('div');
+            d.appendChild(document.createTextNode(str));
+            return d.innerHTML;
+        }
+
         // ---- Toast System ----
         function showToast(message, type) {
             type = type || 'info';
@@ -136,10 +144,10 @@
                         return '<div style="padding:0.75rem;border-bottom:1px solid var(--border);' + readStyle + '">' +
                             '<div class="flex items-center gap-2">' +
                             '<span style="width:6px;height:6px;border-radius:50%;background:' + sevColor + ';flex-shrink:0;" aria-hidden="true"></span>' +
-                            '<span class="font-bold text-sm" style="flex:1;">' + (n.title || '') + '</span>' +
+                            '<span class="font-bold text-sm" style="flex:1;">' + escapeHtml(n.title || '') + '</span>' +
                             (n.read ? '<span style="font-size:0.65rem;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;padding:1px 4px;">READ</span>' : '') +
                             '</div>' +
-                            '<div class="text-xs text-muted" style="margin-top:2px;padding-left:14px;">' + (n.message || '') + '</div>' +
+                            '<div class="text-xs text-muted" style="margin-top:2px;padding-left:14px;">' + escapeHtml(n.message || '') + '</div>' +
                             '<div class="text-xs text-muted" style="padding-left:14px;">' + (n.created_at || '') + '</div>' +
                         '</div>';
                     }).join('');
@@ -211,7 +219,7 @@
                     return;
                 }
                 if (logEl) {
-                    logEl.innerHTML += '<div class="log-line">' + e.data + '</div>';
+                    logEl.innerHTML += '<div class="log-line">' + escapeHtml(e.data) + '</div>';
                     logEl.scrollTop = logEl.scrollHeight;
                 }
             };

@@ -4,11 +4,10 @@ const STATIC_ASSETS = [
   '/static/style.css',
   '/static/manifest.json',
   '/dashboard',
-  '/live',
+  '/gamecast',
   '/players',
   '/schedule',
   '/matchups',
-  '/allstar',
 ];
 
 // Install: pre-cache static assets

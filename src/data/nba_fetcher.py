@@ -37,14 +37,51 @@ def _normalize_game_date(raw: str) -> str:
 _API_SLEEP = 0.8
 
 
-def _safe_get(func, *args, **kwargs):
-    """Call an nba_api function with rate limiting and error handling."""
-    time.sleep(_API_SLEEP)
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        logger.error(f"NBA API error in {func.__name__}: {e}")
-        return None
+def _row_to_game_log(row, player_id: int) -> dict:
+    """Convert a single NBA API row to our game log dict format."""
+    matchup = str(row.get("MATCHUP", ""))
+    is_home = 1 if "vs." in matchup else 0
+    opp_abbr = matchup.split(" ")[-1] if matchup else ""
+    return {
+        "player_id": player_id,
+        "game_id": str(row.get("GAME_ID", row.get("Game_ID", ""))),
+        "game_date": _normalize_game_date(row.get("GAME_DATE", "")),
+        "matchup": matchup,
+        "is_home": is_home,
+        "opponent_abbr": opp_abbr,
+        "win_loss": str(row.get("WL", "")),
+        "minutes": float(row.get("MIN", 0) or 0),
+        "points": float(row.get("PTS", 0) or 0),
+        "rebounds": float(row.get("REB", 0) or 0),
+        "assists": float(row.get("AST", 0) or 0),
+        "steals": float(row.get("STL", 0) or 0),
+        "blocks": float(row.get("BLK", 0) or 0),
+        "turnovers": float(row.get("TOV", 0) or 0),
+        "fg_made": int(row.get("FGM", 0) or 0),
+        "fg_attempted": int(row.get("FGA", 0) or 0),
+        "fg3_made": int(row.get("FG3M", 0) or 0),
+        "fg3_attempted": int(row.get("FG3A", 0) or 0),
+        "ft_made": int(row.get("FTM", 0) or 0),
+        "ft_attempted": int(row.get("FTA", 0) or 0),
+        "oreb": float(row.get("OREB", 0) or 0),
+        "dreb": float(row.get("DREB", 0) or 0),
+        "plus_minus": float(row.get("PLUS_MINUS", 0) or 0),
+        "personal_fouls": float(row.get("PF", 0) or 0),
+    }
+
+
+def _safe_get(func, *args, retries=3, **kwargs):
+    """Call an nba_api function with rate limiting, retries, and error handling."""
+    for attempt in range(retries):
+        time.sleep(_API_SLEEP * (2 ** attempt))
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if attempt < retries - 1:
+                logger.warning(f"NBA API retry {attempt + 1}/{retries} for {func.__name__}: {e}")
+            else:
+                logger.error(f"NBA API error in {func.__name__} after {retries} attempts: {e}")
+    return None
 
 
 def fetch_teams() -> List[Dict[str, Any]]:
@@ -98,39 +135,7 @@ def fetch_player_game_logs(player_id: int, season: Optional[str] = None) -> List
         if result is None:
             return []
         df = result.get_data_frames()[0]
-        logs = []
-        for _, row in df.iterrows():
-            matchup = str(row.get("MATCHUP", ""))
-            is_home = 1 if "vs." in matchup else 0
-            # Extract opponent abbreviation
-            opp_abbr = matchup.split(" ")[-1] if matchup else ""
-            logs.append({
-                "player_id": player_id,
-                "game_id": str(row.get("Game_ID", "")),
-                "game_date": _normalize_game_date(row.get("GAME_DATE", "")),
-                "matchup": matchup,
-                "is_home": is_home,
-                "opponent_abbr": opp_abbr,
-                "win_loss": str(row.get("WL", "")),
-                "minutes": float(row.get("MIN", 0) or 0),
-                "points": float(row.get("PTS", 0) or 0),
-                "rebounds": float(row.get("REB", 0) or 0),
-                "assists": float(row.get("AST", 0) or 0),
-                "steals": float(row.get("STL", 0) or 0),
-                "blocks": float(row.get("BLK", 0) or 0),
-                "turnovers": float(row.get("TOV", 0) or 0),
-                "fg_made": int(row.get("FGM", 0) or 0),
-                "fg_attempted": int(row.get("FGA", 0) or 0),
-                "fg3_made": int(row.get("FG3M", 0) or 0),
-                "fg3_attempted": int(row.get("FG3A", 0) or 0),
-                "ft_made": int(row.get("FTM", 0) or 0),
-                "ft_attempted": int(row.get("FTA", 0) or 0),
-                "oreb": float(row.get("OREB", 0) or 0),
-                "dreb": float(row.get("DREB", 0) or 0),
-                "plus_minus": float(row.get("PLUS_MINUS", 0) or 0),
-                "personal_fouls": float(row.get("PF", 0) or 0),
-            })
-        return logs
+        return [_row_to_game_log(row, player_id) for _, row in df.iterrows()]
     except Exception as e:
         logger.error(f"Error fetching game logs for player {player_id}: {e}")
         return []
@@ -170,38 +175,7 @@ def fetch_bulk_game_logs(date_from: Optional[str] = None,
         if df.empty:
             return []
 
-        logs = []
-        for _, row in df.iterrows():
-            matchup = str(row.get("MATCHUP", ""))
-            is_home = 1 if "vs." in matchup else 0
-            opp_abbr = matchup.split(" ")[-1] if matchup else ""
-            logs.append({
-                "player_id": int(row["PLAYER_ID"]),
-                "game_id": str(row.get("GAME_ID", "")),
-                "game_date": _normalize_game_date(row.get("GAME_DATE", "")),
-                "matchup": matchup,
-                "is_home": is_home,
-                "opponent_abbr": opp_abbr,
-                "win_loss": str(row.get("WL", "")),
-                "minutes": float(row.get("MIN", 0) or 0),
-                "points": float(row.get("PTS", 0) or 0),
-                "rebounds": float(row.get("REB", 0) or 0),
-                "assists": float(row.get("AST", 0) or 0),
-                "steals": float(row.get("STL", 0) or 0),
-                "blocks": float(row.get("BLK", 0) or 0),
-                "turnovers": float(row.get("TOV", 0) or 0),
-                "fg_made": int(row.get("FGM", 0) or 0),
-                "fg_attempted": int(row.get("FGA", 0) or 0),
-                "fg3_made": int(row.get("FG3M", 0) or 0),
-                "fg3_attempted": int(row.get("FG3A", 0) or 0),
-                "ft_made": int(row.get("FTM", 0) or 0),
-                "ft_attempted": int(row.get("FTA", 0) or 0),
-                "oreb": float(row.get("OREB", 0) or 0),
-                "dreb": float(row.get("DREB", 0) or 0),
-                "plus_minus": float(row.get("PLUS_MINUS", 0) or 0),
-                "personal_fouls": float(row.get("PF", 0) or 0),
-            })
-        return logs
+        return [_row_to_game_log(row, int(row["PLAYER_ID"])) for _, row in df.iterrows()]
     except Exception as e:
         logger.error(f"Error fetching bulk game logs: {e}")
         return []

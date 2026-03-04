@@ -289,25 +289,6 @@ class OptimizerWorker(BaseWorker):
         self.finished.emit()
 
 
-class CalibrationWorker(BaseWorker):
-    def run(self):
-        try:
-            from src.analytics.prediction import precompute_game_data
-            from src.analytics.weight_optimizer import build_residual_calibration
-            cb = lambda msg: self.progress.emit(msg)
-            self.progress.emit("Precomputing game data...")
-            games = precompute_game_data(callback=cb)
-            if not games:
-                self.progress.emit("No game data available")
-            else:
-                self.progress.emit("Building residual calibration...")
-                build_residual_calibration(games, callback=cb)
-                self.progress.emit("Calibration complete")
-        except Exception as e:
-            self.progress.emit(f"Error: {e}")
-        self.finished.emit()
-
-
 class FeatureImportanceWorker(BaseWorker):
     def run(self):
         try:
@@ -400,25 +381,6 @@ class FFTWorker(BaseWorker):
                 self.progress.emit(f"FFT: found {len(fft_result)} dominant frequencies")
             else:
                 self.progress.emit("Not enough data for FFT")
-        except Exception as e:
-            self.progress.emit(f"Error: {e}")
-        self.finished.emit()
-
-
-class TeamRefineWorker(BaseWorker):
-    def run(self):
-        try:
-            from src.analytics.prediction import precompute_game_data
-            from src.analytics.weight_optimizer import per_team_refinement
-            cb = lambda msg: self.progress.emit(msg)
-            self.progress.emit("Precomputing game data...")
-            games = precompute_game_data(callback=cb)
-            if not games:
-                self.progress.emit("No game data available")
-            else:
-                self.progress.emit("Running per-team refinement...")
-                per_team_refinement(games, callback=cb)
-                self.progress.emit("Team refinement complete")
         except Exception as e:
             self.progress.emit(f"Error: {e}")
         self.finished.emit()
@@ -765,9 +727,6 @@ def start_backtest_worker(on_progress=None, on_result=None, on_done=None):
 def start_optimizer_worker(continuous: bool = False, target: str = "ats", on_progress=None, on_done=None):
     return _start_worker(OptimizerWorker(continuous, target), on_progress, on_done)
 
-def start_calibration_worker(on_progress=None, on_done=None):
-    return _start_worker(CalibrationWorker(), on_progress, on_done)
-
 def start_feature_importance_worker(on_progress=None, on_done=None):
     return _start_worker(FeatureImportanceWorker(), on_progress, on_done)
 
@@ -779,9 +738,6 @@ def start_grouped_feature_worker(on_progress=None, on_done=None):
 
 def start_fft_worker(on_progress=None, on_done=None):
     return _start_worker(FFTWorker(), on_progress, on_done)
-
-def start_team_refine_worker(on_progress=None, on_done=None):
-    return _start_worker(TeamRefineWorker(), on_progress, on_done)
 
 def start_combo_worker(on_progress=None, on_done=None):
     return _start_worker(ComboWorker(), on_progress, on_done)

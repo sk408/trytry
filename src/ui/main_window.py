@@ -94,9 +94,27 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.accuracy, "Accuracy")
         self.tabs.addTab(self.automatic, "Automatic")
         self.tabs.addTab(self.snapshots, "Snapshots")
-        self.tabs.addTab(self.autotune, "Autotune")
+        self.tabs.addTab(self.autotune, "Autotune (Disabled)")
         self.tabs.addTab(self.sensitivity, "Sensitivity")
         self.tabs.addTab(self.admin, "Admin")
+
+        # Connect schedule game selection to matchup tab
+        self.schedule.game_selected.connect(self._on_schedule_game_selected)
+
+    def _on_schedule_game_selected(self, home_id: int, away_id: int):
+        """Switch to matchup tab and set selected teams."""
+        # Set teams on matchup view
+        for i in range(self.matchup.home_combo.count()):
+            if self.matchup.home_combo.itemData(i) == home_id:
+                self.matchup.home_combo.setCurrentIndex(i)
+                break
+        for i in range(self.matchup.away_combo.count()):
+            if self.matchup.away_combo.itemData(i) == away_id:
+                self.matchup.away_combo.setCurrentIndex(i)
+                break
+        # Switch to matchup tab
+        self.tabs.setCurrentWidget(self.matchup)
+        self.matchup._on_predict()
 
     def _init_notifications(self):
         """Set up notification bell in the tab bar corner."""
@@ -123,7 +141,7 @@ class MainWindow(QMainWindow):
         # Store refs so they aren't garbage collected mid-animation
         self._tab_fade_effect = effect
         self._tab_fade_anim = anim
-        anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+        anim.finished.connect(lambda w=widget: w.setGraphicsEffect(None))
         anim.start()
 
     def set_status(self, msg: str):

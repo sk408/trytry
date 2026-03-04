@@ -3,7 +3,6 @@
 import os
 import time
 import logging
-import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -89,12 +88,6 @@ def preload_images(player_ids=None, team_ids=None, callback=None):
                     SELECT player_id FROM injury_history
                 """)
                 player_ids = [r["player_id"] for r in rows] if rows else []
-                
-                # Fetch recent games to get all players involved
-                recent_logs = db.fetch_all("SELECT DISTINCT player_id FROM player_sync_cache")
-                if recent_logs:
-                    player_ids.extend([r["player_id"] for r in recent_logs])
-                player_ids = list(set(player_ids))
                 
                 # Fallback to some generic IDs just to get started if the DB is somehow empty
                 if not player_ids:

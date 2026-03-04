@@ -443,9 +443,8 @@ class TestThreeCodePathSync:
         vg_result = vg.evaluate(w)
         vg_mae = vg_result["spread_mae"]
 
-        # predict_from_precomputed path — mock tuning to return zeros (match VG)
-        with patch("src.analytics.prediction._get_tuning_map", return_value={}):
-            pfp_result = predict_from_precomputed(g, w, skip_residual=True)
+        # predict_from_precomputed path (autotune disabled, no tuning corrections)
+        pfp_result = predict_from_precomputed(g, w, skip_residual=True)
 
         pfp_spread = pfp_result["spread"]
         pfp_mae = abs(pfp_spread - actual_spread)

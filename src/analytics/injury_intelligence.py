@@ -179,12 +179,6 @@ def backfill_play_outcomes():
     if not unresolved:
         return 0
 
-    # Build set of (player_id, game_date) that have stats
-    played_set = set()
-    rows = db.fetch_all("SELECT DISTINCT player_id, game_date FROM player_stats")
-    for r in rows:
-        played_set.add((r["player_id"], r["game_date"]))
-
     updated = 0
     for entry in unresolved:
         pid = entry["player_id"]
@@ -192,7 +186,6 @@ def backfill_play_outcomes():
         log_date = entry["log_date"]
 
         # Find team's first game after log_date
-        # player_stats has no team_id; join through players table
         game = db.fetch_one("""
             SELECT DISTINCT ps.game_date FROM player_stats ps
             JOIN players p ON ps.player_id = p.player_id
@@ -204,7 +197,10 @@ def backfill_play_outcomes():
             continue
 
         game_date = game["game_date"]
-        did_play = (pid, game_date) in played_set
+        did_play = db.fetch_one(
+            "SELECT 1 FROM player_stats WHERE player_id = ? AND game_date = ?",
+            (pid, game_date)
+        ) is not None
 
         db.execute("""
             UPDATE injury_status_log SET did_play = ?, next_game_date = ?
@@ -220,18 +216,22 @@ def get_team_injury_impact(team_id: int, as_of_date: str = None) -> Dict[str, An
     """Get current injury impact for a team."""
     query = """
         SELECT i.player_id, i.player_name, i.status, i.reason,
-               COALESCE((SELECT AVG(ps.points) FROM player_stats ps
-                         WHERE ps.player_id = i.player_id
-                         ORDER BY ps.game_date DESC LIMIT 20), 0) as ppg,
-               COALESCE((SELECT AVG(ps.rebounds) FROM player_stats ps
-                         WHERE ps.player_id = i.player_id
-                         ORDER BY ps.game_date DESC LIMIT 20), 0) as rpg,
-               COALESCE((SELECT AVG(ps.assists) FROM player_stats ps
-                         WHERE ps.player_id = i.player_id
-                         ORDER BY ps.game_date DESC LIMIT 20), 0) as apg,
-               COALESCE((SELECT AVG(ps.minutes) FROM player_stats ps
-                         WHERE ps.player_id = i.player_id
-                         ORDER BY ps.game_date DESC LIMIT 20), 0) as mpg,
+               COALESCE((SELECT AVG(r.points) FROM (
+                   SELECT ps.points FROM player_stats ps
+                   WHERE ps.player_id = i.player_id
+                   ORDER BY ps.game_date DESC LIMIT 20) r), 0) as ppg,
+               COALESCE((SELECT AVG(r.rebounds) FROM (
+                   SELECT ps.rebounds FROM player_stats ps
+                   WHERE ps.player_id = i.player_id
+                   ORDER BY ps.game_date DESC LIMIT 20) r), 0) as rpg,
+               COALESCE((SELECT AVG(r.assists) FROM (
+                   SELECT ps.assists FROM player_stats ps
+                   WHERE ps.player_id = i.player_id
+                   ORDER BY ps.game_date DESC LIMIT 20) r), 0) as apg,
+               COALESCE((SELECT AVG(r.minutes) FROM (
+                   SELECT ps.minutes FROM player_stats ps
+                   WHERE ps.player_id = i.player_id
+                   ORDER BY ps.game_date DESC LIMIT 20) r), 0) as mpg,
                p.position
         FROM injuries i
         LEFT JOIN players p ON i.player_id = p.player_id

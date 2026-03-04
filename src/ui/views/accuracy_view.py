@@ -11,11 +11,10 @@ from PySide6.QtGui import QColor
 
 from src.ui.workers import (
     start_backtest_worker, start_optimizer_worker,
-    start_calibration_worker, start_feature_importance_worker,
-    start_ml_train_worker, start_team_refine_worker,
-    start_fft_worker, start_combo_worker,
-    start_continuous_worker, start_pipeline_worker, start_retune_worker,
-    start_ml_feature_worker, start_grouped_feature_worker,
+    start_feature_importance_worker,
+    start_ml_train_worker,
+    start_fft_worker,
+    start_pipeline_worker, start_retune_worker,
     start_diagnostic_csv_worker, start_odds_sync_worker,
 )
 
@@ -64,10 +63,6 @@ class AccuracyView(QWidget):
         
         btn_row1.addLayout(opt_layout)
         
-        btn_cal = QPushButton("Calibrate")
-        btn_cal.clicked.connect(self._on_calibrate)
-        btn_row1.addWidget(btn_cal)
-        
         btn_fi = QPushButton("Feature Importance")
         btn_fi.clicked.connect(self._on_feature_importance)
         btn_row1.addWidget(btn_fi)
@@ -78,7 +73,6 @@ class AccuracyView(QWidget):
         btn_row2 = QHBoxLayout()
         actions2 = [
             ("Train ML", self._on_ml_train),
-            ("Team Refinement", self._on_team_refine),
             ("FFT Analysis", self._on_fft),
             ("Full Pipeline", self._on_pipeline),
             ("Retune", self._on_retune),
@@ -408,10 +402,6 @@ class AccuracyView(QWidget):
         target = self.opt_target_cb.currentText().split()[0].lower()
         self._current_worker = start_optimizer_worker(is_cont, target, self._append_log, self._on_done)
 
-    def _on_calibrate(self):
-        self.log.clear()
-        self._current_worker = start_calibration_worker(self._append_log, self._on_done)
-
     def _on_feature_importance(self):
         self.log.clear()
         self._current_worker = start_feature_importance_worker(
@@ -421,10 +411,6 @@ class AccuracyView(QWidget):
     def _on_ml_train(self):
         self.log.clear()
         self._current_worker = start_ml_train_worker(self._append_log, self._on_done)
-
-    def _on_team_refine(self):
-        self.log.clear()
-        self._current_worker = start_team_refine_worker(self._append_log, self._on_done)
 
     def _on_fft(self):
         self.log.clear()

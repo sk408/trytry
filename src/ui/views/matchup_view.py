@@ -718,19 +718,26 @@ class MatchupView(QWidget):
                 ORDER BY mpg DESC
             """, (team_id,))
 
-            # Get per-player average stats
+            # Batch-query per-player average stats
             player_stats = {}
-            for p in players:
-                pid = p["player_id"]
-                stat_row = db.fetch_one("""
-                    SELECT AVG(points) AS ppg, AVG(minutes) AS mpg
-                    FROM (SELECT points, minutes FROM player_stats
-                          WHERE player_id = ? ORDER BY game_date DESC LIMIT 15)
-                """, (pid,))
-                if stat_row:
-                    player_stats[pid] = {
-                        "ppg": round(stat_row["ppg"] or 0, 1),
-                        "mpg": round(stat_row["mpg"] or 0, 1),
+            if players:
+                pids = [p["player_id"] for p in players]
+                placeholders = ",".join("?" * len(pids))
+                stat_rows = db.fetch_all(f"""
+                    SELECT player_id, AVG(points) AS ppg, AVG(minutes) AS mpg
+                    FROM (
+                        SELECT player_id, points, minutes,
+                               ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY game_date DESC) AS rn
+                        FROM player_stats
+                        WHERE player_id IN ({placeholders})
+                    )
+                    WHERE rn <= 15
+                    GROUP BY player_id
+                """, tuple(pids))
+                for sr in stat_rows:
+                    player_stats[sr["player_id"]] = {
+                        "ppg": round(sr["ppg"] or 0, 1),
+                        "mpg": round(sr["mpg"] or 0, 1),
                     }
 
             table.setRowCount(len(players))

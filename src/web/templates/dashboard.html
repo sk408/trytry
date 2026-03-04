@@ -141,7 +141,7 @@ function startStyledSSE(url, logEl, onResult) {
         }
         if (logEl) {
             const cls = classifyMsg(e.data);
-            logEl.innerHTML += '<div class="' + cls + '">' + e.data + '</div>';
+            logEl.innerHTML += '<div class="' + cls + '">' + escapeHtml(e.data) + '</div>';
             logEl.scrollTop = logEl.scrollHeight;
         }
     };

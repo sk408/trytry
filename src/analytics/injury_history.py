@@ -285,29 +285,26 @@ def get_player_injury_history(player_id: int) -> List[Dict]:
 
 def get_games_missed_streak(player_id: int, team_id: int) -> int:
     """How many consecutive recent games has the player missed?"""
-    # Get team's recent game dates
-    recent_dates = db.fetch_all("""
-        SELECT DISTINCT ps.game_date FROM player_stats ps
-        JOIN players p ON ps.player_id = p.player_id
-        WHERE p.team_id = ?
-        ORDER BY ps.game_date DESC
-        LIMIT 10
-    """, (team_id,))
-
-    if not recent_dates:
-        return 0
-
-    dates = [r["game_date"] for r in recent_dates]
-
-    # Check from most recent backwards
-    missed = 0
-    for date in dates:
-        played = db.fetch_one("""
-            SELECT 1 FROM player_stats
-            WHERE player_id = ? AND game_date = ?
-        """, (player_id, date))
-        if played:
-            break
-        missed += 1
-
-    return missed
+    row = db.fetch_one("""
+        WITH recent_team_dates AS (
+            SELECT DISTINCT ps.game_date
+            FROM player_stats ps
+            JOIN players p ON ps.player_id = p.player_id
+            WHERE p.team_id = ?
+            ORDER BY ps.game_date DESC
+            LIMIT 10
+        ),
+        numbered AS (
+            SELECT game_date,
+                   ROW_NUMBER() OVER (ORDER BY game_date DESC) AS rn,
+                   EXISTS(
+                       SELECT 1 FROM player_stats
+                       WHERE player_id = ? AND game_date = recent_team_dates.game_date
+                   ) AS played
+            FROM recent_team_dates
+        )
+        SELECT COALESCE(MIN(rn) - 1, (SELECT COUNT(*) FROM numbered)) AS streak
+        FROM numbered
+        WHERE played = 1
+    """, (team_id, player_id))
+    return row["streak"] if row else 0

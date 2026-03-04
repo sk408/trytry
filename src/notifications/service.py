@@ -8,7 +8,7 @@ import threading
 from typing import List, Dict, Any, Optional, Callable
 
 from src.database import db
-from src.notifications.models import Notification, NotificationCategory, NotificationSeverity
+from src.notifications.models import NotificationCategory, NotificationSeverity
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +161,11 @@ def _push_toast(notif: Dict):
     try:
         title = notif.get("title", "NBA Alert")
         message = notif.get("message", "")
-        # Escape double quotes and dollar signs to prevent PowerShell injection
-        title = title.replace('"', '`"').replace("$", "`$")
-        message = message.replace('"', '`"').replace("$", "`$")
+        # Escape PowerShell special characters to prevent injection
+        for char in ('`', '"', '$', ';', '|', '&'):
+            esc = '`' + char
+            title = title.replace(char, esc)
+            message = message.replace(char, esc)
         cmd = f'New-BurntToastNotification -Text "{title}", "{message}"'
         subprocess.run(
             ["powershell", "-Command", cmd],

@@ -70,7 +70,15 @@ def bootstrap(status_callback=None):
 
     init_db()
 
-    # 3. Injury monitor (use module singleton so all paths share one instance)
+    # 3. Clean old notifications
+    _status("Cleaning old notifications...")
+    try:
+        from src.notifications.service import delete_old
+        delete_old(days=30)
+    except Exception as e:
+        _logger.warning("Failed to clean old notifications: %s", e)
+
+    # 4. Injury monitor (use module singleton so all paths share one instance)
     _status("Starting injury monitor...")
     try:
         from src.notifications.injury_monitor import get_injury_monitor

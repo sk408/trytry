@@ -107,17 +107,16 @@ def _classify_keyword(detail: str) -> str:
         "soreness", "contusion",
         "personal", "suspension", "illness",
     ]
-    import re as _re
     for kw in keywords:
         if kw in low:
             if kw in ("acl", "mcl", "meniscus"):
                 return "knee"
             return kw
     # "rest" — only match actual "rest" (load management), not "rest of the season"
-    if _re.search(r"\brest\b", low) and "rest of" not in low and "remainder" not in low:
+    if re.search(r"\brest\b", low) and "rest of" not in low and "remainder" not in low:
         return "rest"
     # "back" — use word boundary to avoid "coming back", "setback", etc.
-    if _re.search(r"\bback\b", low) and not _re.search(r"(come|coming|set|hold|held|get|got)\s*back", low):
+    if re.search(r"\bback\b", low) and not re.search(r"(come|coming|set|hold|held|get|got)\s*back", low):
         return "back"
     return "other"
 
@@ -158,7 +157,6 @@ def scrape_espn_injuries() -> List[Dict[str, Any]]:
                     expected_return = cols[2].get_text(strip=True)  # e.g. "Feb 26", "Mar 4"
                     status = cols[3].get_text(strip=True)
                     detail = cols[4].get_text(strip=True)
-                    expected_return = expected_return  # already set
                 elif len(cols) >= 3:
                     # Fallback for older/different layout
                     name = normalize_name(cols[0].get_text(strip=True))

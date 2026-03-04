@@ -122,7 +122,7 @@ async def index():
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+def dashboard(request: Request):
     teams_count = db.fetch_one("SELECT COUNT(*) as c FROM teams")["c"]
     players_count = db.fetch_one("SELECT COUNT(*) as c FROM players")["c"]
     games_count = db.fetch_one("SELECT COUNT(*) as c FROM player_stats")["c"]
@@ -139,33 +139,8 @@ async def dashboard(request: Request):
     })
 
 
-@app.post("/dashboard/sync")
-async def dashboard_sync():
-    return RedirectResponse(url="/dashboard", status_code=303)
-
-
-@app.post("/dashboard/injuries")
-async def dashboard_injuries():
-    return RedirectResponse(url="/dashboard", status_code=303)
-
-
-@app.post("/dashboard/injury-history")
-async def dashboard_injury_history():
-    return RedirectResponse(url="/dashboard", status_code=303)
-
-
-@app.post("/dashboard/team-metrics")
-async def dashboard_team_metrics():
-    return RedirectResponse(url="/dashboard", status_code=303)
-
-
-@app.post("/dashboard/player-impact")
-async def dashboard_player_impact():
-    return RedirectResponse(url="/dashboard", status_code=303)
-
-
 @app.get("/players", response_class=HTMLResponse)
-async def players_page(request: Request, page: int = Query(1, ge=1)):
+def players_page(request: Request, page: int = Query(1, ge=1)):
     import re
     from datetime import datetime
 
@@ -311,7 +286,7 @@ async def remove_manual_injury(player_id: int = Form(...)):
 
 
 @app.get("/schedule", response_class=HTMLResponse)
-async def schedule_page(request: Request,
+def schedule_page(request: Request,
                         start_date: Optional[str] = None,
                         days: int = Query(14, ge=1, le=60)):
     from src.data.nba_fetcher import fetch_nba_cdn_schedule
@@ -340,7 +315,7 @@ async def schedule_page(request: Request,
 
 
 @app.get("/matchups", response_class=HTMLResponse)
-async def matchups_page(request: Request,
+def matchups_page(request: Request,
                          home_team: Optional[int] = None,
                          away_team: Optional[int] = None):
     teams = db.fetch_all("SELECT team_id, abbreviation, name FROM teams ORDER BY abbreviation")
@@ -512,7 +487,7 @@ async def matchups_page(request: Request,
 
 
 @app.get("/accuracy", response_class=HTMLResponse)
-async def accuracy_page(request: Request):
+def accuracy_page(request: Request):
     from src.analytics.backtester import get_backtest_cache_age
     cache_age = get_backtest_cache_age()
     return templates.TemplateResponse("accuracy.html", {
@@ -522,7 +497,7 @@ async def accuracy_page(request: Request):
 
 
 @app.get("/autotune", response_class=HTMLResponse)
-async def autotune_page(request: Request):
+def autotune_page(request: Request):
     tuning = db.fetch_all("""
         SELECT tt.*, t.abbreviation
         FROM team_tuning tt
@@ -543,7 +518,7 @@ async def clear_autotune():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
+def admin_page(request: Request):
     from src.database.db import get_db_size
     config = get_config()
     return templates.TemplateResponse("admin.html", {
@@ -575,7 +550,7 @@ async def admin_reset():
 
 
 @app.get("/gamecast", response_class=HTMLResponse)
-async def gamecast_page(request: Request, game_id: Optional[str] = None):
+def gamecast_page(request: Request, game_id: Optional[str] = None):
     return templates.TemplateResponse("gamecast.html", {
         "request": request,
         "game_id": game_id,
@@ -762,21 +737,6 @@ async def sse_optimize(continuous: bool = False, target: str = "ats"):
     )
 
 
-@app.get("/api/calibrate")
-async def sse_calibrate():
-    def _run(callback):
-        from src.analytics.prediction import precompute_game_data
-        from src.analytics.weight_optimizer import build_residual_calibration
-        games = precompute_game_data(callback=callback)
-        if not games:
-            return {"error": "no_data"}
-        return build_residual_calibration(games, callback=callback)
-    return StreamingResponse(
-        _sse_generator(_run),
-        media_type="text/event-stream",
-    )
-
-
 @app.get("/api/feature-importance")
 async def sse_feature_importance():
     def _run(callback):
@@ -884,21 +844,6 @@ async def sse_ml_train():
     )
 
 
-@app.get("/api/team-refinement")
-async def sse_team_refinement():
-    def _run(callback):
-        from src.analytics.prediction import precompute_game_data
-        from src.analytics.weight_optimizer import per_team_refinement
-        games = precompute_game_data(callback=callback)
-        if not games:
-            return {"error": "no_data"}
-        return per_team_refinement(games, n_trials=100, callback=callback)
-    return StreamingResponse(
-        _sse_generator(_run),
-        media_type="text/event-stream",
-    )
-
-
 @app.get("/api/continuous-optimize")
 async def sse_continuous_optimize():
     if not _optimize_lock.acquire(blocking=False):
@@ -930,28 +875,6 @@ async def sse_continuous_optimize():
 
     return StreamingResponse(
         _sse_generator(_run, _optimize_cancel, lock=_optimize_lock),
-        media_type="text/event-stream",
-    )
-
-
-@app.get("/api/optimize-all")
-async def sse_optimize_all():
-    _optimize_cancel.clear()
-
-    def _run(callback):
-        from src.analytics.prediction import precompute_game_data
-        from src.analytics.weight_optimizer import optimize_weights, per_team_refinement
-        callback("Phase 1: Global optimization...")
-        games = precompute_game_data(callback=callback)
-        if not games:
-            return {"error": "no_data"}
-        global_result = optimize_weights(games, n_trials=200, callback=callback)
-        callback("Phase 2: Per-team refinement...")
-        team_result = per_team_refinement(games, n_trials=100, callback=callback)
-        return {"global": global_result, "team": team_result}
-
-    return StreamingResponse(
-        _sse_generator(_run, _optimize_cancel),
         media_type="text/event-stream",
     )
 
@@ -1510,44 +1433,6 @@ async def mark_all_notifications_read():
     from src.notifications.service import mark_all_read
     mark_all_read()
     return JSONResponse({"status": "ok"})
-
-
-# ======== All-Star View ========
-
-@app.get("/allstar", response_class=HTMLResponse)
-async def allstar_page(request: Request):
-    """All-Star Weekend analysis with 4 tabs matching desktop view."""
-    mvp_candidates = [
-        {"player": "LeBron James", "team": "LAL", "score": 42.1, "odds": "+800", "edge": 3.2},
-        {"player": "Giannis Antetokounmpo", "team": "MIL", "score": 48.7, "odds": "+500", "edge": 5.1},
-        {"player": "Luka Doncic", "team": "DAL", "score": 52.3, "odds": "+600", "edge": 4.8},
-        {"player": "Jayson Tatum", "team": "BOS", "score": 38.9, "odds": "+1000", "edge": 2.1},
-        {"player": "Nikola Jokic", "team": "DEN", "score": 50.2, "odds": "+700", "edge": 4.5},
-        {"player": "Shai Gilgeous-Alexander", "team": "OKC", "score": 41.0, "odds": "+900", "edge": 3.0},
-    ]
-    three_pt_contestants = [
-        {"player": "Stephen Curry", "team": "GSW", "three_pct": "42.8%", "three_pm": 5.1, "score": 88.5, "odds": "+350", "edge": 8.2},
-        {"player": "Klay Thompson", "team": "DAL", "three_pct": "38.5%", "three_pm": 3.2, "score": 72.1, "odds": "+800", "edge": 3.1},
-        {"player": "Buddy Hield", "team": "GSW", "three_pct": "40.1%", "three_pm": 3.8, "score": 76.4, "odds": "+600", "edge": 5.0},
-        {"player": "Desmond Bane", "team": "MEM", "three_pct": "39.7%", "three_pm": 3.1, "score": 71.2, "odds": "+900", "edge": 2.8},
-    ]
-    rising_stars = [
-        {"player": "Victor Wembanyama", "team": "SAS", "year": "2nd", "ppg": 24.2, "score": 85.0, "odds": "+300", "edge": 7.5},
-        {"player": "Chet Holmgren", "team": "OKC", "year": "2nd", "ppg": 16.5, "score": 68.2, "odds": "+800", "edge": 3.0},
-        {"player": "Brandon Miller", "team": "CHO", "year": "2nd", "ppg": 17.3, "score": 65.1, "odds": "+1000", "edge": 2.5},
-    ]
-    game_teams = [
-        {"team": "Team East", "proj_score": 178.5, "win_prob": "52.3%", "spread": "-1.5", "odds": "-115", "edge": 2.1},
-        {"team": "Team West", "proj_score": 175.0, "win_prob": "47.7%", "spread": "+1.5", "odds": "-105", "edge": 1.8},
-    ]
-    return templates.TemplateResponse("allstar.html", {
-        "request": request,
-        "active": "allstar",
-        "mvp_candidates": mvp_candidates,
-        "three_pt_contestants": three_pt_contestants,
-        "rising_stars": rising_stars,
-        "game_teams": game_teams,
-    })
 
 
 # ======== Team Colors API ========

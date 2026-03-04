@@ -23,11 +23,9 @@
             <label for="continuousOpt" style="margin:0; font-size: 0.9em; user-select: none;">Continuous</label>
         </div>
         <button class="btn btn-outline" onclick="runOptimization()">Optimize Weights</button>
-        <button class="btn btn-outline" onclick="runAction('/api/calibrate', 'Calibrating...')">Residual Calibration</button>
         <button class="btn btn-outline" onclick="runAction('/api/feature-importance', 'Analyzing...')">Feature Importance</button>
         <button class="btn btn-outline" onclick="runAction('/api/ml-train', 'Training...')">Train ML</button>
         <button class="btn btn-outline" onclick="runAction('/api/retune', 'Retuning (no sync)...')">Retune</button>
-        <button class="btn btn-outline" onclick="runAction('/api/team-refinement', 'Refining...')">Team Refinement</button>
         <button class="btn btn-outline" onclick="runAction('/api/fft-analysis', 'FFT...')">FFT Analysis</button>
         <button class="btn btn-outline" onclick="runAction('/api/odds/sync', 'Syncing Odds...')">Sync Odds</button>
     </div>

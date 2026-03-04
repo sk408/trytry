@@ -60,7 +60,6 @@ class InMemoryDataStore:
             self.players = pd.read_sql("SELECT * FROM players", conn)
             self.team_metrics = pd.read_sql("SELECT * FROM team_metrics", conn)
             self.player_impact = pd.read_sql("SELECT * FROM player_impact", conn)
-            self.team_tuning = pd.read_sql("SELECT * FROM team_tuning", conn)
             self.injury_history = pd.read_sql("SELECT * FROM injury_history", conn)
             conn.close()
             self._loaded = True
