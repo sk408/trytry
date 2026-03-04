@@ -13,7 +13,7 @@ _DEFAULTS: Dict[str, Any] = {
     "db_path": "data/nba_analytics.db",
     "season": "2025-26",
     "season_year": "2025",
-    "historical_seasons": ["2023-24", "2024-25"],
+    "historical_seasons": ["2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25"],
     "theme": "dark",
     "auto_sync_interval_minutes": 60,
     "notification_webhook_url": "",

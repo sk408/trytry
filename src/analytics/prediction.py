@@ -841,22 +841,9 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
     home_base_pts = home_proj["points"] * away_def_factor
     away_base_pts = away_proj["points"] * home_def_factor
 
-    # ── Step 4: Autotune Corrections (individual ±8, net spread ±8) ──
-    home_tuning = _get_tuning(home_team_id)
-    away_tuning = _get_tuning(away_team_id)
-    _TUNE_CAP = 8.0
-    ht_corr = _clamp(-_TUNE_CAP, home_tuning["home_pts_correction"], _TUNE_CAP)
-    at_corr = _clamp(-_TUNE_CAP, away_tuning["away_pts_correction"], _TUNE_CAP)
-    # Cap the NET spread effect of autotune (prevents compounding home/away bias)
-    net_tune = ht_corr - at_corr
-    if abs(net_tune) > _TUNE_CAP:
-        scale = _TUNE_CAP / abs(net_tune)
-        ht_corr *= scale
-        at_corr *= scale
-    home_base_pts += ht_corr
-    away_base_pts += at_corr
+    # ── Autotune Corrections — DISABLED (nudges spreads toward accuracy) ──
 
-    # ── Step 5: Fatigue Detection (decomposed — synced with VectorizedGames) ──
+    # ── Step 4: Fatigue Detection (decomposed — synced with VectorizedGames) ──
     home_fatigue = compute_fatigue(home_team_id, game_date, w=w)
     away_fatigue = compute_fatigue(away_team_id, game_date, w=w)
     # Decomposed fatigue — same formula as VectorizedGames.evaluate() and predict_from_precomputed
@@ -977,20 +964,7 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
 
         if w.sharp_money_weight != 0.0:
             sharp_edge = (sh_mon - sh_pub) / 100.0
-
-            # Time decay for current day betting
-            decay = 1.0
-            if game_date == today_str:
-                now_et = datetime.utcnow() - timedelta(hours=5)  # Approx Eastern Time
-                if now_et.hour < 12:
-                    decay = 0.0
-                elif now_et.hour >= 19:
-                    decay = 1.0
-                else:
-                    hours_past_noon = (now_et.hour - 12) + (now_et.minute / 60.0)
-                    decay = hours_past_noon / 7.0
-
-            sharp_money_adj = sharp_edge * w.sharp_money_weight * decay
+            sharp_money_adj = sharp_edge * w.sharp_money_weight
             spread += sharp_money_adj
     pred.adjustments["sharp_money"] = sharp_money_adj
 
@@ -1159,13 +1133,7 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         except Exception as e:
             logger.debug(f"ML blend skipped: {e}")
 
-    # ── Step 10: Residual Calibration ──
-    try:
-        spread_corr, total_corr = _get_residual_correction(spread, total)
-        spread -= spread_corr
-        total -= total_corr
-    except Exception as e:
-        logger.warning("Residual calibration failed: %s", e)
+    # ── Residual Calibration — DISABLED (nudges spreads toward Vegas accuracy) ──
 
     # ── Final: Derive Individual Scores ──
     pred.predicted_spread = round(spread, 1)
@@ -1526,18 +1494,7 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     home_base = g.home_proj.get("points", 0) * away_def_f
     away_base = g.away_proj.get("points", 0) * home_def_f
 
-    # Autotune corrections — loaded from DB, not baked into PrecomputedGame
-    _TUNE_CAP_OPT = 8.0
-    tmap = _get_tuning_map()
-    ht_c = _clamp(-_TUNE_CAP_OPT, tmap.get(g.home_team_id, (0.0, 0.0))[0], _TUNE_CAP_OPT)
-    at_c = _clamp(-_TUNE_CAP_OPT, tmap.get(g.away_team_id, (0.0, 0.0))[1], _TUNE_CAP_OPT)
-    net_t = ht_c - at_c
-    if abs(net_t) > _TUNE_CAP_OPT:
-        sc = _TUNE_CAP_OPT / abs(net_t)
-        ht_c *= sc
-        at_c *= sc
-    home_base += ht_c
-    away_base += at_c
+    # Autotune corrections — DISABLED (nudges spreads toward accuracy)
 
     # Spread
     spread = (home_base - away_base) + g.home_court
@@ -1615,8 +1572,7 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     spread += (g.home_elo - g.away_elo) * w.elo_edge_weight
 
     # Opening spread
-    if w.opening_spread_weight > 0 and g.opening_spread != 0.0:
-        spread += g.opening_spread * w.opening_spread_weight
+    spread += g.opening_spread * w.opening_spread_weight
 
     # Total
     total = home_base + away_base
@@ -1643,14 +1599,7 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
     # Fatigue total (decomposed)
     total -= (home_fat + away_fat) * w.fatigue_total_mult
 
-    # Residual calibration (skip during optimization)
-    if not skip_residual:
-        try:
-            s_corr, t_corr = _get_residual_correction(spread, total)
-            spread -= s_corr
-            total -= t_corr
-        except Exception as e:
-            logger.warning("Residual calibration (fast) failed: %s", e)
+    # Residual calibration — DISABLED (nudges spreads toward Vegas accuracy)
 
     home_score = (total + spread) / 2.0
     away_score = (total - spread) / 2.0

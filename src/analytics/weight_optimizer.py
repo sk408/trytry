@@ -16,6 +16,14 @@ from src.analytics.prediction import PrecomputedGame, predict_from_precomputed
 
 logger = logging.getLogger(__name__)
 
+# Save gate volume floor — minimum dog_pick_rate % on validation to allow saving.
+# The LOSS function uses a stricter 12% floor to push the search toward volume,
+# but the save gate is looser because with large validation sets (1500+ games),
+# even 8% = 120+ dog picks — a statistically meaningful sample.
+SAVE_GATE_VOLUME_FLOOR = 8.0
+COMPRESSION_RATIO_FLOOR = 0.55
+COMPRESSION_PENALTY_MULT = 80.0
+
 # Value zone: spread range where underdogs have realistic upset potential
 # and moneyline payouts make selective betting profitable.
 VALUE_ZONE_MIN = 4.0
@@ -45,9 +53,9 @@ class VectorizedGames:
         self.away_pts_raw = np.array([g.away_proj.get("points", 0) for g in games])
         self.home_def_factor_raw = np.array([g.home_def_factor_raw for g in games])
         self.away_def_factor_raw = np.array([g.away_def_factor_raw for g in games])
-        # Load tuning corrections fresh from DB (not baked into precomputed games)
-        # so precomputed games never need rebuilding when autotune runs.
-        self.home_tuning_corr, self.away_tuning_corr = self._load_tuning(games)
+        # Autotune corrections — DISABLED (nudges spreads toward accuracy)
+        self.home_tuning_corr = np.zeros(n)
+        self.away_tuning_corr = np.zeros(n)
         # Decomposed fatigue flags — optimizer can tune each independently
         self.home_b2b_flag = np.array([1.0 if g.home_b2b else 0.0 for g in games])
         self.away_b2b_flag = np.array([1.0 if g.away_b2b else 0.0 for g in games])
@@ -179,18 +187,9 @@ class VectorizedGames:
         away_def_f = 1.0 + (self.away_def_factor_raw - 1.0) * w.def_factor_dampening
         home_def_f = 1.0 + (self.home_def_factor_raw - 1.0) * w.def_factor_dampening
 
-        # Tuning cap: match predict_from_precomputed — ±8 per team, net ±8 with scaling
-        _TUNE_CAP = 8.0
-        ht_c = np.clip(self.home_tuning_corr, -_TUNE_CAP, _TUNE_CAP)
-        at_c = np.clip(self.away_tuning_corr, -_TUNE_CAP, _TUNE_CAP)
-        net_t = ht_c - at_c
-        needs_scale = np.abs(net_t) > _TUNE_CAP
-        scale_factor = np.where(needs_scale, _TUNE_CAP / np.maximum(np.abs(net_t), 1e-9), 1.0)
-        ht_c = ht_c * scale_factor
-        at_c = at_c * scale_factor
-
-        home_base = self.home_pts_raw * away_def_f + ht_c
-        away_base = self.away_pts_raw * home_def_f + at_c
+        # Autotune corrections — DISABLED (zeroed out in __init__)
+        home_base = self.home_pts_raw * away_def_f
+        away_base = self.away_pts_raw * home_def_f
 
         # Spread
         spread = (home_base - away_base) + self.home_court
@@ -312,8 +311,8 @@ class VectorizedGames:
             # Penalize when predicted spreads are artificially narrow.
             # Default weights produce ~0.60 ratio (natural); anything below 0.55
             # means the optimizer is compressing spreads to game winner%.
-            if compression_ratio < 0.55:
-                loss += (0.55 - compression_ratio) * 80.0  # harsh: 0.20 ratio -> +28 loss
+            if compression_ratio < COMPRESSION_RATIO_FLOOR:
+                loss += (COMPRESSION_RATIO_FLOOR - compression_ratio) * COMPRESSION_PENALTY_MULT
 
         # Vegas Betting objectives (ATS, Edge Hit Rate)
         if np.any(self.vegas_spread != 0.0):
@@ -465,44 +464,23 @@ class VectorizedGames:
                 loss += max(0, 52.5 - ats_rate) * 0.2
 
             elif target == "ml":
-                # Dog-focused: find underdogs worth betting.
-                # We do NOT care about spread accuracy — only about finding
-                # dogs that hit and making sure they're REAL underdogs.
-                #
-                # dog_hit_rate: how often our dog picks win outright
-                # avg_dog_payout: are we picking REAL dogs (2.0x+) or barely-dogs (1.3x)
-                # dog_roi: captures the hit_rate × payout interaction
+                # Dog-focused: hit_rate × pick_rate rewards both accuracy AND volume.
+                # A model picking 15% of games at 40% hit (score=6.0) beats one
+                # picking 9% at 43% (score=3.87). Hard floor prevents degenerate
+                # ultra-low-volume solutions.
 
-                if dog_pick_rate < 12.0:
-                    # HARD WALL: not enough dog picks. Return a terrible loss
-                    # immediately so Optuna's TPE sampler learns to avoid this
-                    # region fast instead of wasting thousands of trials here.
-                    loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
+                if dog_pick_rate < 5.0:
+                    loss = 100.0 + (5.0 - dog_pick_rate) * 10.0
                 else:
-                    loss = 0.0  # pure dog-focused — no spread/total anchor
-
-                    # PRIMARY: dog hit rate — every % point matters
-                    loss -= dog_hit_rate * 0.5
-
-                    # PRIMARY: avg dog payout — reward picking real underdogs
-                    # +150 dog (1.50x) needs 67% to break even — bad bet
-                    # +250 dog (2.50x) needs 40% to break even — that's where edge lives
-                    loss -= avg_dog_payout * 5.0
-
-                    # SECONDARY: dog ROI captures the interaction
-                    loss -= max(0, dog_roi) * 0.3
+                    loss = -(dog_hit_rate * dog_pick_rate)
 
             elif target == "value":
-                # Even more aggressive dog-seeking than "ml"
+                # Same blend, slightly more aggressive weight
 
-                if dog_pick_rate < 12.0:
-                    loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
+                if dog_pick_rate < 5.0:
+                    loss = 100.0 + (5.0 - dog_pick_rate) * 10.0
                 else:
-                    loss = 0.0  # pure dog-focused — no spread/total anchor
-
-                    loss -= dog_hit_rate * 0.6
-                    loss -= avg_dog_payout * 7.0
-                    loss -= max(0, dog_roi) * 0.5
+                    loss = -(dog_hit_rate * dog_pick_rate) * 1.2
 
         else:
             ats_rate = 50.0
@@ -594,7 +572,6 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
             params = {}
             for key, (lo, hi) in OPTIMIZER_RANGES.items():
                 params[key] = trial.suggest_float(key, lo, hi)
-            params["espn_weight"] = 1.0 - params.get("espn_model_weight", 0.8)
 
             w = WeightConfig.from_dict({**baseline_w.to_dict(), **params})
             result = vg_train.evaluate(w, target=target)
@@ -662,7 +639,6 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
 
         if study.best_value < best_train_loss:
             best_params = study.best_params
-            best_params["espn_weight"] = 1.0 - best_params.get("espn_model_weight", 0.8)
             best_w = WeightConfig.from_dict({**baseline_w.to_dict(), **best_params})
             best_train_loss = study.best_value
             best_train_result = vg_train.evaluate(best_w, target=target)
@@ -674,7 +650,6 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
             params = {}
             for key, (lo, hi) in OPTIMIZER_RANGES.items():
                 params[key] = random.uniform(lo, hi)
-            params["espn_weight"] = 1.0 - params.get("espn_model_weight", 0.8)
             w = WeightConfig.from_dict({**baseline_w.to_dict(), **params})
             result = vg_train.evaluate(w, target=target)
             if result["loss"] < best_train_loss:
@@ -700,40 +675,42 @@ def optimize_weights(games: List[PrecomputedGame], n_trials: int = 3000,
                  f"BettableWin={best_val.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={best_val['loss']:.3f}")
 
-    # ── Save decision: DogROI on VALIDATION set + volume floor ──
-    # DogROI captures both hit rate AND payout quality. A model that
-    # earns money on dogs is better than one that just picks correct
-    # dogs at low payouts. Volume floor prevents cherry-picking.
-    baseline_dog_roi = baseline_val.get("dog_roi", -100)
-    best_dog_roi = best_val.get("dog_roi", -100)
+    # ── Save decision: DogScore (hit% × rate%) on VALIDATION set ──
+    # Matches the loss function: rewards both accuracy AND volume together.
+    # Volume floor is just a safety net against degenerate solutions.
+    baseline_dog_hit = baseline_val.get("dog_hit_rate", 0)
+    baseline_dog_rate = baseline_val.get("dog_pick_rate", 0)
+    baseline_score = (baseline_dog_hit * baseline_dog_rate) if baseline_dog_rate >= SAVE_GATE_VOLUME_FLOOR else 0.0
+    best_dog_hit = best_val.get("dog_hit_rate", 0)
     best_dog_rate = best_val.get("dog_pick_rate", 0)
-    save_ok = best_dog_roi > baseline_dog_roi and best_dog_rate >= 12.0
+    best_score = best_dog_hit * best_dog_rate
+    save_ok = best_score > baseline_score and best_dog_rate >= SAVE_GATE_VOLUME_FLOOR
 
     if save_ok:
         save_weight_config(best_w)
         invalidate_weight_cache()
         if callback:
             callback(f"Saved optimized weights "
-                     f"(val DogROI: {baseline_dog_roi:+.1f}% -> {best_dog_roi:+.1f}%, "
-                     f"DogHit: {baseline_val['dog_hit_rate']:.1f}% -> {best_val['dog_hit_rate']:.1f}%, "
-                     f"AvgDogPay: {baseline_val.get('avg_dog_payout', 0):.2f}x -> {best_val.get('avg_dog_payout', 0):.2f}x, "
-                     f"DogRate: {best_dog_rate:.1f}%)")
+                     f"(val DogScore: {baseline_score:.1f} -> {best_score:.1f}, "
+                     f"DogHit: {baseline_dog_hit:.1f}% -> {best_dog_hit:.1f}%, "
+                     f"DogRate: {baseline_dog_rate:.1f}% -> {best_dog_rate:.1f}%, "
+                     f"DogROI: {baseline_val.get('dog_roi', -100):+.1f}% -> {best_val.get('dog_roi', -100):+.1f}%)")
     else:
         reason = ""
-        if best_dog_rate < 12.0:
-            reason = f" (dog pick rate {best_dog_rate:.1f}% < 12% floor)"
-        elif best_dog_roi <= baseline_dog_roi:
-            reason = f" (DogROI {baseline_dog_roi:+.1f}% -> {best_dog_roi:+.1f}%)"
+        if best_dog_rate < SAVE_GATE_VOLUME_FLOOR:
+            reason = f" (dog pick rate {best_dog_rate:.1f}% < {SAVE_GATE_VOLUME_FLOOR}% floor)"
+        elif best_score <= baseline_score:
+            reason = f" (DogScore {baseline_score:.1f} -> {best_score:.1f})"
         if callback:
-            callback(f"Validation DogROI did not improve{reason} "
+            callback(f"Validation DogScore did not improve{reason} "
                      f"- keeping current weights")
 
     # Return validation metrics (most honest assessment)
     return {
         "baseline_loss": baseline_val["loss"],
         "best_loss": best_val["loss"],
-        "baseline_dog_roi": baseline_dog_roi,
-        "best_dog_roi": best_dog_roi,
+        "baseline_dog_hit": baseline_dog_hit,
+        "best_dog_hit": best_dog_hit,
         "improved": save_ok,
         "train_loss": best_train_loss,
         **best_val,

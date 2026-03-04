@@ -14,77 +14,77 @@ _SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "sn
 @dataclass
 class WeightConfig:
     # Defensive adjustment
-    def_factor_dampening: float = 1.70   # sensitivity: optimal ~1.7
+    def_factor_dampening: float = 6.90   # CD-found: amplifies defensive differences
 
     # Spread factors
     turnover_margin_mult: float = 2.00   # avg raw edge ~1.0; 2*1=2pts
     rebound_diff_mult: float = 0.50      # sensitivity: optimal ~0.5
-    rating_matchup_mult: float = 0.42    # sensitivity: already near optimal
+    rating_matchup_mult: float = 4.06    # CD-found: rating edge matters more than orig
 
     # Four Factors
-    four_factors_scale: float = 25.0     # avg weighted edge ~0.19; 25*0.19≈5pts
-    ff_efg_weight: float = 3.55          # sensitivity: optimal ~3.56
-    ff_tov_weight: float = 3.40          # sensitivity: optimal ~3.38
-    ff_oreb_weight: float = 2.80         # sensitivity: optimal ~2.81
-    ff_fta_weight: float = 0.05          # sensitivity: optimal ~0.05
+    four_factors_scale: float = 50.0     # CD-found ~96 but conservative start
+    ff_efg_weight: float = 7.36          # CD-found: eFG% is dominant four factor
+    ff_tov_weight: float = 3.40          # stable across runs
+    ff_oreb_weight: float = 1.97         # CD-found
+    ff_fta_weight: float = 0.05          # stable
 
     # Opponent Four Factors (defensive matchup)
     opp_ff_efg_weight: float = 1.0
-    opp_ff_tov_weight: float = 1.0
+    opp_ff_tov_weight: float = 4.50      # CD-found: defensive TO forcing matters
     opp_ff_oreb_weight: float = 1.0
     opp_ff_fta_weight: float = 0.05
 
     # Clutch
-    clutch_scale: float = 0.13           # sensitivity: optimal ~0.13
+    clutch_scale: float = 0.13           # CD-found: stable
     clutch_cap: float = 3.5
     clutch_threshold: float = 6.0
 
     # Hustle
-    hustle_effort_mult: float = 0.70     # avg raw edge ~3.0; 0.7*3=2pts
-    hustle_contested_wt: float = 0.3
+    hustle_effort_mult: float = 0.75     # CD-found
+    hustle_contested_wt: float = 0.04    # CD-found: nearly zeroed
 
     # Pace / Total
     pace_baseline: float = 98.0
-    pace_mult: float = 0.0              # sensitivity: dead weight, zeroed
+    pace_mult: float = 0.0              # dead weight, zeroed
     steals_threshold: float = 14.0
     steals_penalty: float = 0.15
     blocks_threshold: float = 10.0
     blocks_penalty: float = 0.12
     oreb_baseline: float = 20.0
-    oreb_mult: float = 0.0              # sensitivity: dead weight, zeroed
+    oreb_mult: float = 0.0              # dead weight, zeroed
     hustle_defl_baseline: float = 30.0
     hustle_defl_penalty: float = 0.1
 
-    # Fatigue — re-enabled with non-zero defaults for optimizer re-evaluation
+    # Fatigue — CD-found values from 7970-game dataset
     fatigue_total_mult: float = 0.3
-    fatigue_b2b: float = 1.5
-    fatigue_3in4: float = 0.8
-    fatigue_4in6: float = 1.0
-    fatigue_same_day: float = 3.0    # same-day (0 rest days) penalty
-    fatigue_rest_bonus: float = 1.0  # bonus subtracted when rest_days >= 3 (scaled by days)
+    fatigue_b2b: float = 7.68            # CD-found: B2B matters a lot
+    fatigue_3in4: float = 4.99           # CD-found
+    fatigue_4in6: float = 2.67           # CD-found
+    fatigue_same_day: float = 3.0
+    fatigue_rest_bonus: float = 1.85     # CD-found
 
     # Net rest advantage — continuous signal (pts per rest-day differential)
-    rest_advantage_mult: float = 0.3
+    rest_advantage_mult: float = 0.42    # CD-found
 
     # Altitude B2B penalty — extra pts penalty for away B2B in DEN/UTA
-    altitude_b2b_penalty: float = 1.5
+    altitude_b2b_penalty: float = 0.77   # CD-found: smaller than expected
 
-    # ESPN blend — sensitivity: dead weight, zeroed
+    # ESPN blend — dead weight, zeroed
     espn_spread_scale: float = 0.3
     espn_model_weight: float = 0.0
     espn_weight: float = 0.0
     espn_disagree_damp: float = 0.85
 
-    # ML ensemble — sensitivity: dead weight, zeroed
+    # ML ensemble — dead weight, zeroed
     ml_ensemble_weight: float = 0.0
     ml_disagree_damp: float = 0.0
     ml_disagree_threshold: float = 6.0
 
-    # Elo — team strength from win/loss record; avg diff ~75, weight 0.04 → ~3pts
-    elo_edge_weight: float = 0.04
+    # Elo — CD zeroed this; let optimizer rediscover if valuable
+    elo_edge_weight: float = 0.0
 
     # Opening spread — Vegas opening line as independent market signal
-    opening_spread_weight: float = 0.0   # start at 0, let optimizer discover value
+    opening_spread_weight: float = 0.0   # let optimizer discover value
 
     # Sharp Money — edge = (money% - public%) / 100; typically ±0.05 to ±0.15
     sharp_money_weight: float = 1.5
@@ -238,22 +238,22 @@ OPTIMIZER_RANGES = {
     # Signs are locked to match basketball logic — no sign flips allowed.
     # spread_clamp is NOT tunable; it's fixed at 30 to prevent compression cheating.
     # Ranges widened per sensitivity analysis 2025-02-28.
-    "def_factor_dampening": (0.1, 8.0),      # sweep: best loss/ROI/DogROI at ~6.4-6.5, was capped at 6.0
+    "def_factor_dampening": (0.1, 10.0),      # sweep: best loss/ROI/DogROI at ~6.4-6.5, was capped at 6.0
     "turnover_margin_mult": (0.0, 10.0),      # avg raw edge ~1.0; 5*1=5pts max avg
     "rebound_diff_mult": (0.0, 4.0),         # sweep: best at ~3.1 (all metrics), was capped at 3.0
     "rating_matchup_mult": (0.0, 5.0),       # sensitivity: Win% peaks at 3.13, was capped at 2.0
-    "four_factors_scale": (1.0, 75.0),        # avg weighted edge ~0.19; 75*0.19≈14pts max avg
+    "four_factors_scale": (1.0, 100.0),        # avg weighted edge ~0.19; 75*0.19≈14pts max avg
     "clutch_scale": (0.00, 2.0),             # sensitivity: optimal ~0.13 (in range)
     "hustle_effort_mult": (0.0, 2.0),        # avg raw edge ~3.0; 2*3=6pts max avg
     "hustle_contested_wt": (0.0, 1.5),       # weight for contested shots in hustle calc
-    "ff_efg_weight": (0.0, 8.0),             # avg edge ~0.02; 0.02*8*75=12pts max
-    "ff_tov_weight": (0.0, 8.0),             # tightened: 8 sub-weights share ff_scale
-    "ff_oreb_weight": (0.0, 8.0),            # max single-component ~12pts
-    "ff_fta_weight": (0.0, 8.0),             # prevents compound blowup with opp_ff
-    "opp_ff_efg_weight": (0.0, 8.0),         # same range as offensive FF
-    "opp_ff_tov_weight": (0.0, 8.0),
-    "opp_ff_oreb_weight": (0.0, 8.0),
-    "opp_ff_fta_weight": (0.0, 8.0),
+    "ff_efg_weight": (0.0, 15.0),             # avg edge ~0.02; 0.02*8*75=12pts max
+    "ff_tov_weight": (0.0, 15.0),             # tightened: 8 sub-weights share ff_scale
+    "ff_oreb_weight": (0.0, 15.0),            # max single-component ~12pts
+    "ff_fta_weight": (0.0, 15.0),             # prevents compound blowup with opp_ff
+    "opp_ff_efg_weight": (0.0, 15.0),         # same range as offensive FF
+    "opp_ff_tov_weight": (0.0, 15.0),
+    "opp_ff_oreb_weight": (0.0, 15.0),
+    "opp_ff_fta_weight": (0.0, 15.0),
     "blocks_penalty": (0.0, 4.0),            # sensitivity: optimal ~2.7, was capped at 2.0
     "steals_penalty": (0.0, 4.0),            # sensitivity2: optimal ~2.19, was capped at 2.0
     "elo_edge_weight": (0.0, 0.1),            # avg diff ~75; 0.1*75=7.5pts max avg

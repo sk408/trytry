@@ -208,29 +208,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 8: Autotune
-        emit("[Step 8/13] Autotuning teams...")
-        if not _is_fresh("autotune", 168) or _has_new_data("autotune"):
-            from src.analytics.autotune import autotune_all
-            at_result = autotune_all(
-                strength=0.75, mode="classic",
-                callback=lambda msg: emit(f"  {msg}")
-            )
-            results["autotune"] = {"teams_tuned": at_result.get("teams_tuned", 0)}
-            _mark_step_done("autotune")
-        else:
-            emit("  Autotune is fresh, skipping")
-
-        if is_cancelled():
-            return {"cancelled": True, **results}
-
-        # Reload memory after autotune and invalidate tuning cache so
-        # VectorizedGames and predict_from_precomputed pick up new corrections
-        if results.get("autotune"):
-            store.reload()
-            from src.analytics.prediction import invalidate_tuning_cache
-            invalidate_tuning_cache()
-            emit("  Memory reloaded with autotune corrections")
+        # Step 8: Autotune — DISABLED (nudges spreads toward accuracy)
+        emit("[Step 8/13] Autotune — DISABLED")
 
         # --- Pre-compute game data (only when new games exist) ---
         # Precomputed games contain raw stats only — tuning corrections are loaded
@@ -304,19 +283,8 @@ def run_full_pipeline(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Step 12: Residual calibration
-        emit("[Step 12/13] Building residual calibration...")
-        if _needs_12:
-            from src.analytics.weight_optimizer import build_residual_calibration
-            if _precomputed_cache:
-                cal_result = build_residual_calibration(
-                    _precomputed_cache,
-                    callback=lambda msg: emit(f"  {msg}")
-                )
-                results["calibration"] = cal_result
-            _mark_step_done("residual_cal")
-        else:
-            emit("  Residual calibration is fresh, skipping")
+        # Step 12: Residual calibration — DISABLED (nudges spreads toward accuracy)
+        emit("[Step 12/13] Residual calibration — DISABLED")
 
         if is_cancelled():
             return {"cancelled": True, **results}
@@ -401,20 +369,8 @@ def run_retune(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Autotune (always run, ignore freshness)
-        emit("[Retune 3/8] Autotuning teams...")
-        from src.analytics.autotune import autotune_all
-        at_result = autotune_all(
-            strength=0.75, mode="classic",
-            callback=lambda msg: emit(f"  {msg}")
-        )
-        results["autotune"] = {"teams_tuned": at_result.get("teams_tuned", 0)}
-        _mark_step_done("autotune")
-
-        store.reload()
-        from src.analytics.prediction import invalidate_tuning_cache
-        invalidate_tuning_cache()
-        emit("  Memory reloaded with autotune corrections")
+        # Autotune — DISABLED (nudges spreads toward accuracy)
+        emit("[Retune 3/8] Autotune — DISABLED")
 
         if is_cancelled():
             return {"cancelled": True, **results}
@@ -470,15 +426,8 @@ def run_retune(callback: Optional[Callable] = None) -> Dict[str, Any]:
         if is_cancelled():
             return {"cancelled": True, **results}
 
-        # Residual calibration (always run)
-        emit("[Retune 7/8] Building residual calibration...")
-        from src.analytics.weight_optimizer import build_residual_calibration
-        cal_result = build_residual_calibration(
-            precomputed,
-            callback=lambda msg: emit(f"  {msg}")
-        )
-        results["calibration"] = cal_result
-        _mark_step_done("residual_cal")
+        # Residual calibration — DISABLED (nudges spreads toward accuracy)
+        emit("[Retune 7/8] Residual calibration — DISABLED")
 
         if is_cancelled():
             return {"cancelled": True, **results}
@@ -605,13 +554,8 @@ def run_overnight(max_hours: float = 8.0,
             if is_cancelled():
                 break
 
-            # Step C: Residual calibration
-            emit(f"[Loop {pass_num}] Residual calibration...")
-            from src.analytics.weight_optimizer import build_residual_calibration
-            build_residual_calibration(
-                precomputed,
-                callback=lambda msg: emit(f"  {msg}")
-            )
+            # Step C: Residual calibration — DISABLED
+            emit(f"[Loop {pass_num}] Residual calibration — DISABLED")
             if is_cancelled():
                 break
 
@@ -628,22 +572,23 @@ def run_overnight(max_hours: float = 8.0,
             loop_elapsed = time.time() - loop_start
             loop_times.append(loop_elapsed)
 
-            # Compare to best using dog-first metrics
+            # Compare to best using DogScore (hit% × rate%) — matches loss function
             dog_cur = bt.get("dog_metrics", {})
             dog_best = best_overall.get("dog_metrics", {})
-            cur_dog_roi = dog_cur.get("dog_roi", -999)
-            best_dog_roi = dog_best.get("dog_roi", -999)
-            # Primary: dog ROI. Tiebreak: dog hit rate.
-            cur_score = cur_dog_roi + dog_cur.get("dog_hit_rate", 0) * 0.01
-            best_score = best_dog_roi + dog_best.get("dog_hit_rate", 0) * 0.01
+            cur_hit = dog_cur.get("dog_hit_rate", 0)
+            cur_rate = dog_cur.get("dog_pick_rate", 0)
+            cur_score = cur_hit * cur_rate
+            best_hit = dog_best.get("dog_hit_rate", 0)
+            best_rate = dog_best.get("dog_pick_rate", 0)
+            best_score = best_hit * best_rate
             if cur_score > best_score:
                 best_overall = bt
-                emit(f"  NEW BEST! DogROI={cur_dog_roi:+.0f}%, "
-                     f"DogHit={dog_cur.get('dog_hit_rate', 0):.0f}%, "
-                     f"Win={bt.get('winner_pct', 0):.1f}%, "
-                     f"MAE={bt.get('spread_mae', 0):.2f}")
+                emit(f"  NEW BEST! DogScore={cur_score:.1f} "
+                     f"(DogHit={cur_hit:.0f}% × Rate={cur_rate:.0f}%), "
+                     f"DogROI={dog_cur.get('dog_roi', -999):+.0f}%, "
+                     f"Win={bt.get('winner_pct', 0):.1f}%")
             else:
-                emit(f"  No improvement (DogROI={cur_dog_roi:+.0f}% vs best {best_dog_roi:+.0f}%)")
+                emit(f"  No improvement (DogScore={cur_score:.1f} vs best {best_score:.1f})")
 
             emit(f"  Pass {pass_num} took {fmt_elapsed(loop_elapsed)} | "
                  f"avg {fmt_elapsed(sum(loop_times)/len(loop_times))}/pass")
@@ -661,9 +606,9 @@ def run_overnight(max_hours: float = 8.0,
         dog = best_overall.get("dog_metrics", {})
         dog_str = "No dog data"
         if dog.get("dog_picks"):
-            dog_str = (f"DogROI={dog['dog_roi']:+.0f}%, "
-                       f"DogHit={dog['dog_hit_rate']:.0f}% "
-                       f"({dog['dog_picks']}/{dog['value_zone_games']} picks)")
+            dog_str = (f"DogScore={dog['dog_hit_rate'] * dog.get('dog_pick_rate', 0):.1f}, "
+                       f"DogHit={dog['dog_hit_rate']:.0f}% × Rate={dog.get('dog_pick_rate', 0):.0f}%, "
+                       f"DogROI={dog['dog_roi']:+.0f}%")
         emit(f"Best result: {dog_str}, "
              f"Win={best_overall.get('winner_pct', 0):.1f}%, "
              f"ML ROI={best_overall.get('ml_roi', 0):+.1f}%, "

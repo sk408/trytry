@@ -23,7 +23,7 @@ from src.analytics.weight_config import (
     WeightConfig, get_weight_config, save_weight_config,
     OPTIMIZER_RANGES, save_snapshot, invalidate_weight_cache,
 )
-from src.analytics.weight_optimizer import VectorizedGames
+from src.analytics.weight_optimizer import VectorizedGames, SAVE_GATE_VOLUME_FLOOR
 from src.analytics.prediction import PrecomputedGame, precompute_game_data
 
 logger = logging.getLogger(__name__)
@@ -372,7 +372,7 @@ def read_sweep_optimals(metric: str = "loss",
     betting_metrics = {"ats_rate", "edge_rate", "ats_roi", "edge_roi",
                        "ml_win_rate", "ml_roi",
                        "dog_pick_rate", "dog_hit_rate", "dog_roi"}
-    base_w = WeightConfig()
+    base_w = get_weight_config()
     optimals = {}
 
     for fpath in files:
@@ -580,17 +580,25 @@ def coordinate_descent(params: Optional[List[str]] = None,
                  f"AvgDogPay={initial_val.get('avg_dog_payout', 0):.2f}x, "
                  f"BettableWin={initial_val.get('bettable_winner_pct', 0):.1f}%")
 
-    best_val_dog_roi = initial_val.get("dog_roi", -100)
+    # Track DogScore (hit% × rate%) — matches loss function
+    initial_dog_rate = initial_val.get("dog_pick_rate", 0)
+    initial_dog_hit = initial_val.get("dog_hit_rate", 0)
+    best_val_dog_score = (initial_dog_hit * initial_dog_rate) if initial_dog_rate >= SAVE_GATE_VOLUME_FLOOR else 0.0
     best_w_dict = w_dict.copy()
     history = []
     all_changes = {}
 
     for round_num in range(1, max_rounds + 1):
-        round_start_dog_roi = best_val_dog_roi
+        round_start_dog_score = best_val_dog_score
         accepted_count = 0
         rejected_count = 0
 
-        # Sweep each param on TRAINING set, validate per-param
+        # Sweep each param on TRAINING set — loss guides the search.
+        # Per-parameter acceptance uses training loss only (not DogHit%).
+        # DogHit% is too noisy on ~25 validation dogs for single-param decisions.
+        # The FINAL save gate checks DogHit% on the combined result.
+        current_train_loss = vg_train.evaluate(WeightConfig.from_dict(w_dict), target=target)["loss"]
+
         for pi, param_name in enumerate(params):
             lo, hi = EXTREME_RANGES.get(param_name, (-10, 10))
             values = np.linspace(lo, hi, steps)
@@ -612,17 +620,10 @@ def coordinate_descent(params: Optional[List[str]] = None,
             if abs(best_param_val - old_val) < 0.0001:
                 continue
 
-            # Per-parameter validation gate: DogROI must improve + volume floor
-            test_dict = w_dict.copy()
-            test_dict[param_name] = best_param_val
-            test_val = vg_val.evaluate(WeightConfig.from_dict(test_dict), target=target)
-            test_dog_roi = test_val.get("dog_roi", -100)
-            test_dog_rate = test_val.get("dog_pick_rate", 0)
-
-            if test_dog_roi > best_val_dog_roi and test_dog_rate >= 12.0:
-                # This param change improves validation DogROI — keep it
+            # Accept if training loss improved
+            if best_train_loss < current_train_loss:
                 w_dict[param_name] = best_param_val
-                best_val_dog_roi = test_dog_roi
+                current_train_loss = best_train_loss
                 best_w_dict = w_dict.copy()
                 accepted_count += 1
                 if param_name not in all_changes:
@@ -630,9 +631,8 @@ def coordinate_descent(params: Optional[List[str]] = None,
                 all_changes[param_name]["new"] = best_param_val
                 if callback:
                     callback(f"    {param_name}: {old_val:.4f} -> {best_param_val:.4f} "
-                             f"(val DogROI {test_dog_roi:+.1f}%, Rate {test_dog_rate:.0f}%) KEPT")
+                             f"(train loss {best_train_loss:.4f}) KEPT")
             else:
-                # This param change hurts validation DogROI or drops volume — revert
                 rejected_count += 1
 
             if callback and (pi + 1) % 5 == 0:
@@ -642,17 +642,23 @@ def coordinate_descent(params: Optional[List[str]] = None,
         # Round summary
         round_train = vg_train.evaluate(WeightConfig.from_dict(w_dict), target=target)
         round_val = vg_val.evaluate(WeightConfig.from_dict(w_dict), target=target)
-        val_improvement = best_val_dog_roi - round_start_dog_roi
+        round_val_dog_score = round_val.get("dog_hit_rate", 0) * round_val.get("dog_pick_rate", 0)
+        score_improvement = round_val_dog_score - round_start_dog_score
+        # Track best validation DogScore across rounds for final save comparison
+        if round_val_dog_score > best_val_dog_score:
+            best_val_dog_score = round_val_dog_score
 
         if callback:
             callback(f"  Round {round_num} complete: {accepted_count} kept, "
-                     f"{rejected_count} rejected, val DogROI improvement={val_improvement:+.1f}%")
+                     f"{rejected_count} rejected, val DogScore improvement={score_improvement:+.1f}")
             callback(f"    Train:  DogHit={round_train['dog_hit_rate']:.1f}%, "
+                     f"DogRate={round_train['dog_pick_rate']:.1f}%, "
                      f"DogROI={round_train['dog_roi']:+.1f}%, "
                      f"AvgDogPay={round_train.get('avg_dog_payout', 0):.2f}x, "
                      f"BettableWin={round_train.get('bettable_winner_pct', 0):.1f}%, "
                      f"loss={round_train['loss']:.4f}")
             callback(f"    Valid:  DogHit={round_val['dog_hit_rate']:.1f}%, "
+                     f"DogRate={round_val['dog_pick_rate']:.1f}%, "
                      f"DogROI={round_val['dog_roi']:+.1f}%, "
                      f"AvgDogPay={round_val.get('avg_dog_payout', 0):.2f}x, "
                      f"BettableWin={round_val.get('bettable_winner_pct', 0):.1f}%, "
@@ -662,7 +668,7 @@ def coordinate_descent(params: Optional[List[str]] = None,
             "round": round_num,
             "train_loss": round_train["loss"],
             "val_loss": round_val["loss"],
-            "best_val_dog_roi": best_val_dog_roi,
+            "best_val_dog_score": best_val_dog_score,
             "spread_mae": round_val["spread_mae"],
             "bettable_spread_mae": round_val.get("bettable_spread_mae", round_val["spread_mae"]),
             "winner_pct": round_val["winner_pct"],
@@ -678,15 +684,15 @@ def coordinate_descent(params: Optional[List[str]] = None,
             "rejected": rejected_count,
         })
 
-        # Convergence: no params accepted this round, or tiny DogROI improvement
+        # Convergence: no params accepted this round, or tiny score improvement
         if accepted_count == 0:
             if callback:
-                callback(f"Converged after {round_num} rounds (no params improved validation DogROI)")
+                callback(f"Converged after {round_num} rounds (no params improved training loss)")
             break
-        if round_num >= 2 and val_improvement < convergence_threshold:
+        if round_num >= 2 and score_improvement < convergence_threshold:
             if callback:
                 callback(f"Converged after {round_num} rounds "
-                         f"(val DogROI improvement {val_improvement:.2f}% < {convergence_threshold})")
+                         f"(val DogScore improvement {score_improvement:.2f} < {convergence_threshold})")
             break
 
     # Use the best validated weights
@@ -707,30 +713,31 @@ def coordinate_descent(params: Optional[List[str]] = None,
                  f"BettableWin={final_val.get('bettable_winner_pct', 0):.1f}%, "
                  f"Loss={final_val['loss']:.3f}")
 
-    # Save decision: DogROI on validation set + volume floor
-    initial_dog_roi = initial_val.get("dog_roi", -100)
-    final_dog_roi = final_val.get("dog_roi", -100)
+    # Save decision: DogScore (hit% × rate%) on validation set
+    # Matches the loss function — rewards both accuracy AND volume together.
+    final_dog_hit = final_val.get("dog_hit_rate", 0)
     final_dog_rate = final_val.get("dog_pick_rate", 0)
-    improved = final_dog_roi > initial_dog_roi and final_dog_rate >= 12.0
+    initial_score = (initial_dog_hit * initial_dog_rate) if initial_dog_rate >= SAVE_GATE_VOLUME_FLOOR else 0.0
+    final_score = final_dog_hit * final_dog_rate
+    improved = final_score > initial_score and final_dog_rate >= SAVE_GATE_VOLUME_FLOOR
     if save and improved:
         new_w = WeightConfig.from_dict(w_dict)
         save_weight_config(new_w)
         invalidate_weight_cache()
         if callback:
-            callback(f"Saved CD weights (val DogROI: {initial_dog_roi:+.1f}% -> "
-                     f"{final_dog_roi:+.1f}%, DogHit: {initial_val['dog_hit_rate']:.1f}% -> "
-                     f"{final_val['dog_hit_rate']:.1f}%, AvgDogPay: "
-                     f"{initial_val.get('avg_dog_payout', 0):.2f}x -> "
-                     f"{final_val.get('avg_dog_payout', 0):.2f}x, "
-                     f"DogRate: {final_dog_rate:.1f}%)")
+            callback(f"Saved CD weights (val DogScore: {initial_score:.1f} -> {final_score:.1f}, "
+                     f"DogHit: {initial_dog_hit:.1f}% -> {final_dog_hit:.1f}%, "
+                     f"DogRate: {initial_dog_rate:.1f}% -> {final_dog_rate:.1f}%, "
+                     f"DogROI: {initial_val.get('dog_roi', -100):+.1f}% -> "
+                     f"{final_val.get('dog_roi', -100):+.1f}%)")
     elif save:
         reason = ""
-        if final_dog_rate < 12.0:
-            reason = f" (dog pick rate {final_dog_rate:.1f}% < 12% floor)"
-        elif final_dog_roi <= initial_dog_roi:
-            reason = f" (DogROI {initial_dog_roi:+.1f}% -> {final_dog_roi:+.1f}%)"
+        if final_dog_rate < SAVE_GATE_VOLUME_FLOOR:
+            reason = f" (dog pick rate {final_dog_rate:.1f}% < {SAVE_GATE_VOLUME_FLOOR}% floor)"
+        elif final_score <= initial_score:
+            reason = f" (DogScore {initial_score:.1f} -> {final_score:.1f})"
         if callback:
-            callback(f"Validation DogROI did not improve{reason} "
+            callback(f"Validation DogScore did not improve{reason} "
                      f"— keeping current weights")
 
     return {
