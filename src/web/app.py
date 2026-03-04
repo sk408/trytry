@@ -361,6 +361,45 @@ async def matchups_page(request: Request,
     except Exception:
         pass
 
+    # Scan today's games for dog picks (background-thread parallel)
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from src.analytics.prediction import predict_matchup as _pm
+        today_games = [g for g in upcoming_games if g.get("game_date") == today]
+
+        def _scan_one(g):
+            hid, aid = g.get("home_team_id"), g.get("away_team_id")
+            if not hid or not aid:
+                return hid, aid, {}
+            try:
+                p = _pm(hid, aid, game_date=today)
+                return hid, aid, {
+                    "is_dog": getattr(p, "is_dog_pick", False),
+                    "value_zone": getattr(p, "is_value_zone", False),
+                    "payout": getattr(p, "dog_payout", 0),
+                }
+            except Exception:
+                return hid, aid, {}
+
+        dog_map = {}  # (away_id, home_id) -> info
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = {pool.submit(_scan_one, g): g for g in today_games}
+            for fut in as_completed(futs):
+                hid, aid, info = fut.result()
+                if info.get("is_dog"):
+                    dog_map[(aid, hid)] = info
+
+        # Tag the upcoming_games list so the template can render badges
+        for g in upcoming_games:
+            key = (g.get("away_team_id"), g.get("home_team_id"))
+            info = dog_map.get(key)
+            if info:
+                g["is_dog"] = True
+                g["dog_value_zone"] = info.get("value_zone", False)
+                g["dog_payout"] = info.get("payout", 0)
+    except Exception as e:
+        logger.debug(f"Dog scan for dropdown: {e}")
+
     if home_team and away_team:
         try:
             from datetime import datetime

@@ -435,7 +435,9 @@ class TestThreeCodePathSync:
         actual_spread = g.actual_home_score - g.actual_away_score
 
         # VectorizedGames path — mock DB for tuning (returns zeros)
-        with patch("src.analytics.weight_optimizer.db") as mock_db:
+        # _load_tuning does 'from src.database import db' inside the function,
+        # so we must patch src.database.db (not weight_optimizer.db)
+        with patch("src.database.db") as mock_db:
             mock_db.fetch_all.return_value = []
             vg = VectorizedGames([g])
         vg_result = vg.evaluate(w)

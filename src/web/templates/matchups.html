@@ -14,7 +14,7 @@
             <option value="">— Select a game —</option>
             {% for g in upcoming_games %}
             <option value="{{ g.get('away_team_id','') }}_{{ g.get('home_team_id','') }}">
-                {{ g.get('game_date','') }} {{ g.get('game_time','') }} — {{ g.get('away_team','???') }} @ {{ g.get('home_team','???') }}
+                {% if g.get('is_dog') and g.get('dog_value_zone') and g.get('dog_payout', 0) > 0 %}&#x1F436; DOG ({{ '%.2f'|format(g['dog_payout']) }}x) {% elif g.get('is_dog') %}&#x1F436; {% endif %}{{ g.get('game_date','') }} {{ g.get('game_time','') }} — {{ g.get('away_team','???') }} @ {{ g.get('home_team','???') }}
             </option>
             {% endfor %}
         </select>

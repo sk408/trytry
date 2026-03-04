@@ -1159,11 +1159,7 @@ def predict_matchup(home_team_id: int, away_team_id: int, game_date: str,
         except Exception as e:
             logger.debug(f"ML blend skipped: {e}")
 
-    # ── Step 10: Sanity Clamps ──
-    spread = _clamp(-w.spread_clamp, spread, w.spread_clamp)
-    total = _clamp(w.total_min, total, w.total_max)
-
-    # ── Step 11: Residual Calibration ──
+    # ── Step 10: Residual Calibration ──
     try:
         spread_corr, total_corr = _get_residual_correction(spread, total)
         spread -= spread_corr
@@ -1646,10 +1642,6 @@ def predict_from_precomputed(g: PrecomputedGame, w: WeightConfig,
 
     # Fatigue total (decomposed)
     total -= (home_fat + away_fat) * w.fatigue_total_mult
-
-    # Clamps
-    spread = _clamp(-w.spread_clamp, spread, w.spread_clamp)
-    total = _clamp(w.total_min, total, w.total_max)
 
     # Residual calibration (skip during optimization)
     if not skip_residual:

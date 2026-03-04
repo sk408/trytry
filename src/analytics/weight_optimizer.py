@@ -254,10 +254,6 @@ class VectorizedGames:
         total -= defl_excess * w.hustle_defl_penalty
         total -= (home_fat + away_fat) * w.fatigue_total_mult
 
-        # Clamps
-        spread = np.clip(spread, -w.spread_clamp, w.spread_clamp)
-        total = np.clip(total, w.total_min, w.total_max)
-
         # Metrics (all games)
         spread_errors = np.abs(spread - self.actual_spread)
         total_errors = np.abs(total - self.actual_total)
@@ -483,7 +479,7 @@ class VectorizedGames:
                     # region fast instead of wasting thousands of trials here.
                     loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
                 else:
-                    loss = total_mae * 0.05  # tiny anchor so totals don't go haywire
+                    loss = 0.0  # pure dog-focused — no spread/total anchor
 
                     # PRIMARY: dog hit rate — every % point matters
                     loss -= dog_hit_rate * 0.5
@@ -502,7 +498,7 @@ class VectorizedGames:
                 if dog_pick_rate < 12.0:
                     loss = 100.0 + (12.0 - dog_pick_rate) * 5.0
                 else:
-                    loss = total_mae * 0.03  # minimal total anchor
+                    loss = 0.0  # pure dog-focused — no spread/total anchor
 
                     loss -= dog_hit_rate * 0.6
                     loss -= avg_dog_payout * 7.0

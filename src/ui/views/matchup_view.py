@@ -39,6 +39,32 @@ class _PredictWorker(QObject):
             self.error.emit(str(e))
 
 
+class _DogScanWorker(QObject):
+    """Background worker — scans all dropdown games for dog picks."""
+    finished = Signal(dict)  # {idx: {"is_dog": bool, "value_zone": bool, "payout": float}}
+
+    def __init__(self, games: list):
+        super().__init__()
+        self.games = games  # [(combo_idx, home_id, away_id, game_date), ...]
+
+    def run(self):
+        from src.analytics.prediction import predict_matchup
+        results = {}
+        for idx, home_id, away_id, game_date in self.games:
+            try:
+                pred = predict_matchup(home_id, away_id, game_date=game_date)
+                if getattr(pred, "is_dog_pick", False):
+                    results[idx] = {
+                        "is_dog": True,
+                        "value_zone": getattr(pred, "is_value_zone", False),
+                        "payout": getattr(pred, "dog_payout", 0),
+                        "winner": getattr(pred, "winner", ""),
+                    }
+            except Exception as e:
+                logger.debug(f"Dog scan skip game idx {idx}: {e}")
+        self.finished.emit(results)
+
+
 class PredictionCard(QFrame):
     """Broadcast-styled card showing a single prediction value."""
 
@@ -109,6 +135,8 @@ class MatchupView(QWidget):
         self.main_window = parent
         self._worker_thread = None
         self._worker = None
+        self._dog_scan_thread = None
+        self._dog_scan_worker = None
         self._team_id_map = {}  # abbreviation -> team_id (for logo lookup)
         self._injury_overrides = {}  # player_id -> overridden status string
 
@@ -354,7 +382,7 @@ class MatchupView(QWidget):
             logger.error(f"Load teams error: {e}")
 
     def _load_games(self):
-        """Load upcoming games (today + 14 days)."""
+        """Load upcoming games (today + 14 days), then scan for dog picks."""
         self.game_combo.blockSignals(True)
         self.game_combo.clear()
         self.game_combo.addItem("— Select game —", None)
@@ -375,6 +403,66 @@ class MatchupView(QWidget):
         except Exception as e:
             logger.debug(f"Schedule load: {e}")
         self.game_combo.blockSignals(False)
+        # Kick off background dog scan for today's games
+        self._start_dog_scan()
+
+    def _start_dog_scan(self):
+        """Run predict_matchup for each dropdown game in background to find dogs."""
+        # Only scan today's games (not all 14 days) to keep it fast
+        today = datetime.now().strftime("%Y-%m-%d")
+        games_to_scan = []
+        for i in range(1, self.game_combo.count()):  # skip "— Select game —"
+            data = self.game_combo.itemData(i)
+            if not data or not isinstance(data, dict):
+                continue
+            gd = data.get("game_date", "")
+            if gd != today:
+                continue
+            home_id = data.get("home_team_id")
+            away_id = data.get("away_team_id")
+            if home_id and away_id:
+                games_to_scan.append((i, home_id, away_id, gd))
+        if not games_to_scan:
+            return
+        # Clean up any previous scan
+        if self._dog_scan_thread is not None:
+            try:
+                if self._dog_scan_thread.isRunning():
+                    return  # scan already in progress
+            except RuntimeError:
+                pass
+        self._dog_scan_worker = _DogScanWorker(games_to_scan)
+        self._dog_scan_thread = QThread()
+        self._dog_scan_worker.moveToThread(self._dog_scan_thread)
+        self._dog_scan_thread.started.connect(self._dog_scan_worker.run)
+        _QC = Qt.ConnectionType.QueuedConnection
+        self._dog_scan_worker.finished.connect(self._on_dog_scan_done, _QC)
+        self._dog_scan_worker.finished.connect(self._dog_scan_thread.quit)
+        self._dog_scan_thread.finished.connect(self._cleanup_dog_scan)
+        self._dog_scan_thread.start()
+
+    def _on_dog_scan_done(self, results: dict):
+        """Update dropdown labels with dog pick tags."""
+        self.game_combo.blockSignals(True)
+        for idx, info in results.items():
+            old_text = self.game_combo.itemText(idx)
+            if old_text.startswith("\U0001F436"):
+                continue  # already tagged
+            payout = info.get("payout", 0)
+            if info.get("value_zone") and payout > 0:
+                tag = f"\U0001F436 DOG ({payout:.2f}x) "
+            else:
+                tag = f"\U0001F436 "
+            self.game_combo.setItemText(idx, tag + old_text)
+        self.game_combo.blockSignals(False)
+
+    def _cleanup_dog_scan(self):
+        if self._dog_scan_thread is not None:
+            self._dog_scan_thread.deleteLater()
+        if self._dog_scan_worker is not None:
+            self._dog_scan_worker.deleteLater()
+        self._dog_scan_thread = None
+        self._dog_scan_worker = None
 
     def _on_game_picked(self, idx: int):
         """Auto-select teams from game pick."""
